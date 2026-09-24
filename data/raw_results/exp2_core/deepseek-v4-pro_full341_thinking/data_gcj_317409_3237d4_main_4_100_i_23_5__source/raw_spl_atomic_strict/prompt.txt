@@ -1,0 +1,537 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.*;
+2   import java.io.*;
+3   public class Solution {
+4       public static void main(String[] args) {
+5           int[] dx = { 0, 1, 0, -1 };
+6           int[] dy = { 1, 0, -1, 0 };
+7           Scanner sc = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+8           StringBuilder ans = new StringBuilder();
+9           int T = sc.nextInt();
+10          for (int t = 1; t <= T; t++) {
+11              int X = sc.nextInt();
+12              int Y = sc.nextInt();
+13              String M = sc.next();
+14              int[][] g = new int[2001][2001];
+15              int px = 1000;
+16              int py = 1000;
+17              List<List<Integer>> tour = new ArrayList<>();
+18              List<Integer> te = new ArrayList<>();
+19              te.add(px);
+20              te.add(py);
+21              tour.add(te);
+22              g[py][px] = 1;
+23              for (int i = 0; i < M.length(); i++) {
+24                  char d = M.charAt(i);
+25                  if (d == 'N') 
+26                      py--;
+27                  if (d == 'S') 
+28                      py++;
+29                  if (d == 'E') 
+30                      px++;
+31                  if (d == 'W') 
+32                      px--;
+33                  g[py][px] = 1;
+34                  te = new ArrayList<>();
+35                  te.add(px);
+36                  te.add(py);
+37                  tour.add(te);
+38              }
+39              boolean[][] visited = new boolean[2001][2001];
+40              int myx = 1000-X;
+41              int myy = 1000+Y;
+42              LinkedList<Pair> q = new LinkedList<>();
+43              q.offer(new Pair(myx,myy,0));
+44              int tmp = -1;
+45              int nearX = -1;
+46              int nearY = -1;
+47              while (!q.isEmpty()) {
+48                  Pair now = q.poll();
+49                  if (g[now.y][now.x] == 1) {
+50                      tmp = now.dist;
+51                      nearX = now.x;
+52                      nearY = now.y;
+53                      break;
+54                  }
+55                  visited[now.y][now.x] = true;;
+56                  for (int v = 0; v < 4; v++) {
+57                      int nx = now.x+dx[v];
+58                      int ny = now.y+dy[v];
+59                      if (nx < 0 || visited[0].length <= nx || ny < 0 || visited.length <= ny) 
+60                              continue;
+61                      if (visited[ny][nx]) 
+62                          continue;
+63                      q.add(new Pair(nx,ny,now.dist+1));
+64                  }
+65              }
+66              ans.append("Case #"+t+": "); 
+67              if (tmp == -1) {
+68                  ans.append("IMPOSSIBLE\n");
+69                  continue;
+70              }
+71              int ti = 0;
+72              for (int i = 0; i < tour.size(); i++) {
+73                  List<Integer> ll = tour.get(i);
+74                  if (ll.get(0) == nearX && ll.get(1) == nearY) {
+75                      ti = i;
+76                      break;
+77                  }
+78              }
+79              boolean[][] visited2 = new boolean[2001][2001];
+80              if (tmp <= ti) {
+81                  ans.append(tmp+(ti-tmp+1)/2).append('\n');
+82              } else {
+83                  boolean success = false;
+84                  for (int i = ti; i < tour.size() && tmp-ti+i < tour.size(); i++) {
+85                      int mfx = tour.get(tmp+i-ti).get(0);
+86                      int mfy = tour.get(tmp+i-ti).get(1);
+87                      visited2[mfy][mfx] = true;
+88                      int ffx = tour.get(i).get(0);
+89                      int ffy = tour.get(i).get(1);
+90                      if (visited2[ffy][ffx]) {
+91                          ans.append(i).append('\n');
+92                          success = true;
+93                          break;
+94                      }
+95                  }
+96                  if (!success) ans.append("IMPOSSIBLE\n");
+97              }
+98          }
+99          System.out.print(ans);
+100      }
+101      private static class Pair {
+102          private final int x;
+103          private final int y;
+104          private final int dist;
+105          Pair(int x, int y, int dist) {
+106              this.x = x;
+107              this.y = y;
+108              this.dist = dist;
+109          }
+110      }
+111  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(i,23)` in function `main`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: main
+Target source anchor: variable=i, line=23
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within the test case loop, for i from 0 to M.length() - 1 inclusive, get d = M.charAt(i); if d is 'N' decrement py, if 'S' increment py, if 'E' increment px, if 'W' decrement px; then set g[py][px] = 1 and append a new list containing [px, py] to tour. RESULT path_route]
+- [COMMAND Within the current test case, set success = false; for i from ti while i < tour.size() and tmp - ti + i < tour.size(), get mfx = tour.get(tmp + i - ti).get(0) and mfy = tour.get(tmp + i - ti).get(1), set visited2[mfy][mfx] = true, then get ffx = tour.get(i).get(0) and ffy = tour.get(i).get(1); if visited2[ffy][ffx] is true, append i to ans followed by a newline, set success = true, and break. RESULT late_intercept_loop]
+- [COMMAND Within the test case loop, read X = sc.nextInt(), Y = sc.nextInt(), and M = sc.next(). RESULT X_Y_M]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 7: Scanner sc = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+- line 13: String M = sc.next();
+- line 23: for (int i = 0; i < M.length(); i++) {
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 7, "position": "before_target", "reason": "sc", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["BufferedReader", "InputStreamReader", "Scanner", "System", "in", "new", "sc"]}
+- {"definitions": ["M"], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "before_target", "reason": "M", "relevant_identifiers": ["M"], "roles": ["definition"], "source_identifiers": ["M", "String", "next", "sc"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "target", "reason": "i", "relevant_identifiers": ["i", "M", "length"], "roles": ["definition", "use", "control"], "source_identifiers": ["M", "for", "i", "int", "length"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 4-100
+- source signature: `public static void main(String[] args) {`
+- source content hash: `7549732f7c3cc1fb73957ace80ebab07aaf4b2e777e4cc7ca793b9fc14dbbc24`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```java
+   4      public static void main(String[] args) {
+   5          int[] dx = { 0, 1, 0, -1 };
+   6          int[] dy = { 1, 0, -1, 0 };
+   7          Scanner sc = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+   8          StringBuilder ans = new StringBuilder();
+   9          int T = sc.nextInt();
+  10          for (int t = 1; t <= T; t++) {
+  11              int X = sc.nextInt();
+  12              int Y = sc.nextInt();
+  13              String M = sc.next();
+  14              int[][] g = new int[2001][2001];
+  15              int px = 1000;
+  16              int py = 1000;
+  17              List<List<Integer>> tour = new ArrayList<>();
+  18              List<Integer> te = new ArrayList<>();
+  19              te.add(px);
+  20              te.add(py);
+  21              tour.add(te);
+  22              g[py][px] = 1;
+  23              for (int i = 0; i < M.length(); i++) {
+  24                  char d = M.charAt(i);
+  25                  if (d == 'N') 
+  26                      py--;
+  27                  if (d == 'S') 
+  28                      py++;
+  29                  if (d == 'E') 
+  30                      px++;
+  31                  if (d == 'W') 
+  32                      px--;
+  33                  g[py][px] = 1;
+  34                  te = new ArrayList<>();
+  35                  te.add(px);
+  36                  te.add(py);
+  37                  tour.add(te);
+  38              }
+  39              boolean[][] visited = new boolean[2001][2001];
+  40              int myx = 1000-X;
+  41              int myy = 1000+Y;
+  42              LinkedList<Pair> q = new LinkedList<>();
+  43              q.offer(new Pair(myx,myy,0));
+  44              int tmp = -1;
+  45              int nearX = -1;
+  46              int nearY = -1;
+  47              while (!q.isEmpty()) {
+  48                  Pair now = q.poll();
+  49                  if (g[now.y][now.x] == 1) {
+  50                      tmp = now.dist;
+  51                      nearX = now.x;
+  52                      nearY = now.y;
+  53                      break;
+  54                  }
+  55                  visited[now.y][now.x] = true;;
+  56                  for (int v = 0; v < 4; v++) {
+  57                      int nx = now.x+dx[v];
+  58                      int ny = now.y+dy[v];
+  59                      if (nx < 0 || visited[0].length <= nx || ny < 0 || visited.length <= ny) 
+  60                              continue;
+  61                      if (visited[ny][nx]) 
+  62                          continue;
+  63                      q.add(new Pair(nx,ny,now.dist+1));
+  64                  }
+  65              }
+  66              ans.append("Case #"+t+": "); 
+  67              if (tmp == -1) {
+  68                  ans.append("IMPOSSIBLE\n");
+  69                  continue;
+  70              }
+  71              int ti = 0;
+  72              for (int i = 0; i < tour.size(); i++) {
+  73                  List<Integer> ll = tour.get(i);
+  74                  if (ll.get(0) == nearX && ll.get(1) == nearY) {
+  75                      ti = i;
+  76                      break;
+  77                  }
+  78              }
+  79              boolean[][] visited2 = new boolean[2001][2001];
+  80              if (tmp <= ti) {
+  81                  ans.append(tmp+(ti-tmp+1)/2).append('\n');
+  82              } else {
+  83                  boolean success = false;
+  84                  for (int i = ti; i < tour.size() && tmp-ti+i < tour.size(); i++) {
+  85                      int mfx = tour.get(tmp+i-ti).get(0);
+  86                      int mfy = tour.get(tmp+i-ti).get(1);
+  87                      visited2[mfy][mfx] = true;
+  88                      int ffx = tour.get(i).get(0);
+  89                      int ffy = tour.get(i).get(1);
+  90                      if (visited2[ffy][ffx]) {
+  91                          ans.append(i).append('\n');
+  92                          success = true;
+  93                          break;
+  94                      }
+  95                  }
+  96                  if (!success) ans.append("IMPOSSIBLE\n");
+  97              }
+  98          }
+  99          System.out.print(ans);
+ 100      }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads T test cases containing coordinates X, Y and movement string M, builds the time-indexed tourist path on a 2001x2001 grid centered at (1000,1000), uses BFS from (1000-X, 1000+Y) to find the nearest path cell, and prints the earliest interception time for each case or IMPOSSIBLE." main]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize constant movement arrays dx = {0, 1, 0, -1} and dy = {1, 0, -1, 0}. RESULT dx_dy]
+            [COMMAND Create Scanner sc from System.in, create StringBuilder ans, and read integer T = sc.nextInt(). RESULT T_and_ans]
+            [COMMAND Loop t from 1 to T inclusive; for each iteration process one test case. RESULT test_case_loop]
+            [COMMAND Within the test case loop, read X = sc.nextInt(), Y = sc.nextInt(), and M = sc.next(). RESULT X_Y_M]
+            [COMMAND Within the test case loop, allocate int[2001][2001] grid g, set px = 1000 and py = 1000, create empty List<List<Integer>> tour, create List<Integer> te containing [px, py], add te to tour, and set g[py][px] = 1. RESULT path_start]
+            [COMMAND Within the test case loop, for i from 0 to M.length() - 1 inclusive, get d = M.charAt(i); if d is 'N' decrement py, if 'S' increment py, if 'E' increment px, if 'W' decrement px; then set g[py][px] = 1 and append a new list containing [px, py] to tour. RESULT path_route]
+            [COMMAND Within the test case loop, allocate boolean[2001][2001] visited, compute myx = 1000 - X and myy = 1000 + Y, create LinkedList<Pair> q, offer new Pair(myx, myy, 0), set tmp = -1, nearX = -1, and nearY = -1. RESULT bfs_setup]
+            [COMMAND Within the test case loop, while q is not empty, poll Pair now; if g[now.y][now.x] == 1, set tmp = now.dist, nearX = now.x, nearY = now.y and break; otherwise mark visited[now.y][now.x] = true and for v from 0 to 3 compute nx = now.x + dx[v], ny = now.y + dy[v]; if nx < 0 or nx > 2000 or ny < 0 or ny > 2000 or visited[ny][nx] is true, skip; otherwise add new Pair(nx, ny, now.dist + 1) to q. RESULT bfs_result]
+            [COMMAND Within the test case loop, append to ans the string formed by "Case #", the current t, and ": ". RESULT case_prefix]
+            [COMMAND After the BFS, if tmp is -1, follow the tmp == -1 alternative flow and continue to the next test case; otherwise set ti = 0 and scan tour from index 0 to tour.size() - 1 until the stored coordinates equal nearX and nearY, assign the matching index to ti, and break. RESULT first_path_index]
+            [COMMAND Within the test case loop after ti is found, allocate boolean[2001][2001] visited2. RESULT visited2_setup]
+            [COMMAND Within the test case loop after allocating visited2, if tmp <= ti follow the tmp <= ti alternative flow; if tmp > ti follow the tmp > ti alternative flow; then continue to the next test case. RESULT branch_after_tmp]
+            [COMMAND After the test case loop completes, print the accumulated contents of ans to standard output. RESULT print_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: tmp == -1 after the BFS, meaning no point on the tourist path is reachable within the bounded grid]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the current test case, append "IMPOSSIBLE" followed by a newline to ans, then continue to the next test case. RESULT impossible_after_bfs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: tmp <= ti]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the current test case, append tmp + (ti - tmp + 1) / 2 to ans followed by a newline. RESULT early_answer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: tmp > ti]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the current test case, set success = false; for i from ti while i < tour.size() and tmp - ti + i < tour.size(), get mfx = tour.get(tmp + i - ti).get(0) and mfy = tour.get(tmp + i - ti).get(1), set visited2[mfy][mfx] = true, then get ffx = tour.get(i).get(0) and ffy = tour.get(i).get(1); if visited2[ffy][ffx] is true, append i to ans followed by a newline, set success = true, and break. RESULT late_intercept_loop]
+            [COMMAND Within the current test case, after the late interception loop, if success is false, append "IMPOSSIBLE" followed by a newline to ans. RESULT late_impossible]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

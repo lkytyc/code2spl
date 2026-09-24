@@ -1,0 +1,143 @@
+# FILE: django/core/management/commands/inspectdb.py
+# CLASS Command
+
+[DEFINE_WORKER: "Registers the command-line arguments for selecting tables and toggling database/partition/view introspection on an argparse parser." add_arguments]
+    [INPUTS]
+        <REF> self </REF>: object "The management command instance whose add_arguments method is invoked."
+        <REF> parser </REF>: argparse.ArgumentParser "The parser on which the introspection command-line arguments are registered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Register the positional argument 'table' with nargs='*' and type=str so it accepts zero or more table or view names and stores the collected tokens in the parser namespace attribute 'table'; help text is 'Selects what tables or views should be introspected.' RESULT parser]
+            [COMMAND Register the optional argument '--database' with default=DEFAULT_DB_ALIAS and help text 'Nominates a database to introspect. Defaults to using the "default" database.'; if --database is omitted during parse_args, the namespace gets DEFAULT_DB_ALIAS; if supplied, the next CLI token is stored in 'database'. RESULT parser]
+            [COMMAND Register the optional flag '--include-partitions' with action='store_true' and help text 'Also output models for partition tables.'; absence stores False and presence stores True in the parser namespace attribute 'include_partitions'. RESULT parser]
+            [COMMAND Register the optional flag '--include-views' with action='store_true' and help text 'Also output models for database views.'; absence stores False and presence stores True in the parser namespace attribute 'include_views'. RESULT parser]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Writes the lines produced by the database inspection helper to standard output, converting an unsupported-backend NotImplementedError into a CommandError." handle]
+    [INPUTS]
+        <REF> options </REF>: dict "Keyword options forwarded to self.handle_inspection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the try block, call self.handle_inspection(options) to obtain the inspection result lines. RESULT inspection_lines]
+            [COMMAND For each line in inspection_lines, write line to self.stdout. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.handle_inspection(options) raises NotImplementedError.]
+        [LOG "Caught NotImplementedError from database inspection; database inspection is not supported for the currently selected database backend."]
+        [THROW CommandError "Database inspection isn't supported for the currently selected database backend."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a column name into a Python-compatible, conflict-free field name, returning the renamed value, any database-column override, and notes explaining every rename." normalize_col_name]
+    [INPUTS]
+        <REF> col_name </REF>: str "Original column name to normalize."
+        <REF> used_column_names </REF>: collection of strings "Existing column names that the normalized name must avoid; typically a set or list."
+        <REF> is_relation </REF>: bool "Whether the column represents a relation; changes how trailing '_id' is handled and whether db_column is set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple of (str, dict, list) "Returns the normalized new_name, a field_params dict possibly containing db_column, and a list of field_notes describing renames."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize field_params to an empty dictionary and field_notes to an empty list. RESULT field_params, field_notes]
+            [COMMAND Set new_name to col_name.lower(). RESULT new_name]
+            [COMMAND If new_name differs from col_name, append 'Field name made lowercase.' to field_notes. RESULT field_notes]
+            [COMMAND If is_relation is true and new_name ends with '_id', remove that suffix by setting new_name to new_name[:-3]. RESULT new_name]
+            [COMMAND If is_relation is true and new_name does not end with '_id', set field_params['db_column'] to the original col_name. RESULT field_params]
+            [COMMAND Replace every non-word character in new_name with '_' using re.subn(r'\W', '_', new_name), storing the new string in new_name and the substitution count in num_repl. RESULT new_name, num_repl]
+            [COMMAND If num_repl is greater than 0, append 'Field renamed to remove unsuitable characters.' to field_notes. RESULT field_notes]
+            [COMMAND If new_name contains LOOKUP_SEP, repeatedly replace every occurrence of LOOKUP_SEP with '_' until no occurrence remains. RESULT new_name]
+            [COMMAND If new_name contained LOOKUP_SEP and the lowercase of the original col_name also contains LOOKUP_SEP, append "Field renamed because it contained more than one '_' in a row." to field_notes. RESULT field_notes]
+            [COMMAND If new_name starts with '_', prefix it with 'field' and append "Field renamed because it started with '_'." to field_notes. RESULT new_name, field_notes]
+            [COMMAND If new_name ends with '_', append 'field' to it and append "Field renamed because it ended with '_'." to field_notes. RESULT new_name, field_notes]
+            [COMMAND If keyword.iskeyword(new_name) is true, append '_field' to new_name and append 'Field renamed because it was a Python reserved word.' to field_notes. RESULT new_name, field_notes]
+            [COMMAND If new_name[0].isdigit() is true, prefix new_name with 'number_' and append "Field renamed because it wasn't a valid Python identifier." to field_notes. RESULT new_name, field_notes]
+            [COMMAND If new_name is already in used_column_names, start with num = 0 and increment num while '{new_name}_{num}' is in used_column_names. Set new_name to the first available '{new_name}_{num}' and append 'Field renamed because of name conflict.' to field_notes. RESULT new_name, field_notes]
+            [COMMAND If col_name differs from new_name and field_notes is non-empty, set field_params['db_column'] to col_name. RESULT field_params]
+            [COMMAND Return the tuple (new_name, field_params, field_notes). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a database field type via introspection, builds the field parameter dict and notes list, and applies fallback guesses when metadata is missing." get_field_type]
+    [INPUTS]
+        <REF> self </REF>: object "Calling method instance."
+        <REF> connection </REF>: object "Database connection whose introspection is used to resolve the field type."
+        <REF> table_name </REF>: string "Name of the table containing the field; accepted for introspection compatibility but not directly used here."
+        <REF> row </REF>: object "Cursor row description exposing type_code, internal_size, collation, precision, and scale attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> field_type </REF>: string "Resolved field type name, either from introspection or fallback 'TextField'."
+        <REF> field_params </REF>: dict "Field keyword parameters: max_length, db_collation, max_digits, and decimal_places when applicable."
+        <REF> field_notes </REF>: list "Notes about guessed or uncertain field metadata."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize field_params as an empty dictionary. RESULT field_params]
+            [COMMAND Initialize field_notes as an empty list. RESULT field_notes]
+            [COMMAND Call connection.introspection.get_field_type(row.type_code, row) and assign the returned value to field_type. RESULT field_type]
+            [COMMAND If field_type is 'CharField' and row.internal_size is truthy, set field_params['max_length'] to int(row.internal_size). RESULT field_params]
+            [COMMAND If field_type is either 'CharField' or 'TextField' and row.collation is truthy, set field_params['db_collation'] to row.collation. RESULT field_params]
+            [COMMAND Within the branch where field_type equals 'DecimalField', if row.precision is None or row.scale is None (inclusive OR), append the note 'max_digits and decimal_places have been guessed, as this database handles decimal fields as float' to field_notes. RESULT field_notes]
+            [COMMAND Within the same DecimalField branch when row.precision is None or row.scale is None, set field_params['max_digits'] to row.precision if row.precision is not None else 10, and set field_params['decimal_places'] to row.scale if row.scale is not None else 5. RESULT field_params]
+            [COMMAND Within the same DecimalField branch when both row.precision and row.scale are not None, set field_params['max_digits'] to row.precision and field_params['decimal_places'] to row.scale. RESULT field_params]
+            [COMMAND Return the tuple (field_type, field_params, field_notes). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If connection.introspection.get_field_type(row.type_code, row) raises KeyError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set field_type to 'TextField'. RESULT field_type]
+            [COMMAND Append 'This field type is a guess.' to field_notes. RESULT field_notes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the lines for a Django model's inner Meta class by deriving unique_together constraints, marking unsupported constraints, and adding managed and db_table settings based on view/partition flags." get_meta]
+    [INPUTS]
+        <REF> table_name </REF>: str "Name of the database table for which the inner Meta class is generated."
+        <REF> constraints </REF>: dict "Mapping of constraint names to parameter dictionaries; each value must contain 'unique' and 'columns'."
+        <REF> column_to_field_name </REF>: Mapping[str, str] "Mapping from database column names to model field names."
+        <REF> is_view </REF>: bool "Flag indicating whether the table is a database view."
+        <REF> is_partition </REF>: bool "Flag indicating whether the table is a database partition."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list[str] "List of lines for the inner Meta class, including managed, db_table, and optional unique_together."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize unique_together as an empty list and has_unsupported_constraint as False. RESULT unique_together, has_unsupported_constraint]
+            [COMMAND For each params in constraints.values(), if params['unique'] is truthy, set columns to params['columns']; if None is present in the original columns list, set has_unsupported_constraint to True; then reassign columns to the list of entries that are not None; if len(columns) > 1 after filtering, append str(tuple(column_to_field_name[c] for c in columns)) to unique_together. RESULT unique_together, has_unsupported_constraint]
+            [COMMAND If is_view is truthy, set managed_comment to '  # Created from a view. Don't remove.'; else if is_partition is truthy, set managed_comment to '  # Created from a partition. Don't remove.'; otherwise set managed_comment to an empty string. RESULT managed_comment]
+            [COMMAND Initialize meta as a list containing exactly one empty string. RESULT meta]
+            [COMMAND If has_unsupported_constraint is truthy, append '    # A unique constraint could not be introspected.' to meta. RESULT meta]
+            [COMMAND Append the lines '    class Meta:', '        managed = False' followed by managed_comment, and '        db_table = ' followed by repr(table_name) to meta. RESULT meta]
+            [COMMAND If unique_together is truthy, build tup as '(' + ', '.join(unique_together) + ',)' and append '        unique_together = ' followed by tup to meta. RESULT meta]
+            [COMMAND Return meta as the result. RESULT meta]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

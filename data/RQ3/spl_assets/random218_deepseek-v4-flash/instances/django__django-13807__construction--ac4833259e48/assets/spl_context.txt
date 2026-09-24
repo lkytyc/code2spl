@@ -1,0 +1,872 @@
+# FILE: django/db/backends/sqlite3/base.py
+# CLASS DatabaseWrapper
+
+[DEFINE_WORKER: "Builds SQLite connection parameters from settings, validates that a NAME is configured, merges OPTIONS, forces check_same_thread and uri values, and warns if check_same_thread was explicitly set to True." get_connection_params]
+    [INPUTS]
+        <REF> self </REF>: object "Database wrapper instance exposing settings_dict and thread-sharing control."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> kwargs </REF>: dict "Connection parameters dictionary containing database, detect_types, merged OPTIONS, check_same_thread=False, and uri=True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.settings_dict and assign it to the local variable settings_dict. RESULT settings_dict]
+            [COMMAND Validate that settings_dict['NAME'] is truthy; if it is falsy, stop normal flow and raise ImproperlyConfigured. RESULT validation_passed]
+            [COMMAND Build kwargs dict with 'database' set to str(settings_dict['NAME']), 'detect_types' set to Database.PARSE_DECLTYPES | Database.PARSE_COLNAMES, then unpack **settings_dict['OPTIONS'] into kwargs; note that OPTIONS entries with the same keys can override the explicit database or detect_types values. RESULT kwargs]
+            [COMMAND Using short-circuit and, check if 'check_same_thread' is in kwargs and if its value is truthy; if both hold, issue a RuntimeWarning stating that check_same_thread will be overridden to False. RESULT none]
+            [COMMAND Update kwargs by setting 'check_same_thread' to False and 'uri' to True. RESULT kwargs]
+            [COMMAND Return kwargs. RESULT kwargs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: settings_dict['NAME'] exists and is falsy, such as an empty string, None, 0, False, or an empty collection.]
+        [LOG "ImproperlyConfigured: settings.DATABASES is improperly configured. Please supply the NAME value."]
+        [THROW ImproperlyConfigured "Raised when the database NAME setting is missing or falsy."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a SQLite connection, registers the required deterministic functions and aggregates, enables foreign keys, and returns the configured connection." get_new_connection]
+    [INPUTS]
+        <REF> conn_params </REF>: dict "Keyword arguments unpacked into Database.connect to establish the new database connection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> conn </REF>: Connection "Configured SQLite connection with registered deterministic functions, aggregates, RAND function, and foreign keys enabled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set conn to the connection returned by Database.connect using conn_params unpacked as keyword arguments. RESULT conn]
+            [COMMAND Select the create_deterministic_function callable based on the PY38 flag; use the appropriate alternative flow for the branch. RESULT create_deterministic_function]
+            [COMMAND Register deterministic function django_date_extract with 2 arguments and handler _sqlite_datetime_extract. RESULT conn]
+            [COMMAND Register deterministic function django_date_trunc with 4 arguments and handler _sqlite_date_trunc. RESULT conn]
+            [COMMAND Register deterministic function django_datetime_cast_date with 3 arguments and handler _sqlite_datetime_cast_date. RESULT conn]
+            [COMMAND Register deterministic function django_datetime_cast_time with 3 arguments and handler _sqlite_datetime_cast_time. RESULT conn]
+            [COMMAND Register deterministic function django_datetime_extract with 4 arguments and handler _sqlite_datetime_extract. RESULT conn]
+            [COMMAND Register deterministic function django_datetime_trunc with 4 arguments and handler _sqlite_datetime_trunc. RESULT conn]
+            [COMMAND Register deterministic function django_time_extract with 2 arguments and handler _sqlite_time_extract. RESULT conn]
+            [COMMAND Register deterministic function django_time_trunc with 4 arguments and handler _sqlite_time_trunc. RESULT conn]
+            [COMMAND Register deterministic function django_time_diff with 2 arguments and handler _sqlite_time_diff. RESULT conn]
+            [COMMAND Register deterministic function django_timestamp_diff with 2 arguments and handler _sqlite_timestamp_diff. RESULT conn]
+            [COMMAND Register deterministic function django_format_dtdelta with 3 arguments and handler _sqlite_format_dtdelta. RESULT conn]
+            [COMMAND Register deterministic function regexp with 2 arguments and handler _sqlite_regexp. RESULT conn]
+            [COMMAND Register deterministic function ACOS with 1 argument and handler none_guard(math.acos). RESULT conn]
+            [COMMAND Register deterministic function ASIN with 1 argument and handler none_guard(math.asin). RESULT conn]
+            [COMMAND Register deterministic function ATAN with 1 argument and handler none_guard(math.atan). RESULT conn]
+            [COMMAND Register deterministic function ATAN2 with 2 arguments and handler none_guard(math.atan2). RESULT conn]
+            [COMMAND Register deterministic function BITXOR with 2 arguments and handler none_guard(operator.xor). RESULT conn]
+            [COMMAND Register deterministic function CEILING with 1 argument and handler none_guard(math.ceil). RESULT conn]
+            [COMMAND Register deterministic function COS with 1 argument and handler none_guard(math.cos). RESULT conn]
+            [COMMAND Register deterministic function COT with 1 argument and handler none_guard(lambda x: 1 / math.tan(x)). RESULT conn]
+            [COMMAND Register deterministic function DEGREES with 1 argument and handler none_guard(math.degrees). RESULT conn]
+            [COMMAND Register deterministic function EXP with 1 argument and handler none_guard(math.exp). RESULT conn]
+            [COMMAND Register deterministic function FLOOR with 1 argument and handler none_guard(math.floor). RESULT conn]
+            [COMMAND Register deterministic function LN with 1 argument and handler none_guard(math.log). RESULT conn]
+            [COMMAND Register deterministic function LOG with 2 arguments and handler none_guard(lambda x, y: math.log(y, x)). RESULT conn]
+            [COMMAND Register deterministic function LPAD with 3 arguments and handler _sqlite_lpad. RESULT conn]
+            [COMMAND Register deterministic function MD5 with 1 argument and handler none_guard(lambda x: hashlib.md5(x.encode()).hexdigest()). RESULT conn]
+            [COMMAND Register deterministic function MOD with 2 arguments and handler none_guard(math.fmod). RESULT conn]
+            [COMMAND Register deterministic function PI with 0 arguments and handler lambda: math.pi. RESULT conn]
+            [COMMAND Register deterministic function POWER with 2 arguments and handler none_guard(operator.pow). RESULT conn]
+            [COMMAND Register deterministic function RADIANS with 1 argument and handler none_guard(math.radians). RESULT conn]
+            [COMMAND Register deterministic function REPEAT with 2 arguments and handler none_guard(operator.mul). RESULT conn]
+            [COMMAND Register deterministic function REVERSE with 1 argument and handler none_guard(lambda x: x[::-1]). RESULT conn]
+            [COMMAND Register deterministic function RPAD with 3 arguments and handler _sqlite_rpad. RESULT conn]
+            [COMMAND Register deterministic function SHA1 with 1 argument and handler none_guard(lambda x: hashlib.sha1(x.encode()).hexdigest()). RESULT conn]
+            [COMMAND Register deterministic function SHA224 with 1 argument and handler none_guard(lambda x: hashlib.sha224(x.encode()).hexdigest()). RESULT conn]
+            [COMMAND Register deterministic function SHA256 with 1 argument and handler none_guard(lambda x: hashlib.sha256(x.encode()).hexdigest()). RESULT conn]
+            [COMMAND Register deterministic function SHA384 with 1 argument and handler none_guard(lambda x: hashlib.sha384(x.encode()).hexdigest()). RESULT conn]
+            [COMMAND Register deterministic function SHA512 with 1 argument and handler none_guard(lambda x: hashlib.sha512(x.encode()).hexdigest()). RESULT conn]
+            [COMMAND Register deterministic function SIGN with 1 argument and handler none_guard(lambda x: (x > 0) - (x < 0)). RESULT conn]
+            [COMMAND Register deterministic function SIN with 1 argument and handler none_guard(math.sin). RESULT conn]
+            [COMMAND Register deterministic function SQRT with 1 argument and handler none_guard(math.sqrt). RESULT conn]
+            [COMMAND Register deterministic function TAN with 1 argument and handler none_guard(math.tan). RESULT conn]
+            [COMMAND Register the non-deterministic RAND function with 0 arguments and handler random.random, avoiding the built-in RANDOM() function because it returns a value in the range [-2^63, 2^63 - 1] instead of [0, 1). RESULT conn]
+            [COMMAND Register aggregate STDDEV_POP with 1 argument and list_aggregate(statistics.pstdev). RESULT conn]
+            [COMMAND Register aggregate STDDEV_SAMP with 1 argument and list_aggregate(statistics.stdev). RESULT conn]
+            [COMMAND Register aggregate VAR_POP with 1 argument and list_aggregate(statistics.pvariance). RESULT conn]
+            [COMMAND Register aggregate VAR_SAMP with 1 argument and list_aggregate(statistics.variance). RESULT conn]
+            [COMMAND Execute PRAGMA foreign_keys = ON on the connection. RESULT conn]
+            [COMMAND Return conn. RESULT conn]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: PY38 is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Bind create_deterministic_function to functools.partial(conn.create_function, deterministic=True). RESULT create_deterministic_function]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: PY38 is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Bind create_deterministic_function to conn.create_function. RESULT create_deterministic_function]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes connection state by performing no operations, as the method body contains only a pass statement." init_connection_state]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Perform no action because the method body is a pass statement. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a database cursor from the instance's connection, using SQLiteCursorWrapper as the cursor factory." create_cursor]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is called; provides the connection attribute."
+        <REF> name </REF>: Optional[str] "Optional parameter accepted by the method signature but not referenced in the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cursor </REF>: sqlite3.Cursor "A new database cursor created with SQLiteCursorWrapper as its factory."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.connection to obtain the database connection object. RESULT connection]
+            [COMMAND Call connection.cursor with factory=SQLiteCursorWrapper to create a new database cursor using the custom cursor factory. RESULT cursor]
+            [COMMAND Return the created cursor to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Closes the database connection after validating thread sharing, delegating to BaseDatabaseWrapper.close only when the database is not in-memory, and otherwise ignoring the close request to prevent data loss." close]
+    [INPUTS]
+        <REF> self </REF>: BaseDatabaseWrapper "The database wrapper instance whose connection is being closed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.validate_thread_sharing() to ensure the current thread is allowed to use this database connection. RESULT _]
+            [COMMAND Evaluate the condition 'not self.is_in_memory_db()'. RESULT not_in_memory_db]
+            [COMMAND If not_in_memory_db is true, call BaseDatabaseWrapper.close(self) to close the connection using the base class implementation. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: not_in_memory_db is false, meaning self.is_in_memory_db() returns True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip calling BaseDatabaseWrapper.close(self) and ignore the close request, because closing an in-memory database would destroy the database. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether savepoints are permitted by reporting if the connection is currently inside an atomic block." _savepoint_allowed]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> allowed </REF>: boolean "True if the connection is inside an atomic block, otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of self.in_atomic_block as the savepoint-allowed flag. RESULT allowed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the SQLite connection isolation level based on the autocommit flag, using None when autocommit is truthy and an empty string when falsy, within the self.wrap_database_errors context manager." _set_autocommit]
+    [INPUTS]
+        <REF> autocommit </REF>: bool "Boolean flag whose truthiness determines the isolation level: truthy selects None, falsy selects an empty string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of the autocommit parameter. RESULT autocommit_flag]
+            [COMMAND Execute the alternative flow whose condition matches autocommit_flag to assign the local level variable. RESULT level]
+            [COMMAND Within the self.wrap_database_errors context manager, assign self.connection.isolation_level to level. RESULT isolation_level_assignment]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: autocommit_flag is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set level to None. RESULT level]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: autocommit_flag is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set level to an empty string ('') because SQLite's internal default is '' rather than None. RESULT level]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Attempts to disable foreign key constraints via PRAGMA foreign_keys = OFF, re-checks the actual pragma state to account for multi-statement transaction limitations, and returns True only if constraints are confirmed disabled." disable_constraint_checking]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the PRAGMA foreign_keys query returns a falsy value, meaning foreign key constraints are effectively disabled; False if it returns a truthy value, meaning they are still enabled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.cursor() and enter its context manager, binding the returned cursor to the variable cursor. RESULT cursor]
+            [COMMAND Within the with self.cursor() as cursor block, execute PRAGMA foreign_keys = OFF on cursor to request disabling foreign key constraint enforcement. RESULT cursor]
+            [COMMAND Within the same with block, because the OFF pragma may be ineffective inside a multi-statement transaction, execute PRAGMA foreign_keys on cursor to query the actual current enforcement state. RESULT cursor]
+            [COMMAND Within the same with block, call fetchone() on the result set returned by the previous query to obtain the first row. RESULT query_row]
+            [COMMAND Within the same with block, read the first column value at index 0 of query_row and assign that value to enabled. RESULT enabled]
+            [COMMAND After the with block exits, return not bool(enabled), which is True if enabled is falsy and False if enabled is truthy. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Opens a database cursor and executes PRAGMA foreign_keys = ON to enable foreign key constraint checking." enable_constraint_checking]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Acquire a cursor from the database connection using the cursor context manager and assign it to cursor. RESULT cursor]
+            [COMMAND Within the cursor context, execute the SQL statement 'PRAGMA foreign_keys = ON' to enable foreign key constraint enforcement. RESULT None]
+            [COMMAND Exit the cursor context manager, which automatically closes the cursor and cleans up resources. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the object is usable by unconditionally returning True." is_usable]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "Always True, indicating that the object is usable."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean literal True directly to the caller, indicating the object is usable. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Starts an explicit transaction while remaining in autocommit mode by executing the BEGIN SQL command on the current database cursor, working around the sqlite3 savepoint bug." _start_transaction_under_autocommit]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Start an explicit transaction in autocommit mode by calling self.cursor().execute("BEGIN") and discarding the return value. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether the database name configured in settings_dict represents an in-memory database by delegating to self.creation.is_in_memory_db." is_in_memory_db]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "True if the configured database name refers to an in-memory database, otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the database name from self.settings_dict using the key 'NAME'. RESULT db_name]
+            [COMMAND Call self.creation.is_in_memory_db with db_name and return the resulting boolean. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS SQLiteCursorWrapper
+
+[DEFINE_WORKER: "Executes a database query, converting the query when parameters are supplied and otherwise delegating directly to the underlying cursor execution." execute]
+    [INPUTS]
+        <REF> query </REF>: object "Query string or query object to execute; converted before execution when params is not None."
+        <REF> params </REF>: object "Optional parameters for the query; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Result returned by Database.Cursor.execute."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether params is None. RESULT params_is_none]
+            [COMMAND If params is not None, convert query by calling self.convert_query(query) and assign the converted value back to query. RESULT query]
+            [COMMAND If params is not None, call Database.Cursor.execute(self, query, params) and return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: params is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of Database.Cursor.execute(self, query) immediately, using the original query and no params. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the given query using self.convert_query and delegates the executemany operation to Database.Cursor with the provided parameter list." executemany]
+    [INPUTS]
+        <REF> query </REF>: str "The SQL query string to be converted and executed."
+        <REF> param_list </REF>: sequence "A sequence of parameter sequences or dictionaries used for batch execution."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The return value from Database.Cursor.executemany."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the query by calling self.convert_query(query) and assign the result to query. RESULT query]
+            [COMMAND Call Database.Cursor.executemany(self, query, param_list) and return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts format-style placeholder matches in query to question marks and unescapes doubled percent signs." convert_query]
+    [INPUTS]
+        <REF> query </REF>: str "Input string to be transformed; it is not mutated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The transformed query string with regex matches replaced by '?' and '%%' collapsed to '%'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Replace every match of FORMAT_QMARK_REGEX in query with the literal string '?' using FORMAT_QMARK_REGEX.sub('?', query) and store the intermediate string. RESULT s1]
+            [COMMAND Replace every occurrence of the two-character sequence '%%' in s1 with the single character '%' using s1.replace('%%', '%') and store the resulting string. RESULT s2]
+            [COMMAND Return the resulting string s2. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a callable that decodes a bytes-like argument to a string and applies the supplied converter function to that decoded string." decoder]
+    [INPUTS]
+        <REF> conv_func </REF>: Callable[[str], Any] "Converter to apply to the decoded string; must be callable."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> converter_lambda </REF>: Callable[[bytes_like], Any] "Lambda that accepts bytes-like input s, decodes it, calls conv_func(s.decode()), and returns conv_func's result."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a lambda function capturing conv_func that, when called with a bytes-like argument s, decodes s using s.decode(), passes the decoded string to conv_func, and returns the result. RESULT converter_lambda]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a decorator wrapper around a function that returns None when any positional argument is None, and otherwise calls the wrapped function with the original arguments." none_guard]
+    [INPUTS]
+        <REF> func </REF>: callable "The function to be wrapped and invoked when no positional argument is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: callable "The wrapper function with func's metadata preserved, returning None if any positional argument is None and otherwise returning func(*args, **kwargs)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the inner function wrapper accepting positional arguments args and keyword arguments kwargs, with a conditional body that returns None if None is present in args and otherwise calls func(*args, **kwargs). RESULT wrapper]
+            [COMMAND Apply functools.wraps(func) to wrapper so that wrapper copies func's name, docstring, and metadata. RESULT wrapped_wrapper]
+            [COMMAND Return wrapped_wrapper as the result of none_guard. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: During wrapper execution, None is present in the positional arguments args.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without calling func. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: During wrapper execution, None is not present in the positional arguments args.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call func with the original positional arguments args and keyword arguments kwargs, and return its result. RESULT func_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a dynamically defined list subclass whose step method appends items and whose finalize method applies the provided function to the accumulated list." list_aggregate]
+    [INPUTS]
+        <REF> function </REF>: callable "Function to be stored as the finalize attribute and applied to the accumulated list when finalization is called."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ListAggregate </REF>: class "A dynamically created subclass of list with step set to list.append and finalize set to the provided function."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within list_aggregate, call type with name 'ListAggregate', bases (list,), and namespace {'finalize': function, 'step': list.append} to create a new list subclass. RESULT ListAggregate]
+            [COMMAND Return the newly created ListAggregate class object from list_aggregate. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Ensures the running SQLite version is at least 3.8.3 and raises ImproperlyConfigured if it is older." check_sqlite_version]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the installed SQLite version from Database.sqlite_version_info. RESULT sqlite_version_info]
+            [COMMAND Check whether sqlite_version_info is strictly less than the minimum required tuple (3, 8, 3). RESULT version_is_too_old]
+            [COMMAND If version_is_too_old is false, complete the method without raising an exception. RESULT void]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The installed SQLite version is strictly less than (3, 8, 3).]
+        [LOG "SQLite 3.8.3 or later is required (found the installed SQLite version)."]
+        [THROW ImproperlyConfigured "Raised when the installed SQLite version is older than the required minimum version 3.8.3; the error message includes the found version from Database.sqlite_version."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a SQLite datetime with the given timezone context and truncates it to the start of the requested period (year, quarter, month, week, or day), returning a formatted date string." _sqlite_date_trunc]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "Granularity selector: 'year', 'quarter', 'month', 'week', or 'day'."
+        <REF> dt </REF>: object "Input datetime value to parse and truncate."
+        <REF> tzname </REF>: string "Target timezone name used when parsing dt."
+        <REF> conn_tzname </REF>: string "Connection timezone name used when parsing dt."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string|null "Truncated date string in YYYY-MM-DD format, or None if dt is None or lookup_type is unrecognized."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse dt using the internal SQLite datetime parser with tzname and conn_tzname, and assign the normalized result back to dt. RESULT dt]
+            [COMMAND If dt is None, return None immediately. RESULT return_value]
+            [COMMAND Evaluate lookup_type against the branches in order: year, quarter, month, week, day; execute the first matching branch and return its formatted date string. If no branch matches, return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup_type is exactly 'year']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string formatted as '%i-01-01' using dt.year. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup_type is exactly 'quarter']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute month_in_quarter = dt.month - ((dt.month - 1) % 3). RESULT month_in_quarter]
+            [COMMAND Return the string formatted as '%i-%02i-01' using dt.year and month_in_quarter. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup_type is exactly 'month']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string formatted as '%i-%02i-01' using dt.year and dt.month. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup_type is exactly 'week']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set dt = dt - datetime.timedelta(days=dt.weekday()), moving dt to Monday of its week. RESULT dt]
+            [COMMAND Return the string formatted as '%i-%02i-%02i' using dt.year, dt.month, and dt.day. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup_type is exactly 'day']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string formatted as '%i-%02i-%02i' using dt.year, dt.month, and dt.day. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Truncates a SQLite time value to hour, minute, or second precision by parsing the raw value with _sqlite_datetime_parse, falling back to backend_utils.typecast_time when parsing returns None, and returning a zero-padded time string or None for invalid input or lookup type." _sqlite_time_trunc]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "Requested truncation precision: 'hour', 'minute', or 'second'."
+        <REF> dt </REF>: datetime_like_or_null "Raw datetime-like value to parse and truncate; may be None."
+        <REF> tzname </REF>: string "Timezone name or offset associated with dt."
+        <REF> conn_tzname </REF>: string "Timezone setting of the SQLite connection used during datetime parsing."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string_or_null "Zero-padded time string truncated to the requested precision, or None if dt is None, parsing/casting fails, or lookup_type is unsupported."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If dt is None, return None immediately. RESULT none_result]
+            [COMMAND Call _sqlite_datetime_parse(dt, tzname, conn_tzname) and assign the returned value to dt_parsed. RESULT dt_parsed]
+            [COMMAND If dt_parsed is None, use the alternative flow for dt_parsed is None; otherwise assign dt = dt_parsed. RESULT dt]
+            [COMMAND If lookup_type is 'hour', return the zero-padded string generated by '%02i:00:00' % dt.hour. RESULT hour_result]
+            [COMMAND Else if lookup_type is 'minute', return the zero-padded string generated by '%02i:%02i:00' % (dt.hour, dt.minute). RESULT minute_result]
+            [COMMAND Else if lookup_type is 'second', return the zero-padded string generated by '%02i:%02i:%02i' % (dt.hour, dt.minute, dt.second). RESULT second_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: dt_parsed is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to assign dt = backend_utils.typecast_time(dt) inside a try block. RESULT dt]
+            [COMMAND If the call to backend_utils.typecast_time(dt) raises ValueError or TypeError, return None immediately. RESULT none_result]
+            [COMMAND If the conversion succeeds, continue with the converted dt to the lookup_type dispatch. RESULT dt]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup_type is not 'hour', 'minute', or 'second']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fall through to the end of the function without an explicit return, producing None. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a datetime value using the supplied timezone and connection timezone, then returns its date in ISO 8601 format, or None if parsing produces None." _sqlite_datetime_cast_date]
+    [INPUTS]
+        <REF> dt </REF>: str | None "The datetime value to parse and cast to a date."
+        <REF> tzname </REF>: str "The target timezone name used for parsing."
+        <REF> conn_tzname </REF>: str "The connection/session timezone name used for parsing."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str | None "ISO 8601 date string (YYYY-MM-DD) when dt parses to a non-None datetime; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse the input datetime value dt by calling _sqlite_datetime_parse with tzname and conn_tzname, and replace dt with the parsed result. RESULT dt]
+            [COMMAND When the parsed dt is not None, compute dt.date().isoformat() and return that ISO date string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The parsed dt is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a datetime value using SQLite timezone conversion and returns its time component in ISO format, or None if the parsed value is None." _sqlite_datetime_cast_time]
+    [INPUTS]
+        <REF> dt </REF>: datetime/string/None "The datetime value to parse and convert."
+        <REF> tzname </REF>: string/None "The timezone name to use for parsing the datetime value."
+        <REF> conn_tzname </REF>: string/None "The connection timezone name used for the conversion."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string or None "The ISO-formatted time component of the parsed datetime, or None if the parsed value is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _sqlite_datetime_parse with dt, tzname, and conn_tzname, and assign the parsed result back to dt. RESULT dt]
+            [COMMAND If dt is None, return None. RESULT None]
+            [COMMAND Return the ISO-formatted time component by calling dt.time().isoformat(). RESULT iso_time_string]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a SQLite datetime value using timezone context and returns the requested datetime component, handling special weekday, ISO weekday, week, quarter, and ISO year conventions before falling back to direct attribute access." _sqlite_datetime_extract]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "Name of the datetime component to extract; may be a supported special key or a direct attribute name of a datetime object."
+        <REF> dt </REF>: object "SQLite datetime value to parse and extract from."
+        <REF> tzname </REF>: string or None "Optional timezone name used by the datetime parser."
+        <REF> conn_tzname </REF>: string or None "Optional connection-level timezone name used by the datetime parser."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: int or object or None "Extracted datetime component, or None when dt is None after parsing."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse dt using _sqlite_datetime_parse(dt, tzname, conn_tzname) and assign the parsed result back to dt. RESULT dt]
+            [COMMAND If dt is None after parsing, return None. RESULT return_value]
+            [COMMAND If lookup_type is 'week_day', compute (dt.isoweekday() % 7) + 1 and return it. RESULT return_value]
+            [COMMAND Else if lookup_type is 'iso_week_day', return dt.isoweekday(). RESULT return_value]
+            [COMMAND Else if lookup_type is 'week', return dt.isocalendar()[1]. RESULT return_value]
+            [COMMAND Else if lookup_type is 'quarter', return math.ceil(dt.month / 3). RESULT return_value]
+            [COMMAND Else if lookup_type is 'iso_year', return dt.isocalendar()[0]. RESULT return_value]
+            [COMMAND Else, return getattr(dt, lookup_type). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a datetime value using the SQLite connection timezone, returns None on parse failure, and otherwise truncates it to the start of the requested calendar period as a formatted string." _sqlite_datetime_trunc]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "Period key: 'year', 'quarter', 'month', 'week', 'day', 'hour', 'minute', or 'second'."
+        <REF> dt </REF>: datetime-like value or string "Datetime value or parseable datetime string to be truncated."
+        <REF> tzname </REF>: string "Timezone name used when parsing dt."
+        <REF> conn_tzname </REF>: string "Connection timezone name used when parsing dt."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> formatted_period_start </REF>: string|null "Formatted datetime string representing the start of the requested period, or None when parsing fails or lookup_type is unknown."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _sqlite_datetime_parse(dt, tzname, conn_tzname) and assign the returned value to parsed_dt. RESULT parsed_dt]
+            [COMMAND If parsed_dt is None, return None immediately. RESULT None]
+            [COMMAND Dispatch on lookup_type and return the formatted period-start string for the matching branch. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is 'year'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format parsed_dt.year as 'YYYY-01-01 00:00:00' and return it. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is 'quarter'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute month_in_quarter as parsed_dt.month - ((parsed_dt.month - 1) % 3), then format parsed_dt.year and month_in_quarter as 'YYYY-MM-01 00:00:00' and return it. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is 'month'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format parsed_dt.year and parsed_dt.month as 'YYYY-MM-01 00:00:00' and return it. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is 'week'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Subtract datetime.timedelta(days=parsed_dt.weekday()) from parsed_dt to get Monday of its week, then format the resulting year, month, and day as 'YYYY-MM-DD 00:00:00' and return it. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is 'day'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format parsed_dt.year, parsed_dt.month, and parsed_dt.day as 'YYYY-MM-DD 00:00:00' and return it. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is 'hour'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format parsed_dt.year, parsed_dt.month, parsed_dt.day, and parsed_dt.hour as 'YYYY-MM-DD HH:00:00' and return it. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is 'minute'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format parsed_dt.year, parsed_dt.month, parsed_dt.day, parsed_dt.hour, and parsed_dt.minute as 'YYYY-MM-DD HH:MM:00' and return it. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is 'second'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format parsed_dt.year, parsed_dt.month, parsed_dt.day, parsed_dt.hour, parsed_dt.minute, and parsed_dt.second as 'YYYY-MM-DD HH:MM:SS' and return it. RESULT formatted_period_start]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When lookup_type is not one of 'year', 'quarter', 'month', 'week', 'day', 'hour', 'minute', or 'second'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a datetime value with backend_utils.typecast_time and returns the requested time component attribute, or None if the input is None or conversion fails." _sqlite_time_extract]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "Name of the datetime attribute to extract from the converted value."
+        <REF> dt </REF>: object or None "Datetime value from which the attribute is extracted; may be None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object or None "The requested datetime attribute value, or None if dt is None or conversion fails."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If dt is None, return None immediately. RESULT None]
+            [COMMAND Attempt to convert dt by calling backend_utils.typecast_time(dt) and assign the converted value back to dt. RESULT dt]
+            [COMMAND Return getattr(dt, lookup_type). RESULT extracted_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: backend_utils.typecast_time(dt) raises ValueError or TypeError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Formats the result of adding or subtracting two SQLite datetime delta operands, where each operand is either an integer number of microseconds or a datetime string, returning the string representation or None on invalid input." _sqlite_format_dtdelta]
+    [INPUTS]
+        <REF> conn </REF>: string "Operator string used to select addition or subtraction based on whether its stripped value is '+'."
+        <REF> lhs </REF>: int|string "Left operand: either an integer number of microseconds or a string representing a datetime."
+        <REF> rhs </REF>: int|string "Right operand: either an integer number of microseconds or a string representing a datetime."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string|null "String representation of the resulting timedelta, date, or datetime; or None if a ValueError or TypeError occurs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert lhs: if isinstance(lhs, int), set real_lhs to datetime.timedelta(0, 0, lhs); otherwise set real_lhs to backend_utils.typecast_timestamp(lhs). RESULT real_lhs]
+            [COMMAND Convert rhs: if isinstance(rhs, int), set real_rhs to datetime.timedelta(0, 0, rhs); otherwise set real_rhs to backend_utils.typecast_timestamp(rhs). RESULT real_rhs]
+            [COMMAND Strip the conn string and compare it to '+'; if it equals '+', set out to real_lhs + real_rhs; otherwise set out to real_lhs - real_rhs. RESULT out]
+            [COMMAND Return the string representation of out. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: While converting lhs or rhs, or while performing the arithmetic, a ValueError or TypeError is raised.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch ValueError or TypeError and return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts lhs and rhs into time values and returns the difference in microseconds as left time minus right time." _sqlite_time_diff]
+    [INPUTS]
+        <REF> lhs </REF>: time-like value "Left-hand time value to convert and subtract from."
+        <REF> rhs </REF>: time-like value "Right-hand time value to convert and subtract."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> microsecond_difference </REF>: integer "Difference in microseconds between left and right time values, computed as total microseconds of left minus total microseconds of right."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert lhs to a time value using backend_utils.typecast_time and assign the result to left. RESULT left]
+            [COMMAND Convert rhs to a time value using backend_utils.typecast_time and assign the result to right. RESULT right]
+            [COMMAND Compute the total microseconds of left as left.hour multiplied by 60*60*1000000 plus left.minute multiplied by 60*1000000 plus left.second multiplied by 1000000 plus left.microsecond. RESULT left_microseconds]
+            [COMMAND Compute the total microseconds of right as right.hour multiplied by 60*60*1000000 plus right.minute multiplied by 60*1000000 plus right.second multiplied by 1000000 plus right.microsecond. RESULT right_microseconds]
+            [COMMAND Subtract right_microseconds from left_microseconds and return the resulting integer microsecond difference. RESULT microsecond_difference]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts lhs and rhs to timestamps and returns their difference in microseconds." _sqlite_timestamp_diff]
+    [INPUTS]
+        <REF> lhs </REF>: timestamp-like "Left-hand timestamp operand to convert and subtract."
+        <REF> rhs </REF>: timestamp-like "Right-hand timestamp operand to convert and subtract."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: integer "Difference in microseconds between the converted lhs and rhs timestamps."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert lhs to a timestamp by calling backend_utils.typecast_timestamp and assign the normalized value to left. RESULT left]
+            [COMMAND Convert rhs to a timestamp by calling backend_utils.typecast_timestamp and assign the normalized value to right. RESULT right]
+            [COMMAND Return the result of duration_microseconds(left - right), which computes the difference in microseconds between the converted left and right timestamps. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the given regular expression pattern occurs anywhere in the string representation of the given value." _sqlite_regexp]
+    [INPUTS]
+        <REF> re_pattern </REF>: str or compiled regex object "Regular expression pattern to search for."
+        <REF> re_string </REF>: object "Value to convert to a string and search within."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if re_pattern matches any substring of str(re_string), False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert re_string to its string representation using str(re_string). RESULT stringified]
+            [COMMAND Search for re_pattern anywhere in the stringified value using re.search(re_pattern, stringified). RESULT match]
+            [COMMAND Convert the search result to a boolean and return it; True if a match was found, False otherwise. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the first length characters of text when text is at least length characters long, otherwise left-pads text with fill_text to the target length." _sqlite_lpad]
+    [INPUTS]
+        <REF> text </REF>: str "The original string to be truncated or left-padded."
+        <REF> length </REF>: int "The target total length of the returned string."
+        <REF> fill_text </REF>: str "The string repeated and sliced to create the left padding when text is shorter than length."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> final_result </REF>: str "The resulting string: text truncated to its first length characters when it is long enough, or filler made from fill_text concatenated before text when it is too short."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether the length of text is greater than or equal to length. RESULT text_is_long_enough]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When text_is_long_enough is true, meaning len(text) >= length, including when the lengths are equal.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the prefix of text containing the first length characters, using the exclusive stop-index boundary of the slice. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When text_is_long_enough is false, meaning len(text) < length.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a repeated string by repeating fill_text exactly length times. RESULT repeated_fill_text]
+            [COMMAND Take the first length minus the length of text characters from the repeated string as the left filler. RESULT left_filler]
+            [COMMAND Concatenate the left filler and text to produce the final padded result. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Pads text on the right by appending fill_text repeatedly and then truncates to length characters." _sqlite_rpad]
+    [INPUTS]
+        <REF> text </REF>: string "The original string to be padded and truncated."
+        <REF> length </REF>: integer "The target length for the result and the number of times fill_text is repeated."
+        <REF> fill_text </REF>: string "The string repeated and appended to text as padding."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The first length characters of text concatenated with fill_text repeated length times."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the expanded string by concatenating text with fill_text repeated length times. RESULT expanded]
+            [COMMAND Return the first length characters of expanded; if length is zero, return an empty string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If length is negative, Python slicing semantics apply and fill_text * length is an empty string.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Treat the expression as text[:-abs(length)] and return that slice; this removes the last abs(length) characters from text, or returns an empty string if abs(length) exceeds len(text). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

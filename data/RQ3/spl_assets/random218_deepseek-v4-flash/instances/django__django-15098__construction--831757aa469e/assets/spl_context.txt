@@ -1,0 +1,935 @@
+# FILE: django/utils/translation/trans_real.py
+# CLASS TranslationCatalog
+
+[DEFINE_WORKER: "Initializes the translation catalogs and pluralization callable from an optional translation object, falling back to an empty catalog and a default singular/plural rule when the object is absent or falsey." __init__]
+    [INPUTS]
+        <REF> trans </REF>: object or None "Optional translation object. When truthy, its _catalog is shallow-copied and its plural callable is reused; when falsey, default empty catalog and default plural lambda are used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of trans to select between the provided translation object and the default fallback. RESULT trans_is_truthy]
+            [COMMAND When trans is truthy, assign self._catalogs to a one-element list containing a shallow copy of trans._catalog. RESULT self._catalogs]
+            [COMMAND When trans is truthy, assign self._plurals to a one-element list containing trans.plural. RESULT self._plurals]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When trans is falsey]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self._catalogs to a one-element list containing a new empty dictionary. RESULT self._catalogs]
+            [COMMAND Assign self._plurals to a one-element list containing the default plural lambda lambda n: int(n != 1). RESULT self._plurals]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Lazily flattens all items from self._catalogs into a single ordered stream by delegating to each catalog's items() generator." items]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose _catalogs attribute contains the catalogs to flatten."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> items_generator </REF>: generator "A lazy generator yielding every item from every catalog in self._catalogs in order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self._catalogs to obtain the ordered sequence of catalogs. RESULT catalogs]
+            [COMMAND Create a lazy generator that will process the catalogs and yield their items on demand. RESULT items_generator]
+            [COMMAND For each catalog in catalogs, in original iteration order, obtain the iterator returned by cat.items(). RESULT current_catalog_items]
+            [COMMAND Yield each item from current_catalog_items to the caller one at a time, suspending until the next item is requested. RESULT item]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Lazily flattens all keys from every catalog in self._catalogs into a single generator stream and yields them one by one." keys]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> yielded_key </REF>: Generator "A lazy generator that produces each key from each catalog in self._catalogs in sequence."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each catalog cat in self._catalogs in sequential order until the catalog collection is exhausted. RESULT cat]
+            [COMMAND Within the loop over cat, yield every key from cat.keys() to the caller one at a time; if cat.keys() is empty, yield nothing and continue to the next catalog. RESULT yielded_key]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges trans._catalog into the first existing catalog whose plural function matches trans.plural.__code__, or otherwise prepends the new catalog and plural pair to the current instance." update]
+    [INPUTS]
+        <REF> self </REF>: object "Current instance containing the _catalogs and _plurals lists."
+        <REF> trans </REF>: object "Translation object containing a _catalog dictionary and a plural function whose __code__ is used for matching existing plural rules."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over paired entries (cat, plural) from zip(self._catalogs, self._plurals), stopping at the end of the shorter list. RESULT cat_plural_pairs]
+            [COMMAND Within the for loop over cat_plural_pairs, compare trans.plural.__code__ with plural.__code__ to determine whether the plural functions are the same compiled code. RESULT plural_code_matches]
+            [COMMAND Within the for loop over cat_plural_pairs, if plural_code_matches is true, update cat with the contents of trans._catalog and break out of the loop. RESULT cat]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The for loop completes without break, meaning no plural in self._plurals has __code__ equal to trans.plural.__code__, including when self._catalogs and self._plurals are empty.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Insert a copy of trans._catalog at the beginning of self._catalogs. RESULT self._catalogs]
+            [COMMAND Insert trans.plural at the beginning of self._plurals. RESULT self._plurals]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Searches a sequence of catalogs for a key and returns the first non-missing value found, or the default if the key is absent from all catalogs." get]
+    [INPUTS]
+        <REF> key </REF>: object "Key to look up in each catalog."
+        <REF> default </REF>: object "Value to return if key is not found in any catalog; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> value </REF>: object "First matching value from the catalogs, or the default value if no catalog contains the key."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new unique sentinel object and assign it to `missing`. RESULT missing]
+            [COMMAND Iterate over each catalog `cat` in `self._catalogs` in order. RESULT cat]
+            [COMMAND For the current `cat`, call `cat.get(key, missing)` and assign the result to `result`. RESULT result]
+            [COMMAND Within the `for` loop over `cat`, if `result is not missing` (identity comparison), immediately return `result`. RESULT result (returned)]
+            [COMMAND After the loop completes without returning, return `default`. RESULT default (returned)]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Searches each translation catalog using a plural function to find a non-None translation for msgid and returns the first match, otherwise raises KeyError." plural]
+    [INPUTS]
+        <REF> msgid </REF>: str "The message identifier to look up in each catalog."
+        <REF> num </REF>: int "The number used to select the appropriate plural form."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The first non-None translation found for msgid under the computed plural form."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Start a for loop over pairs produced by zip(self._catalogs, self._plurals), assigning each pair to cat and plural. RESULT for_pairs]
+            [COMMAND In each iteration, compute plural(num), build the lookup key (msgid, plural(num)), and call cat.get(...) on the current catalog catalog; assign the result to tmsg. RESULT tmsg]
+            [COMMAND Within the same for loop, check whether tmsg is not None, treating only None as missing so empty string, zero, and False are valid results; if tmsg is not None, return tmsg immediately. RESULT return_tmsg]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The for loop exhausts all catalog/plural pairs without finding a non-None translation for msgid under the computed plural form.]
+        [LOG "No translation found for the given msgid and computed plural form; raising KeyError."]
+        [THROW KeyError "Raised when msgid is absent from all catalogs under the appropriate plural form."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS DjangoTranslation
+
+[DEFINE_WORKER: "Initializes a GNUTranslations instance from a language code by setting language attributes, loading Django or user-provided locale catalogs, adding fallback translations, and ensuring a translation catalog exists." GNUTranslations.__init__]
+    [INPUTS]
+        <REF> language </REF>: string "Language code used to set language-derived attributes and determine translation catalog behavior."
+        <REF> domain </REF>: string or None "Translation domain; defaults to None. The value 'django' triggers Django-specific catalog handling."
+        <REF> localedirs </REF>: array of strings or None "Locale directories from which GNU translation catalogs are loaded. Ignored and reset to None when domain is 'django'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize the base gettext GNUTranslations object by calling gettext_module.GNUTranslations.__init__(self). RESULT self]
+            [COMMAND If domain is not None, assign self.domain = domain; if domain is None, make no assignment. RESULT self.domain]
+            [COMMAND Initialize language-related attributes: set self.__language = language, self.__to_language = to_language(language), self.__locale = to_locale(language), set self._catalog = None, and set self.plural to the Germanic pluralization lambda lambda n: int(n != 1) (returns 0 for n == 1 and 1 otherwise). RESULT self]
+            [COMMAND If self.domain == 'django': if localedirs is not None, emit a RuntimeWarning with message "localedirs is ignored when domain is 'django'." and set localedirs = None; then call self._init_translation_catalog(). RESULT self]
+            [COMMAND If localedirs is truthy, iterate over each localedir in localedirs, create translation = self._new_gnu_trans(localedir), and merge it via self.merge(translation). If localedirs is falsy, call self._add_installed_apps_translations() instead. RESULT self]
+            [COMMAND Call self._add_local_translations(). RESULT self]
+            [COMMAND If self.__language == settings.LANGUAGE_CODE and self.domain == 'django' and self._catalog is None, raise OSError with message 'No translation files found for default language %s.' formatted with settings.LANGUAGE_CODE. RESULT OSError]
+            [COMMAND Call self._add_fallback(localedirs) using the current value of localedirs, which may be None if the Django branch reset it. RESULT self]
+            [COMMAND If self._catalog is None, set self._catalog = TranslationCatalog(). RESULT self._catalog]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: domain is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.domain = domain. RESULT self.domain]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.domain == 'django' and localedirs is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit a RuntimeWarning with message "localedirs is ignored when domain is 'django'.". RESULT self]
+            [COMMAND Set localedirs = None. RESULT localedirs]
+            [COMMAND Call self._init_translation_catalog(). RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.domain == 'django' and localedirs is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._init_translation_catalog(). RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: localedirs is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each localedir in localedirs, create translation = self._new_gnu_trans(localedir) and merge it via self.merge(translation). RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: localedirs is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._add_installed_apps_translations(). RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._catalog is None at the end of initialization]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self._catalog = TranslationCatalog(). RESULT self._catalog]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.__language == settings.LANGUAGE_CODE and self.domain == 'django' and self._catalog is None]
+        [LOG "No translation files found for default language {settings.LANGUAGE_CODE}."]
+        [THROW OSError "Raised when the default language has no translation files available."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a mergeable gettext.GNUTranslations instance by delegating to gettext_module.translation with the object's domain and locale and the requested fallback behavior." _new_gnu_trans]
+    [INPUTS]
+        <REF> localedir </REF>: str "Directory path where translation catalogs are located."
+        <REF> use_null_fallback </REF>: bool "Whether to allow a null translation object as a fallback when no catalog is found; defaults to True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: gettext.GNUTranslations "A mergeable gettext.GNUTranslations instance returned by gettext_module.translation, or possibly a null translation object if fallback is enabled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call gettext_module.translation with domain=self.domain, localedir=localedir, languages=[self.__locale], and fallback=use_null_fallback, then return the resulting translation object. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes a base translation catalog by locating the settings module's locale directory, constructing a GNU translation object from it, and merging that object into the current catalog." _init_translation_catalog]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the settings module object from sys.modules using settings.__module__ and get its __file__ path, assigning the path to settingsfile. RESULT settingsfile]
+            [COMMAND Compute the locale directory by taking os.path.dirname(settingsfile) and joining it with 'locale', assigning the result to localedir. RESULT localedir]
+            [COMMAND Call self._new_gnu_trans(localedir) and assign the returned translation object to translation. RESULT translation]
+            [COMMAND Call self.merge(translation) to merge the created GNU translation object into the current translation catalog. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges GNU translation catalogs from the locale directories of all installed app configurations, iterating over the reversed app config list and raising AppRegistryNotReady if the app registry is not ready." _add_installed_apps_translations]
+    [INPUTS]
+        <REF> self </REF>: object "The translation object on which the method operates; must support _new_gnu_trans and merge."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to obtain all installed app configs from apps.get_app_configs(), convert them to a list, reverse the list, and assign the result to app_configs. RESULT app_configs]
+            [COMMAND For each app_config in app_configs in reversed order, construct localedir by joining app_config.path with 'locale'. RESULT localedir]
+            [COMMAND Within the loop over app_config, check whether os.path.exists(localedir) is true. RESULT localedir_exists]
+            [COMMAND If localedir exists, create a GNU translation object by calling self._new_gnu_trans(localedir). RESULT translation]
+            [COMMAND If localedir exists, merge the translation into self by calling self.merge(translation). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: If apps.get_app_configs() raises AppRegistryNotReady because the app registry is not ready.]
+        [LOG "The translation infrastructure cannot be initialized before the apps registry is ready. Check that you don't make non-lazy gettext calls at import time."]
+        [THROW AppRegistryNotReady "Raises AppRegistryNotReady after catching the original AppRegistryNotReady exception, explaining that translation initialization must happen only after the app registry is ready."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges translation catalogs from all configured locale paths in reverse order, so earlier locale paths take precedence over later ones." _add_local_translations]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate exactly once over each localedir in reversed(settings.LOCALE_PATHS), starting from the last entry and proceeding to the first; if LOCALE_PATHS is empty, perform no iterations. RESULT localedir]
+            [COMMAND Within the reversed LOCALE_PATHS loop, create a GNU translation object for the current localedir by calling self._new_gnu_trans(localedir) and assign it to translation. RESULT translation]
+            [COMMAND Within the same reversed LOCALE_PATHS loop, merge translation into the current object by calling self.merge(translation). RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds the default-language translation as a fallback unless the current language is the default language or an English variant, in which case no fallback is added." _add_fallback]
+    [INPUTS]
+        <REF> localedirs </REF>: optional list of locale directory paths "Locale directories passed to DjangoTranslation when self.domain is not 'django'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: NoneType "The method returns nothing and instead modifies self by installing the fallback."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the language guard using short-circuit OR: if self.__language == settings.LANGUAGE_CODE or self.__language.startswith('en'), return immediately without adding a fallback. RESULT guard_condition]
+            [COMMAND Choose the default translation source: if self.domain exactly equals 'django', assign default_translation = translation(settings.LANGUAGE_CODE); otherwise assign default_translation = DjangoTranslation(settings.LANGUAGE_CODE, domain=self.domain, localedirs=localedirs). RESULT default_translation]
+            [COMMAND Call self.add_fallback(default_translation) to install the chosen translation as the fallback, ignoring any return value. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges another translation object into this catalog, returning early when the other object has no catalog, initializing this catalog from other when it is absent, updating the existing catalog otherwise, and attaching other's fallback when present." merge]
+    [INPUTS]
+        <REF> self </REF>: object "The catalog instance on which merge is called; modified in place."
+        <REF> other </REF>: object "The translation object whose catalog, plural, info, and fallback data are merged into this catalog."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None; the method mutates this catalog in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If getattr(other, '_catalog', None) is falsy, including a missing or empty _catalog, return immediately without modifying this catalog. RESULT _guard_check]
+            [COMMAND Within the top-level method flow, if self._catalog is None, copy other.plural to self.plural, set self._info to a copy of other._info, and assign a new TranslationCatalog(other) to self._catalog; otherwise, update the existing self._catalog by calling self._catalog.update(other). RESULT _catalog_merge_complete]
+            [COMMAND If other._fallback is truthy, call self.add_fallback(other._fallback) to attach the fallback translator. RESULT _fallback_handled]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: getattr(other, '_catalog', None) is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately without performing any merge operations. RESULT _early_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._catalog is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.plural to other.plural and set self._info to a copy of other._info. RESULT _copied_metadata]
+            [COMMAND Create a new TranslationCatalog from other and assign it to self._catalog. RESULT _initialized_catalog]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._catalog is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Update the existing catalog by calling self._catalog.update(other). RESULT _updated_catalog]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: other._fallback is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.add_fallback(other._fallback) to register the fallback. RESULT _fallback_added]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the translation language stored in the private __language attribute." language]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> language_value </REF>: string "The translation language stored in self.__language."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the current value of the private attribute __language as the method's result. RESULT language_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the translation language name stored in the instance attribute self.__to_language." to_language]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> translation_language </REF>: string "The translation language name previously stored in self.__to_language."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of self.__to_language as the translation language name. RESULT translation_language]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the plural form for n from the translation catalog, delegating to a fallback translator or choosing between singular and plural message IDs when the catalog lookup raises a KeyError." ngettext]
+    [INPUTS]
+        <REF> self </REF>: object "The translator instance that exposes the plural catalog and an optional fallback translator."
+        <REF> msgid1 </REF>: str "Singular message ID used when n equals 1 in the fallback path."
+        <REF> msgid2 </REF>: str "Plural message ID used when n is not 1 in the fallback path."
+        <REF> n </REF>: int "Number used to select the plural form."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> tmsg </REF>: str "The selected plural translation string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inside the try block, compute tmsg as self._catalog.plural(msgid1, n). RESULT tmsg]
+            [COMMAND Return tmsg. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self._catalog.plural(msgid1, n) raises KeyError and self._fallback is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._fallback.ngettext(msgid1, msgid2, n). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._catalog.plural(msgid1, n) raises KeyError, self._fallback is falsy, and n == 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set tmsg to msgid1. RESULT tmsg]
+            [COMMAND Return tmsg. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._catalog.plural(msgid1, n) raises KeyError, self._fallback is falsy, and n != 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set tmsg to msgid2. RESULT tmsg]
+            [COMMAND Return tmsg. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clears language-related caches when the LANGUAGES or LANGUAGE_CODE setting is changed." reset_cache]
+    [INPUTS]
+        <REF> kwargs </REF>: dict "Keyword arguments containing the setting name under the key 'setting'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access kwargs['setting']. RESULT setting_name]
+            [COMMAND Determine whether setting_name is exactly 'LANGUAGES' or 'LANGUAGE_CODE'. RESULT is_language_setting_change]
+            [COMMAND If is_language_setting_change is true, call check_for_language.cache_clear(). RESULT unused]
+            [COMMAND If is_language_setting_change is true, call get_languages.cache_clear(). RESULT unused]
+            [COMMAND If is_language_setting_change is true, call get_supported_language_variant.cache_clear(). RESULT unused]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the DjangoTranslation object for the requested language, lazily creating and caching it in the global _translations dictionary if it is not already present." translation]
+    [INPUTS]
+        <REF> language </REF>: str "Language code for which the translation object is requested."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> translation_object </REF>: DjangoTranslation "The cached translation object associated with the requested language."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare that _translations refers to the global dictionary so any read or write targets the shared cache. RESULT _translations]
+            [COMMAND Check whether language is not already a key in _translations. RESULT language_missing]
+            [COMMAND If language_missing is true, create a DjangoTranslation instance for language and store it under _translations[language]. RESULT _translations[language]]
+            [COMMAND Return the translation object stored under language in _translations. RESULT translation_object]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fetches the translation object for a given language and installs it as the current translation object for the current thread." activate]
+    [INPUTS]
+        <REF> language </REF>: object "The language identifier used to obtain the translation object; if falsy, the activation is skipped."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND When language is truthy, fetch the translation object for language using translation(language). RESULT translation_object]
+            [COMMAND Assign the fetched translation object to _active.value to install it as the current translation object for the current thread. RESULT _active.value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If language is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately without fetching or installing a translation object. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes the value attribute from the active translation object if it exists, so subsequent _() calls resolve to the default translation object." deactivate]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate hasattr(_active, 'value') to check whether the active translation object currently has a value attribute. RESULT attribute_exists]
+            [COMMAND If attribute_exists is true, delete the value attribute from the active translation object with del _active.value. RESULT _active]
+            [COMMAND If attribute_exists is false, do nothing. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Replaces the active translation object with a NullTranslations instance and makes its to_language method always return None." deactivate_all]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new NullTranslations instance by calling gettext_module.NullTranslations(). RESULT null_translations]
+            [COMMAND Assign the NullTranslations instance to the value attribute of the active translation state object _active. RESULT _active_value]
+            [COMMAND Attach to the to_language attribute of _active.value a lambda function that accepts any number of positional arguments and always returns None. RESULT _active_language]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the language of the active translation object when available, otherwise falls back to the default language code." get_language]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The language code from the active translation object when available; otherwise, the default language code from settings."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the value attribute from the active translation object using getattr with a default of None, and assign the result to t. RESULT t]
+            [COMMAND If t is not the None object, call t.to_language() and immediately return the result as the resolved language code. RESULT language_code]
+            [COMMAND When t is None, return settings.LANGUAGE_CODE as the default language. RESULT default_language]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: t is not None and calling t.to_language() raises AttributeError.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the AttributeError and ignore it, then return settings.LANGUAGE_CODE as the default language. RESULT default_language]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the selected language uses a right-to-left (BiDi) layout by returning False when no language is set, or otherwise returning whether the language's primary subtag is in settings.LANGUAGES_BIDI." get_language_bidi]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "False when lang is None; otherwise True if the base language is in settings.LANGUAGES_BIDI."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call get_language() and assign the returned value to lang. RESULT lang]
+            [COMMAND Determine whether lang is None and store the truth value in lang_is_none. RESULT lang_is_none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: lang_is_none is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately as the BiDi layout indicator. RESULT false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lang_is_none is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call get_language() again, split the returned string on '-', and assign the first element to base_lang. RESULT base_lang]
+            [COMMAND Return the boolean result of testing whether base_lang is in settings.LANGUAGES_BIDI. RESULT is_bidi]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the active message catalog by returning _active.value when it exists, otherwise initializing and returning the global default translation from the project language code." catalog]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> active_catalog </REF>: catalog object "The current active catalog: _active.value when present, otherwise the initialized _default translation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the value attribute of the global _active object, defaulting to None, and assign it to t. RESULT t]
+            [COMMAND If t is not None, immediately return t as the active catalog. RESULT t]
+            [COMMAND If the global _default is None, call translation(settings.LANGUAGE_CODE) and assign the result to the global _default. RESULT _default]
+            [COMMAND Return the global _default as the active catalog. RESULT _default]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes line endings in a message and translates it using the current thread's gettext object, returning a type-compatible empty value for empty messages and applying mark_safe for SafeData inputs." gettext]
+    [INPUTS]
+        <REF> message </REF>: string "The message text to translate; may be a SafeData instance."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string or SafeData "The translated message, or a type-compatible empty value when the normalized message is empty; wrapped with mark_safe when message is SafeData."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare that _default refers to the module-level global variable so the later assignment updates the shared global value. RESULT _default]
+            [COMMAND Normalize message line endings by replacing CRLF with LF first and then replacing any remaining CR with LF; store the normalized value in eol_message. RESULT eol_message]
+            [COMMAND In the branch where eol_message is truthy, initialize the translation fallback: set _default to translation(settings.LANGUAGE_CODE) only when _default is falsy, preserving the short-circuit behavior of _default or translation(...). RESULT _default]
+            [COMMAND In the branch where eol_message is truthy, retrieve the active translation object with getattr(_active, 'value', _default), falling back to _default when _active has no value attribute; store it in translation_object. RESULT translation_object]
+            [COMMAND In the branch where eol_message is truthy, call translation_object.gettext(eol_message) and store the returned translated value in result. RESULT result]
+            [COMMAND After the truthy branch exits the if eol_message construct, if message is an instance of SafeData return mark_safe(result); otherwise return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: eol_message is falsy after line-ending normalization, so the else branch of the if eol_message check is taken.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the else branch where eol_message is falsy, construct an empty value of the same type as message by calling type(message)('') and store it in result. RESULT result]
+            [COMMAND After the else branch exits the if eol_message construct, if message is an instance of SafeData return mark_safe(result); otherwise return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a context-aware translation by looking up a context-separated message key and falls back to the original message when the separator remains in the returned string, while preserving safe-data marking when applicable." pgettext]
+    [INPUTS]
+        <REF> context </REF>: str "Translation context string prepended to the message to form the lookup key."
+        <REF> message </REF>: str or SafeData "Original message or safe-data object to translate; used as fallback if the context-aware translation is not found."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str or SafeData "Translated message, or the original message when translation lookup fails, or mark_safe(translation) when the original message was SafeData."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build msg_with_ctxt by formatting context, CONTEXT_SEPARATOR, and message with '%s%s%s' % (context, CONTEXT_SEPARATOR, message). RESULT msg_with_ctxt]
+            [COMMAND Call gettext(msg_with_ctxt) and assign the returned value to result. RESULT result]
+            [COMMAND Evaluate whether CONTEXT_SEPARATOR is present in result. RESULT branch_condition]
+            [COMMAND After the conditional fallback and SafeData handling, return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: CONTEXT_SEPARATOR is in result, indicating the context-aware translation was not found.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the original message to result as the fallback translation. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: CONTEXT_SEPARATOR is not in result and isinstance(message, SafeData) is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign mark_safe(result) to result to preserve the safe-data marker of the original message. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Marks a string for deferred translation by returning it unchanged without translating it." gettext_noop]
+    [INPUTS]
+        <REF> message </REF>: str "The string to mark for translation and return unchanged."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> message </REF>: str "The same message value, returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the input message unchanged without performing any translation. RESULT message]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the result of calling a named translation function on the active translation object when available, otherwise lazily initializes and uses the default translation object." do_ntranslate]
+    [INPUTS]
+        <REF> singular </REF>: string "The singular form to translate."
+        <REF> plural </REF>: string "The plural form to translate."
+        <REF> number </REF>: integer "The numeric count used to select the correct plural form."
+        <REF> translation_function </REF>: string "The name of the translation method to call on the active or default translation object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> translation_result </REF>: string "The translated string returned by the selected translation function."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare that _default refers to the global _default variable. RESULT _default]
+            [COMMAND Set t to getattr(_active, "value", None). RESULT t]
+            [COMMAND If t is not None, return getattr(t, translation_function)(singular, plural, number) immediately. RESULT active_translation_result]
+            [COMMAND If _default is None, set _default to translation(settings.LANGUAGE_CODE). RESULT _default]
+            [COMMAND Return getattr(_default, translation_function)(singular, plural, number). RESULT translation_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the singular or plural translation of the given text based on the number by delegating to do_ntranslate with the context name 'ngettext'." ngettext]
+    [INPUTS]
+        <REF> singular </REF>: string "The singular form of the text to be translated."
+        <REF> plural </REF>: string "The plural form of the text to be translated."
+        <REF> number </REF>: int "The numeric value used to determine whether the singular or plural form should be selected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The translated string selected from the singular or plural forms based on number."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call do_ntranslate with singular, plural, number, and the constant string 'ngettext', then return its result directly to the caller. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Looks up a context-qualified translation by passing context-prefixed singular and plural message strings and a number to ngettext, falling back to the unqualified ngettext call if the context separator remains in the result." npgettext]
+    [INPUTS]
+        <REF> context </REF>: string "Translation context used to disambiguate the message."
+        <REF> singular </REF>: string "Singular form of the message in the source language."
+        <REF> plural </REF>: string "Plural form of the message in the source language."
+        <REF> number </REF>: number "Number used to select the appropriate plural form."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Translated string selected by ngettext, or the fallback unqualified translation if the context lookup fails."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build msgs_with_ctxt as a tuple of the context-prefixed singular string (context + CONTEXT_SEPARATOR + singular), the context-prefixed plural string (context + CONTEXT_SEPARATOR + plural), and the number. RESULT msgs_with_ctxt]
+            [COMMAND Call ngettext with msgs_with_ctxt unpacked as the three positional arguments and assign the returned translated string to result. RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When CONTEXT_SEPARATOR is present in result, meaning the context-qualified translation was not found.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call ngettext with singular, plural, and number as the plain unqualified message arguments and assign the returned translated string to result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects the global locale directory, configured locale paths, and existing app locale directories, returning them in a single list." all_locale_paths]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list of strings "Locale directory paths: globalpath, then settings.LOCALE_PATHS entries in order, then app locale paths collected from app configs that exist on disk."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute globalpath as os.path.join(os.path.dirname(sys.modules[settings.__module__].__file__), 'locale'). RESULT globalpath]
+            [COMMAND Initialize app_paths as an empty list. RESULT app_paths]
+            [COMMAND For each app_config in apps.get_app_configs(), compute locale_path as os.path.join(app_config.path, 'locale'); if os.path.exists(locale_path), append locale_path to app_paths. RESULT app_paths]
+            [COMMAND Return a new list containing globalpath first, followed by each path in settings.LOCALE_PATHS in order, followed by each path in app_paths in the order collected. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a global Django translation catalog exists for the supplied language code by validating the code and searching all configured locale paths." check_for_language]
+    [INPUTS]
+        <REF> lang_code </REF>: string "Language code to check, typically taken from a user HTTP request."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if a global Django translation catalog is available for the language code; False if the code is malformed or no catalog is found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that lang_code is not None and language_code_re.search(lang_code) returns a match; if validation fails, follow the validation-failed alternative flow. RESULT lang_code_is_valid]
+            [COMMAND Call all_locale_paths() to obtain the iterable of locale directory paths. RESULT locale_paths]
+            [COMMAND For each path in locale_paths, convert lang_code with to_locale(lang_code), call gettext_module.find('django', path, [to_locale(lang_code)]), and check whether the returned value is not None. RESULT catalog_found]
+            [COMMAND Return True if any path has a non-None catalog result, using any() short-circuit evaluation; otherwise return False. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: lang_code is None, or when lang_code is not None, language_code_re.search(lang_code) returns no match]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately RESULT validation_failed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts Django's configured language list into a dictionary keyed by language code for easy lookups." get_languages]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: dict "A dictionary mapping language codes to language names."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read settings.LANGUAGES, which is an iterable of key-value pairs, and pass it to the dict constructor to create a new dictionary. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a requested language code to a supported language variant by trying exact candidates, generic prefixes, and optional country-specific fallbacks, or raises LookupError when no supported variant exists." get_supported_language_variant]
+    [INPUTS]
+        <REF> lang_code </REF>: str "Requested language code, possibly empty or falsy, used to generate exact and generic candidate variants."
+        <REF> strict </REF>: bool "If true, disables the country-specific regional fallback. Defaults to false."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> selected_language_code </REF>: str "A language code that is in the supported languages and passes check_for_language, or a regional variant of the generic code when strict is false."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether lang_code is truthy. If it is falsy, skip all candidate generation and proceed to the LookupError exception flow. RESULT lang_code_truthy]
+            [COMMAND Initialize possible_lang_codes as a list containing lang_code. RESULT possible_lang_codes]
+            [COMMAND Inside a try/except KeyError block, extend possible_lang_codes with LANG_INFO[lang_code]['fallback']; if the lookup or fallback key is missing, catch KeyError and continue. RESULT possible_lang_codes]
+            [COMMAND Set i to None, then repeatedly assign i = lang_code.rfind('-', 0, i) and append lang_code[:i] to possible_lang_codes while i is greater than -1. RESULT possible_lang_codes]
+            [COMMAND Set generic_lang_code to the final element of possible_lang_codes. RESULT generic_lang_code]
+            [COMMAND Set supported_lang_codes to the result of get_languages(). RESULT supported_lang_codes]
+            [COMMAND For each code in possible_lang_codes, if code is in supported_lang_codes and check_for_language(code) is true, return code immediately. The and short-circuit means check_for_language(code) is only evaluated when code is in supported_lang_codes. RESULT selected_language_code]
+            [COMMAND If no exact candidate returned and strict is false, invoke the regional fallback alternative flow described below. RESULT regional_fallback_result]
+            [COMMAND If no supported language code was returned from the exact or regional fallback, the LookupError exception flow is triggered. RESULT exception_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Strict is false and no code in possible_lang_codes is both in supported_lang_codes and accepted by check_for_language(code).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over supported_lang_codes in order and return the first supported_code for which supported_code.startswith(generic_lang_code + '-'). RESULT selected_language_code]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: lang_code is falsy, or no exact candidate matched and either strict is true or no supported_code starts with generic_lang_code + '-'.]
+        [LOG "Raising LookupError with the original lang_code because no supported language variant was found."]
+        [THROW LookupError "Raised when the requested language code cannot be resolved to a supported language variant."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a language code prefix found at the beginning of path into a supported language variant, applying strictness settings to control country-specific fallback, or returns None when no valid language code can be resolved." get_language_from_path]
+    [INPUTS]
+        <REF> path </REF>: string "The path string to inspect for a language code prefix."
+        <REF> strict </REF>: boolean "If true, require an exact supported language variant; if false (the default), allow fallback to a country-specific variant."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string or null "The resolved supported language variant code, or None if no valid language code prefix can be found or resolved."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Match language_code_prefix_re against the start of path and assign the match object to regex_match. RESULT regex_match]
+            [COMMAND After confirming regex_match is truthy, extract the first capture group into lang_code using regex_match[1]. RESULT lang_code]
+            [COMMAND In the try block, call get_supported_language_variant(lang_code, strict=strict) and return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: regex_match is falsy because language_code_prefix_re failed to match at the beginning of path.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None from the function. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: get_supported_language_variant(lang_code, strict=strict) raises LookupError.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch LookupError and return None from the function. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines the best supported language for a request by checking the URL path, the language cookie, the Accept-Language header, and finally settings.LANGUAGE_CODE as the default." get_language_from_request]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Incoming request exposing path_info, COOKIES, and META HTTP headers."
+        <REF> check_path </REF>: boolean "Whether to inspect the URL path prefix for a language code before checking cookies; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> language_code </REF>: string "A supported language code selected from the path, cookie, Accept-Language header, or settings.LANGUAGE_CODE fallback."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If check_path is True, call get_language_from_path(request.path_info) and assign the result to lang_code. RESULT lang_code]
+            [COMMAND If check_path is True and lang_code is not None, return lang_code immediately. RESULT return_value]
+            [COMMAND Read lang_code from request.COOKIES.get(settings.LANGUAGE_COOKIE_NAME); the result may be a string, an empty string, or None. RESULT lang_code]
+            [COMMAND Evaluate short-circuit condition: if lang_code is not None, check whether lang_code is in get_languages(); only if that is true, evaluate check_for_language(lang_code); if all three are true, return lang_code immediately. RESULT return_value]
+            [COMMAND Try to resolve the current lang_code by calling get_supported_language_variant(lang_code). RESULT resolved_lang_code]
+            [COMMAND If get_supported_language_variant(lang_code) succeeds, return its result immediately. RESULT return_value]
+            [COMMAND If get_supported_language_variant(lang_code) raises LookupError, ignore the failure and continue to Accept-Language header processing. RESULT none]
+            [COMMAND Read accept from request.META.get('HTTP_ACCEPT_LANGUAGE', ''), defaulting to an empty string if the header is absent. RESULT accept]
+            [COMMAND Iterate over parse_accept_lang_header(accept), yielding (accept_lang, unused) pairs in priority order. RESULT accept_lang]
+            [COMMAND Inside the for loop, if accept_lang equals '*', break out of the loop immediately and ignore all remaining entries. RESULT loop_control]
+            [COMMAND Inside the for loop, if language_code_re.search(accept_lang) does not match, continue to the next iteration. RESULT loop_control]
+            [COMMAND Inside the for loop, try get_supported_language_variant(accept_lang) and, if successful, return the resulting language variant immediately. RESULT return_value]
+            [COMMAND Inside the for loop, if get_supported_language_variant(accept_lang) raises LookupError, continue to the next iteration. RESULT loop_control]
+            [COMMAND After the loop completes without returning, try get_supported_language_variant(settings.LANGUAGE_CODE). RESULT default_lang_code]
+            [COMMAND If get_supported_language_variant(settings.LANGUAGE_CODE) succeeds, return its result; otherwise, because it raised LookupError, return settings.LANGUAGE_CODE as the final fallback. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: check_path is True and get_language_from_path(request.path_info) returns a non-None language code.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the path-derived lang_code immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The language cookie is present and satisfies lang_code is not None, lang_code is in get_languages(), and check_for_language(lang_code) is True.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the cookie-derived lang_code immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: An Accept-Language entry is not '*', matches language_code_re, and get_supported_language_variant(accept_lang) resolves without LookupError.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the resolved variant for that accept_lang immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: No earlier source returns and get_supported_language_variant(settings.LANGUAGE_CODE) succeeds.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the resolved default language variant. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: No earlier source returns and get_supported_language_variant(settings.LANGUAGE_CODE) raises LookupError.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return settings.LANGUAGE_CODE as the final fallback language code. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

@@ -1,0 +1,518 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.BufferedReader;
+2   import java.io.IOException;
+3   import java.io.InputStreamReader;
+4   import java.util.ArrayList;
+5   import java.util.HashMap;
+6   import java.util.List;
+7   import java.util.Map;
+8   public class Main {
+9     public static void main(String[] args) {
+10      new Main().run();
+11    }
+12    public void run() {
+13      try(BufferedReader in = new BufferedReader(new InputStreamReader(System.in))) {
+14        int n = Integer.parseInt(in.readLine());
+15        String line = in.readLine();
+16        int[] seqA = new int[n/2];
+17        int[] seqB = new int[n/2];
+18        int offset=0,next=0;
+19        char regx = ' ';
+20        List<Integer> listA = new ArrayList<>();
+21        List<Integer> listB = new ArrayList<>();
+22        Map<Integer,Integer> mapA = new HashMap<>();
+23        Map<Integer,Integer> mapB = new HashMap<>();
+24        for(int i=0, j=0; i<n; i++, j= i >> 1) {
+25          if((next = line.indexOf(regx,offset)) == -1)
+26            next = line.length();
+27          if((i & 1) == 0) {
+28            seqA[j] = Integer.parseInt(line.substring(offset, next));
+29            if(mapA.containsKey(seqA[j])) {
+30              mapA.replace(seqA[j], mapA.get(seqA[j]) + 1);
+31            } else {
+32              mapA.put(seqA[j], Integer.valueOf(1));
+33              listA.add(seqA[j]);
+34            }
+35          }
+36          else {
+37            seqB[j] = Integer.parseInt(line.substring(offset, next));
+38            if(mapB.containsKey(seqB[j])) {
+39              mapB.replace(seqB[j], mapB.get(seqB[j]) + 1);
+40            } else {
+41              mapB.put(seqB[j], Integer.valueOf(1));
+42              listB.add(seqB[j]);
+43            }
+44          }
+45          offset = ++next;
+46        }
+47        int vma,vmb,xa,xb;
+48        vma = vmb = xa = xb =0;
+49        for (Integer var : listA) {
+50          if(vma < mapA.get(var)) {
+51            vma = mapA.get(var);
+52            xa = var;
+53          }
+54        }
+55        for (Integer var : listB) {
+56          if(vmb < mapB.get(var)) {
+57            vmb = mapB.get(var);
+58            xb = var;
+59          }
+60        }
+61        int cca,ccb;
+62        cca = ccb = 0;
+63        for (int i : seqA) {
+64          if(i != xa) cca++;
+65        }
+66        for (int i : seqB) {
+67          if(i != xb) ccb++;
+68        }
+69        int vma2,vmb2,xa2,xb2;
+70        vma2 = vmb2= xa2 = xb2 =0;
+71        int cca2,ccb2;
+72        cca2 = ccb2 = 0;
+73        int ans = 0;
+74        if(xa == xb) {
+75          for (Integer var : listA) {
+76            int ma = mapA.get(var);
+77            if(var != xa && vma2 < ma) {
+78              vma2 = ma;
+79              xa2 = var;
+80            }
+81          }
+82          for (Integer var : listB) {
+83            int mb = mapB.get(var);
+84            if(var != xb && vmb2 < mb) {
+85              vmb2 = mb;
+86              xb2 = var;
+87            }
+88          }
+89          for (int i : seqA) {
+90            if(i != xa2) 
+91              cca2++;
+92          }
+93          for (int i : seqB) {
+94            if(i != xb2) 
+95              ccb2++;
+96          }
+97          ans = cca2 > ccb2 ? cca + ccb2 : cca2 + ccb;
+98        }
+99        else {
+100          ans = cca + ccb;
+101        }
+102        System.out.println(ans);
+103      }
+104      catch(IOException e) {
+105        System.err.println(e);
+106      }
+107    }
+108  }
+```
+
+
+**Question**: Does line `49` have control dependence over line `52` in function `run`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: run
+Target source anchor: variable=<none>, line=49
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: run
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a loop header whose condition controls its next execution: {'kind': 'line', 'line': 49, 'reason': 'the target is a loop header whose condition controls its next execution'}
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Initialize offset=0, next=0, regx=' ', empty ArrayLists listA and listB for Integer, and empty HashMaps mapA and mapB from Integer to Integer. RESULT state]
+- [COMMAND For i from 0 to n-1, with j = i >> 1, set next to line.indexOf(regx, offset), or to line.length() when no space is found; if i is even, parse the token into seqA[j] and update mapA/listA; otherwise parse the token into seqB[j] and update mapB/listB; then set offset = next + 1. RESULT parsed_data]
+- [COMMAND Find the key xa in listA with the highest frequency vma in mapA, using a strict greater-than comparison. RESULT vma, xa]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 24: for(int i=0, j=0; i<n; i++, j= i >> 1) {
+- line 25: if((next = line.indexOf(regx,offset)) == -1)
+- line 27: if((i & 1) == 0) {
+- line 29: if(mapA.containsKey(seqA[j])) {
+- line 36: else {
+- line 38: if(mapB.containsKey(seqB[j])) {
+- line 49: for (Integer var : listA) {
+- line 50: if(vma < mapA.get(var)) {
+- line 55: for (Integer var : listB) {
+- line 56: if(vmb < mapB.get(var)) {
+- line 63: for (int i : seqA) {
+- line 64: if(i != xa) cca++;
+- line 66: for (int i : seqB) {
+- line 67: if(i != xb) ccb++;
+- line 74: if(xa == xb) {
+- line 75: for (Integer var : listA) {
+- line 77: if(var != xa && vma2 < ma) {
+- line 82: for (Integer var : listB) {
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "j", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 25, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "indexOf", "line", "next", "offset", "regx"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 27, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["containsKey", "if", "j", "mapA", "seqA"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["containsKey", "if", "j", "mapB", "seqB"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 49, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["Integer", "var", "listA"], "roles": ["use", "control"], "source_identifiers": ["Integer", "for", "listA", "var"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["var"], "roles": ["use", "control"], "source_identifiers": ["get", "if", "mapA", "var", "vma"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["Integer", "var"], "roles": ["use", "control"], "source_identifiers": ["Integer", "for", "listB", "var"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 56, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["var"], "roles": ["use", "control"], "source_identifiers": ["get", "if", "mapB", "var", "vmb"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 63, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "seqA"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 64, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["cca", "i", "if", "xa"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 66, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "seqB"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 67, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["ccb", "i", "if", "xb"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 74, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "xa", "xb"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 75, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["Integer", "var", "listA"], "roles": ["use", "control"], "source_identifiers": ["Integer", "for", "listA", "var"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 77, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["var"], "roles": ["use", "control"], "source_identifiers": ["if", "ma", "var", "vma2", "xa"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 82, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["Integer", "var"], "roles": ["use", "control"], "source_identifiers": ["Integer", "for", "listB", "var"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `run`
+- source lines: 12-107
+- source signature: `public void run() {`
+- source content hash: `5432643f565faf8279d70e5d38104c08809a339051a87ea20672a8717a285525`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+  12    public void run() {
+  13      try(BufferedReader in = new BufferedReader(new InputStreamReader(System.in))) {
+  14        int n = Integer.parseInt(in.readLine());
+  15        String line = in.readLine();
+  16        int[] seqA = new int[n/2];
+  17        int[] seqB = new int[n/2];
+  18        int offset=0,next=0;
+  19        char regx = ' ';
+  20        List<Integer> listA = new ArrayList<>();
+  21        List<Integer> listB = new ArrayList<>();
+  22        Map<Integer,Integer> mapA = new HashMap<>();
+  23        Map<Integer,Integer> mapB = new HashMap<>();
+  24        for(int i=0, j=0; i<n; i++, j= i >> 1) {
+  25          if((next = line.indexOf(regx,offset)) == -1)
+  26            next = line.length();
+  27          if((i & 1) == 0) {
+  28            seqA[j] = Integer.parseInt(line.substring(offset, next));
+  29            if(mapA.containsKey(seqA[j])) {
+  30              mapA.replace(seqA[j], mapA.get(seqA[j]) + 1);
+  31            } else {
+  32              mapA.put(seqA[j], Integer.valueOf(1));
+  33              listA.add(seqA[j]);
+  34            }
+  35          }
+  36          else {
+  37            seqB[j] = Integer.parseInt(line.substring(offset, next));
+  38            if(mapB.containsKey(seqB[j])) {
+  39              mapB.replace(seqB[j], mapB.get(seqB[j]) + 1);
+  40            } else {
+  41              mapB.put(seqB[j], Integer.valueOf(1));
+  42              listB.add(seqB[j]);
+  43            }
+  44          }
+  45          offset = ++next;
+  46        }
+  47        int vma,vmb,xa,xb;
+  48        vma = vmb = xa = xb =0;
+  49        for (Integer var : listA) {
+  50          if(vma < mapA.get(var)) {
+  51            vma = mapA.get(var);
+  52            xa = var;
+  53          }
+  54        }
+  55        for (Integer var : listB) {
+  56          if(vmb < mapB.get(var)) {
+  57            vmb = mapB.get(var);
+  58            xb = var;
+  59          }
+  60        }
+  61        int cca,ccb;
+  62        cca = ccb = 0;
+  63        for (int i : seqA) {
+  64          if(i != xa) cca++;
+  65        }
+  66        for (int i : seqB) {
+  67          if(i != xb) ccb++;
+  68        }
+  69        int vma2,vmb2,xa2,xb2;
+  70        vma2 = vmb2= xa2 = xb2 =0;
+  71        int cca2,ccb2;
+  72        cca2 = ccb2 = 0;
+  73        int ans = 0;
+  74        if(xa == xb) {
+  75          for (Integer var : listA) {
+  76            int ma = mapA.get(var);
+  77            if(var != xa && vma2 < ma) {
+  78              vma2 = ma;
+  79              xa2 = var;
+  80            }
+  81          }
+  82          for (Integer var : listB) {
+  83            int mb = mapB.get(var);
+  84            if(var != xb && vmb2 < mb) {
+  85              vmb2 = mb;
+  86              xb2 = var;
+  87            }
+  88          }
+  89          for (int i : seqA) {
+  90            if(i != xa2) 
+  91              cca2++;
+  92          }
+  93          for (int i : seqB) {
+  94            if(i != xb2) 
+  95              ccb2++;
+  96          }
+  97          ans = cca2 > ccb2 ? cca + ccb2 : cca2 + ccb;
+  98        }
+  99        else {
+ 100          ans = cca + ccb;
+ 101        }
+ 102        System.out.println(ans);
+ 103      }
+ 104      catch(IOException e) {
+ 105        System.err.println(e);
+ 106      }
+ 107    }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads a space-separated sequence from standard input, separates even- and odd-indexed elements into two halves, and computes the minimum number of element changes required to make each half uniform while keeping their uniform values different." run]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enter a try-with-resources block using a BufferedReader created from InputStreamReader(System.in). RESULT in]
+            [COMMAND Read the first line from System.in and parse it as integer n. RESULT n]
+            [COMMAND Read the second line from System.in as string line containing the space-separated sequence. RESULT line]
+            [COMMAND Create int arrays seqA and seqB with length n/2. RESULT seqA, seqB]
+            [COMMAND Initialize offset=0, next=0, regx=' ', empty ArrayLists listA and listB for Integer, and empty HashMaps mapA and mapB from Integer to Integer. RESULT state]
+            [COMMAND For i from 0 to n-1, with j = i >> 1, set next to line.indexOf(regx, offset), or to line.length() when no space is found; if i is even, parse the token into seqA[j] and update mapA/listA; otherwise parse the token into seqB[j] and update mapB/listB; then set offset = next + 1. RESULT parsed_data]
+            [COMMAND Find the key xa in listA with the highest frequency vma in mapA, using a strict greater-than comparison. RESULT vma, xa]
+            [COMMAND Find the key xb in listB with the highest frequency vmb in mapB, using a strict greater-than comparison. RESULT vmb, xb]
+            [COMMAND Count cca as the number of elements in seqA that are not equal to xa. RESULT cca]
+            [COMMAND Count ccb as the number of elements in seqB that are not equal to xb. RESULT ccb]
+            [COMMAND If xa != xb, set ans = cca + ccb; otherwise, when xa == xb, find the most frequent key xa2 in mapA excluding xa and the most frequent key xb2 in mapB excluding xb, compute cca2 as the count of seqA elements not equal to xa2 and ccb2 as the count of seqB elements not equal to xb2, then set ans = cca + ccb2 if cca2 > ccb2, otherwise set ans = cca2 + ccb. RESULT ans]
+            [COMMAND Print the value of ans to System.out. RESULT void]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: An IOException occurs while reading from System.in or while closing the BufferedReader]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Print the caught IOException to System.err and terminate the method without rethrowing it. RESULT void]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

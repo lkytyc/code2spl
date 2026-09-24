@@ -1,0 +1,648 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Is there information flow from `(varA,lineA)` to `(varB,lineB)`? If so, provide one feasible trace.", respond with a JSON object:
+
+- If information flow exists:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["varOrExpr", lineNumber            /*, "use" optional */],
+      "to":   ["varOrExpr", lineNumber            /*, "use" optional */],
+      "type": "data" | "control"
+    },
+    // … additional edges
+  ]
+}
+```
+- If no information flow exists, omit the Trace field:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+- Every trace edge must specify "from", "to" (each may include a third "use" element when the line is a conditional statement that only reads without redefining/updating the value), and "type".
+- **We do not consider loop in the trace**.
+
+
+A **trace** represents a **transitive chain of direct flows** arise from compositions of **direct** implicit or explicit flows, where each edge represents a **direct implicit flow** (through control dependence) or a **direct explicit flow** edge (through data dependence).
+
+
+You only need to provide **one** valid trace if you conclude a information flow exists, even if multiple possible chains exist. 
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Is there information flow from `(balance,4)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. Here we focus on `(status,7)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+Hence, A transitive of flow of direct implicit or explicit flows forms a information flow trace.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["balance", 4],
+      "to":   ["balance", 5],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 5],
+      "to":   ["balance", 6, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 6, "use"],
+      "to":   ["status", 7],
+      "type": "control"
+    },
+    {
+      "from": ["status", 7],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+ 
+- The edge from line 6 to `(status,7)` is through control dependence and therefore with a type of "control". 
+- Line 6 only reads the value of `balance` without defining/updating it. So it is marked with `"use"`. 
+- You only need to provide **one** valid chain if you conclude a the information flow exists. 
+
+
+#### Example Question 1.2
+
+Is there information flow from  `(flag,3)` to `(limit,9)`? If so, provide a trace.
+
+**Analysis**
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from either `(status,7)` (if line 6’s condiation evaluates to `true`) or on the original `(status,2)` (if not) to `(limit,9)`. 
+- Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 6 is treated as being evaluated to both possibly true and possibly false.
+  - If line 6 is true, `(limit,9)` depends on `(status,7)`. 
+    - Line 7: `(status,7)` doesn't have any data dependence as it is assigned with a constant number. The execution of line 7 is control-dependent on the condition in line 6.
+    - Line 6: the condition at line 6 directly reads from `(balance,5)`. 
+    - Line 5: `(balance,5)` is updated based on the previous value of `balance` in line 4.
+    - Line 4: `(balance,4)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+  - If line 6 is not true, `(limit,9)` depends on `(status,2)`. 
+    - Line 2: `(status,2)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+- Therefore, among all the possible paths, there is no transitive (indirect) chain of implicit or explicit flow from `(flag,3)` to `(limit,9)`. The information flow doesn't exist.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+#### Example Question 1.3
+
+Is there information flow from  `(status,2)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`.
+- Line 9: `(limit,9)` reads `status`, o there is a direct explicit flow from either `(status,7)`, or the original `(status,2)`, to `(limit,9)`.
+- Similar to the above example, line 6 is possibly evaluated to true or false.
+- If line 6 evaluates to `true`, there is a direct explicit flow from `(status,7)` to `(limit,9)`, which directly data-dependent on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (status,7) -> (limit,9) -> (transaction,10)`.
+- If line 6 evaluates to `false`, `(limit,9)` has a direct data dependence on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (limit,9) -> (transaction,10)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["status", 2],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Is there information flow from  `(size,2)` to `(summary,17)`? If so, provide a trace.
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. We focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`.
+- Line 2: `size` is initialized with a constant number. It is not guarded with any conditions. 
+- Therefore, there is an transitive trace of direct implicit/excplit flows from `(size,2)` to `(summary,17)`.
+
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["size", 2],
+      "to":   ["size", 9, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["size", 9, "use"],
+      "to":   ["j", 14],
+      "type": "control"
+    },
+    {
+      "from": ["j", 14],
+      "to":   ["summary", 17],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Is there information flow from  `(j,5)` to `(score,11)`? If so, provide a trace. 
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`.
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop).
+- If line 11 reads `j` from line 5, it forms a tansitive explicit flow trace: `(j,5) -> (score,11)`.
+- If line 11 reads `j` from line 14, it forms a tansitive explicit flow trace: `(j,5) -> (j,14) -> (score,11)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["j", 5],
+      "to":   ["score", 11],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+
+#### Example Question 2.3:
+Is there information flow from  `(j,1)` to `(i,15)`? If so, provide a trace.
+
+**Analysis**: 
+- Line 15: `(i,15)` updates `i` based on its previous value. So there is a direct explicit flow from either `(i,4)` (initialization) or itself (loop-carried) to `(i,15)`. But we do not consider loop-carried dependencies across iterations in this analysis. So we focus on `(i,4)`.
+- The execution of line 15 is conditional on the while loop at line 9.
+- Line 9: `while i < size` depends on `i` and `size`. It directly reads from `(i,4)` (or possibly `(i,15)`) and `(size,2)`.
+- Both `(i,4)` and `(size,2)` are initialized with constants and are not themselves control-dependent on any earlier values or branches.
+- There is no use of `(j,1)` in the computation of `(i,15)`, nor does `(j,1)` influence whether line 15 executes.
+- Therefore, there is no transitive flow, explicit or implicit, from `(j,1)` to `(i,15)`.
+
+
+**Output**: 
+```json
+{
+  "InformationFlow": false
+}
+```
+
+
+#### Example Question 2.4:
+Is there information flow from  `(val,1)` to `(last,16)`? If so, provide a trace.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8 (or by the loop updates in line 10). Under static analysis, multiple update sites may contribute. We conservatively pick one valid trace (line 8).
+- Line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7.
+- Therefore, there exists a trace from `(val,1)` to `(last,16)`, and the edge from line 7 to `(arr,8)` is through implicit and explicit flows. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["val", 1],
+      "to":   ["val", 7, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["val", 7, "use"],
+      "to":   ["arr", 8],
+      "type": "control"
+    },
+    {
+      "from": ["arr", 8],
+      "to":   ["last", 16],
+      "type": "data"
+    }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   def solve_case(in_times, edges):
+2       latencies = [10**6]*len(edges)
+3       edges = [(a-1, b-1) for (a,b) in edges]
+4       abs_times = [10**6]*len(in_times)
+5       for index, i in enumerate(in_times):
+6           if i > 0:
+7               abs_times[index] = i
+8       pos_times = []
+9       for index, i in enumerate(in_times):
+10          if i < 0:
+11              pos_times.append( (abs(i), index) )
+12      pos_times.sort()
+13      current_time = 0    
+14      received = 1        
+15      while pos_times:
+16          if pos_times[0][0] == received:
+17              current_time += 1
+18              new_received = 0
+19              while pos_times and pos_times[0][0] == received:
+20                  new_received += 1
+21                  a,b = pos_times[0]
+22                  abs_times[b] = current_time
+23                  pos_times = pos_times[1:]
+24              received += new_received
+25          else:
+26              next_times = []
+27              for i in abs_times:
+28                  if i > current_time:
+29                      next_times.append(i)
+30              current_time = min(next_times)
+31              received_count = 0
+32              for i in abs_times:
+33                  if i <= current_time:
+34                      received_count += 1
+35      abs_times = [0] + abs_times
+36      sorted_receipt = [(i, ind) for ind, i in enumerate(abs_times)]
+37      sorted_receipt.sort()
+38      for time, comp in sorted_receipt[1:]:
+39          for index, (A, B) in enumerate(edges):
+40              if A == comp:
+41                  if abs_times[A] > abs_times[B]:
+42                      latencies[index] = abs_times[A] - abs_times[B]
+43                      break
+44              if B == comp:
+45                  if abs_times[B] > abs_times[A]:
+46                      latencies[index] = abs_times[B] - abs_times[A]
+47                      break
+48      return ' '.join(map(str, latencies))
+49  def main():
+50      T = int(raw_input())
+51      for case_no in xrange(1, T+1):
+52          num_comps, num_edges = map(int, raw_input().split(' '))
+53          in_times = map(int, raw_input().split(' '))
+54          edges = []
+55          for edge_no in xrange(num_edges):
+56              edges.append(tuple(map(int, raw_input().split())))
+57          ans = solve_case(in_times, edges)
+58          print "Case #{}: {}".format(case_no, ans)
+59  main()
+```
+
+
+**Question**: Is there information flow from `(i,5)` to `(i,9)` in function `solve_case`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: solve_case
+Target source anchor: variable=i, line=9
+Trace source anchor: variable=i, line=5
+Attached SPL owners: solve_case
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND For each index and value i in in_times, if i is strictly greater than 0, set abs_times[index] to i. RESULT abs_times]
+- [COMMAND For each index and value i in in_times, if i is strictly less than 0, append (abs(i), index) to pos_times. RESULT pos_times]
+- [COMMAND While pos_times is non-empty, if the first tuple's key equals received: increment current_time by 1, then while pos_times is non-empty and the first tuple's key equals received, increment new_received by 1, set abs_times at the tuple's index to current_time, and remove that tuple from the front of pos_times; after consuming the group, add new_received to received. Otherwise: build next_times from all abs_times values strictly greater than current_time, set current_time to min(next_times), compute received_count as the number of abs_times values less than or equal to current_time, and leave pos_times unchanged. RESULT simulation_state]
+- [COMMAND Build sorted_receipt as a list of (time, index) pairs from enumerate(abs_times) and sort it ascending. RESULT sorted_receipt]
+- [COMMAND Convert every edge pair (a,b) in edges to (a-1,b-1) and reassign edges to the converted zero-based list. RESULT edges]
+- [COMMAND Sort pos_times in ascending tuple order. RESULT pos_times]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 2: latencies = [10**6]*len(edges)
+- line 3: edges = [(a-1, b-1) for (a,b) in edges]
+- line 4: abs_times = [10**6]*len(in_times)
+- line 5: for index, i in enumerate(in_times):
+- line 6: if i > 0:
+- line 7: abs_times[index] = i
+- line 8: pos_times = []
+- line 9: for index, i in enumerate(in_times):
+- line 10: if i < 0:
+- line 13: current_time = 0
+- line 14: received = 1
+- line 15: while pos_times:
+- line 16: if pos_times[0][0] == received:
+- line 17: current_time += 1
+- line 18: new_received = 0
+- line 19: while pos_times and pos_times[0][0] == received:
+- line 20: new_received += 1
+- line 21: a,b = pos_times[0]
+- line 22: abs_times[b] = current_time
+- line 23: pos_times = pos_times[1:]
+- line 24: received += new_received
+- line 25: else:
+- line 26: next_times = []
+- line 27: for i in abs_times:
+- line 28: if i > current_time:
+- line 30: current_time = min(next_times)
+- line 31: received_count = 0
+- line 32: for i in abs_times:
+- line 33: if i <= current_time:
+- line 34: received_count += 1
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 2, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["edges", "latencies", "len"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 3, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["in"], "roles": ["use"], "source_identifiers": ["a", "b", "edges", "for", "in"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 4, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["in_times"], "roles": ["use"], "source_identifiers": ["abs_times", "in_times", "len"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 5, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["i", "index", "in", "enumerate", "in_times"], "roles": ["use", "control"], "source_identifiers": ["enumerate", "for", "i", "in", "in_times", "index"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 6, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["i"], "roles": ["use", "control"], "source_identifiers": ["i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 7, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["i", "index"], "roles": ["use"], "source_identifiers": ["abs_times", "i", "index"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 8, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["pos_times"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 9, "position": "target", "reason": "target-chain seed", "relevant_identifiers": ["i", "index", "in", "enumerate", "in_times"], "roles": ["use", "control"], "source_identifiers": ["enumerate", "for", "i", "in", "in_times", "index"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 10, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i"], "roles": ["use", "control"], "source_identifiers": ["i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["current_time"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 14, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["received"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 15, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["pos_times", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "pos_times", "received"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 17, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["current_time"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["new_received"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["and", "pos_times", "received", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["new_received"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "b", "pos_times"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["abs_times", "b", "current_time"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["pos_times"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["new_received", "received"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 25, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["next_times"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 27, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i", "in"], "roles": ["definition", "use", "control"], "source_identifiers": ["abs_times", "for", "i", "in"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i"], "roles": ["use", "control"], "source_identifiers": ["current_time", "i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["current_time", "min", "next_times"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["received_count"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 32, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i", "in"], "roles": ["definition", "use", "control"], "source_identifiers": ["abs_times", "for", "i", "in"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 33, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i"], "roles": ["use", "control"], "source_identifiers": ["current_time", "i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["received_count"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve_case`
+- source lines: 1-48
+- source signature: `def solve_case(in_times, edges):`
+- source content hash: `83cb9705c49ebf5257fde634c67316c497e7bb137b9f4451531bbea5754075f9`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```python
+   1  def solve_case(in_times, edges):
+   2      latencies = [10**6]*len(edges)
+   3      edges = [(a-1, b-1) for (a,b) in edges]
+   4      abs_times = [10**6]*len(in_times)
+   5      for index, i in enumerate(in_times):
+   6          if i > 0:
+   7              abs_times[index] = i
+   8      pos_times = []
+   9      for index, i in enumerate(in_times):
+  10          if i < 0:
+  11              pos_times.append( (abs(i), index) )
+  12      pos_times.sort()
+  13      current_time = 0    
+  14      received = 1        
+  15      while pos_times:
+  16          if pos_times[0][0] == received:
+  17              current_time += 1
+  18              new_received = 0
+  19              while pos_times and pos_times[0][0] == received:
+  20                  new_received += 1
+  21                  a,b = pos_times[0]
+  22                  abs_times[b] = current_time
+  23                  pos_times = pos_times[1:]
+  24              received += new_received
+  25          else:
+  26              next_times = []
+  27              for i in abs_times:
+  28                  if i > current_time:
+  29                      next_times.append(i)
+  30              current_time = min(next_times)
+  31              received_count = 0
+  32              for i in abs_times:
+  33                  if i <= current_time:
+  34                      received_count += 1
+  35      abs_times = [0] + abs_times
+  36      sorted_receipt = [(i, ind) for ind, i in enumerate(abs_times)]
+  37      sorted_receipt.sort()
+  38      for time, comp in sorted_receipt[1:]:
+  39          for index, (A, B) in enumerate(edges):
+  40              if A == comp:
+  41                  if abs_times[A] > abs_times[B]:
+  42                      latencies[index] = abs_times[A] - abs_times[B]
+  43                      break
+  44              if B == comp:
+  45                  if abs_times[B] > abs_times[A]:
+  46                      latencies[index] = abs_times[B] - abs_times[A]
+  47                      break
+  48      return ' '.join(map(str, latencies))
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reconciles positive and negative receipt times, simulates a propagation ordering to assign absolute times, and computes edge latencies returned as a space-separated string." solve_case]
+    [INPUTS]
+        <REF> in_times </REF>: list of integers "Per-node receipt times; positive values are absolute times and negative values represent delayed receipts using their absolute value."
+        <REF> edges </REF>: list of integer pairs "Edge endpoint pairs as 1-based node indices; they are converted to zero-based indices before use."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Space-separated latency values, one per edge in input order; edges not assigned a latency retain the sentinel value 1000000."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize latencies to a list containing 1000000 repeated len(edges) times. RESULT latencies]
+            [COMMAND Convert every edge pair (a,b) in edges to (a-1,b-1) and reassign edges to the converted zero-based list. RESULT edges]
+            [COMMAND Initialize abs_times to a list containing 1000000 repeated len(in_times) times. RESULT abs_times]
+            [COMMAND For each index and value i in in_times, if i is strictly greater than 0, set abs_times[index] to i. RESULT abs_times]
+            [COMMAND Create pos_times as an empty list. RESULT pos_times]
+            [COMMAND For each index and value i in in_times, if i is strictly less than 0, append (abs(i), index) to pos_times. RESULT pos_times]
+            [COMMAND Sort pos_times in ascending tuple order. RESULT pos_times]
+            [COMMAND Initialize current_time to 0 and received to 1. RESULT simulation_state]
+            [COMMAND While pos_times is non-empty, if the first tuple's key equals received: increment current_time by 1, then while pos_times is non-empty and the first tuple's key equals received, increment new_received by 1, set abs_times at the tuple's index to current_time, and remove that tuple from the front of pos_times; after consuming the group, add new_received to received. Otherwise: build next_times from all abs_times values strictly greater than current_time, set current_time to min(next_times), compute received_count as the number of abs_times values less than or equal to current_time, and leave pos_times unchanged. RESULT simulation_state]
+            [COMMAND Prepend 0 to abs_times by reassigning abs_times to [0] + abs_times. RESULT abs_times]
+            [COMMAND Build sorted_receipt as a list of (time, index) pairs from enumerate(abs_times) and sort it ascending. RESULT sorted_receipt]
+            [COMMAND For each (time, comp) in sorted_receipt[1:], scan edges in order; for each edge (A,B) with index index, if A == comp and abs_times[A] > abs_times[B], set latencies[index] to abs_times[A] - abs_times[B] and break out of the edge scan; if that condition did not break, then if B == comp and abs_times[B] > abs_times[A], set latencies[index] to abs_times[B] - abs_times[A] and break out of the edge scan. RESULT latencies]
+            [COMMAND Join the latencies values with spaces and return the resulting string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: In the non-matching branch of the outer while loop, no element of abs_times is strictly greater than current_time, so next_times is empty.]
+        [LOG "ValueError: min() attempted on an empty next_times sequence"]
+        [THROW ValueError "Raised by min(next_times) when next_times is empty."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

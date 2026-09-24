@@ -1,0 +1,90 @@
+class EmailClient:
+    def __init__(self, addr: object, capacity: object):
+        self.addr = addr
+        self.capacity = capacity
+        self.inbox = []
+
+    def clear_inbox(self, size: int) -> None:
+        if not self.addr:
+            return None
+        freed_space = 0
+        while freed_space < size and self.inbox:
+            email = self.inbox[0]
+            freed_space += email['size']
+            del self.inbox[0]
+
+    def fetch(self) -> object or None:
+        for i in range(len(self.inbox)):
+            if self.inbox[i]['state'] == 'unread':
+                self.inbox[i]['state'] = 'read'
+                return self.inbox[i]
+        return None
+
+    def get_occupied_size(self) -> int:
+        occupied_size = 0
+        for email in self.inbox:
+            occupied_size += email['size']
+        return occupied_size
+
+    def is_full_with_one_more_email(self, size: int) -> bool:
+        occupied_size = self.get_occupied_size()
+        return occupied_size + size > self.capacity
+
+    def send_to(self, recv: object, content: any, size: int) -> bool:
+        not_full = not recv.is_full_with_one_more_email(size)
+        if not_full:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            email = {
+                'sender': self.addr,
+                'receiver': recv.addr,
+                'content': content,
+                'size': size,
+                'timestamp': timestamp,
+                'state': 'unread'
+            }
+            recv.inbox.append(email)
+            return True
+        else:
+            self.clear_inbox(size)
+            return False
+
+import unittest
+
+class EmailClientTestClearInbox(unittest.TestCase):
+    def test_clear_inbox(self):
+        sender = EmailClient('sender@example.com', 100)
+        receiver = EmailClient('receiver@example.com', 50)
+        receiver.inbox = [{'size': 10},{'size': 20},{'size': 15}]
+        receiver.clear_inbox(30)
+        self.assertEqual(receiver.inbox, [{'size': 15}])
+
+    def test_clear_inbox_2(self):
+        sender = EmailClient('sender@example.com', 100)
+        receiver = EmailClient('', 50)
+        receiver.inbox = [{'size': 10},{'size': 20},{'size': 15}]
+        self.assertEqual(receiver.clear_inbox(30),None)
+        self.assertEqual(receiver.inbox, [{'size': 10},{'size': 20},{'size': 15}])
+
+    def test_clear_inbox_3(self):
+        sender = EmailClient('sender@example.com', 100)
+        receiver = EmailClient('receiver@example.com', 50)
+        receiver.inbox = [{'size': 10}, {'size': 20}, {'size': 15}]
+        self.assertEqual(receiver.clear_inbox(50), None)
+
+    def test_clear_inbox_4(self):
+        sender = EmailClient('sender@example.com', 100)
+        receiver = EmailClient('receiver@example.com', 50)
+        receiver.inbox = [{'size': 10}, {'size': 20}, {'size': 15}]
+        receiver.clear_inbox(45)
+        self.assertEqual(receiver.inbox, [])
+    def test_clear_inbox_5(self):
+        sender = EmailClient('sender@example.com', 100)
+        receiver = EmailClient('receiver@example.com', 50)
+        receiver.inbox = [{'size': 10}, {'size': 20}, {'size': 15}]
+        receiver.clear_inbox(10)
+        self.assertEqual(receiver.inbox, [{'size': 20}, {'size': 15}])
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

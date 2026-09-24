@@ -1,0 +1,617 @@
+FINAL-SUBMISSION RETRY. The previous call exhausted its reasoning budget without a visible answer. Perform only the minimum remaining verification, then emit the exact JSON object required by the task. Do not provide analysis, prose, or markdown. Never return an empty response.
+
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.BufferedReader;
+2   import java.io.IOException;
+3   import java.io.InputStreamReader;
+4   import java.util.Iterator;
+5   import java.util.TreeSet;
+6   public class Solution {
+7   	public static void main(String[] args)throws IOException
+8       {
+9   		BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+10  		int tc = Integer.parseInt(br.readLine()); 
+11  		for(int i=0; i<tc; i++) {
+12  			int noOfWords = Integer.parseInt(br.readLine()); 
+13  			TreeSet<String> set = new TreeSet<String>();
+14  			for(int j=0; j<noOfWords; j++) {
+15  				String word = br.readLine();
+16  				set.add(word);
+17  			}
+18  			Iterator<String> wrd1 = set.iterator();
+19  			Iterator<String> wrd2 = set.iterator();
+20  			int c1 = 0;
+21  			while(wrd1.hasNext()) {
+22  				c1++;
+23  				int c2 = 0;
+24  				String wordOne = wrd1.next();
+25  				int result = 0;
+26  				while(wrd2.hasNext()) {
+27  					c2++;
+28  					if(c1 != c2) {
+29  						String wordTwo = wrd2.next();
+30  						int max = 0;
+31  						String key = "";
+32  						for(int l = 0; l< wordTwo.length()-1; l++) {
+33  							for(int k = l+2; k<=wordTwo.length(); k++) {
+34  								if(wordOne.contains(wordTwo.substring(l, k)) && k-l > max) {
+35  									max = k-l;
+36  									key = wordTwo.substring(l, k);
+37  								}else {
+38  									break;
+39  								}
+40  							}
+41  						}
+42  					}
+43  				}
+44  			}
+45  		}
+46  	}
+47  }
+48   class Longest_common_substr { 
+49      static int printLCSubStr(String X, String Y, int m, int n) {
+50          int[][] LCSuff = new int[m + 1][n + 1]; 
+51          int len = 0; 
+52          int row = 0, col = 0; 
+53          for (int i = 0; i <= m; i++) { 
+54              for (int j = 0; j <= n; j++) { 
+55                  if (i == 0 || j == 0) 
+56                      LCSuff[i][j] = 0; 
+57                  else if (X.charAt(i - 1) == Y.charAt(j - 1)) { 
+58                      LCSuff[i][j] = LCSuff[i - 1][j - 1] + 1; 
+59                      if (len < LCSuff[i][j]) { 
+60                          len = LCSuff[i][j]; 
+61                          row = i; 
+62                          col = j; 
+63                      } 
+64                  } 
+65                  else
+66                      LCSuff[i][j] = 0; 
+67              } 
+68          } 
+69          if (len == 0) { 
+70              return 0; 
+71          } 
+72          String resultStr = ""; 
+73          while (LCSuff[row][col] != 0) { 
+74              resultStr = X.charAt(row - 1) + resultStr; 
+75              --len; 
+76              row--; 
+77              col--; 
+78          } 
+79          return resultStr.length(); 
+80      } 
+81      public static void main(String args[]) throws IOException 
+82      { 
+83      	BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+84  		int tc = Integer.parseInt(br.readLine()); 
+85  		for(int i=1; i<=tc; i++) {
+86  			int noOfWords = Integer.parseInt(br.readLine()); 
+87  			TreeSet<String> set = new TreeSet<String>();
+88  			for(int j=0; j<noOfWords; j++) {
+89  				String word = br.readLine();
+90  				set.add(word);
+91  			}
+92  			Iterator<String> wrd1 = set.iterator();
+93  			Iterator<String> wrd2 = set.iterator();
+94  			int c1 = 0, result = 0;
+95  			while(wrd1.hasNext()) {
+96  				int max = 0;
+97  				String key1 = "";
+98  				String key2 = "";
+99  				String w1 = wrd1.next();
+100  				if(w1.equals(key1)) {
+101  					wrd1.remove();
+102  					return;
+103  				}
+104  				while(wrd2.hasNext()) {
+105  					String w2 = wrd2.next();
+106  					if(w2.equals(key2)) {
+107  						wrd2.remove();
+108  						return;
+109  					}
+110  				int count =printLCSubStr(w1,w2,w1.length(),w2.length());
+111  				if(count > max) {
+112  					key1 = w1;
+113  					key2 = w2;
+114  					max = count;
+115  				}
+116  				}
+117  				result = result + max;
+118  			}
+119  			System.out.println("Case #"+i+": "+result);
+120  		}
+121      } 
+122  }
+```
+
+
+**Question**: Which variable instances have information flow over `(wordOne,24)` in function `main`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: main
+Target source anchor: variable=wordOne, line=24
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within the outer while loop, set wordOne to wrd1.next(). RESULT wordOne]
+- [COMMAND Within the k loop, using short-circuit &&, if wordOne contains wordTwo.substring(l, k) and k - l is greater than max, set max to k - l and key to wordTwo.substring(l, k); these values are not used outside the if block. RESULT max]
+- [COMMAND After reading all words for the current test case, create an Iterator named wrd1 over set. RESULT wrd1]
+- [COMMAND Enter the outer while loop and continue while wrd1.hasNext() is true. RESULT none]
+- [COMMAND Within the inner while loop, when c1 is not equal to c2, set wordTwo to wrd2.next(); when the condition is false, wrd2 is not advanced. RESULT wordTwo]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 83: BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+- line 84: int tc = Integer.parseInt(br.readLine());
+- line 85: for(int i=1; i<=tc; i++) {
+- line 86: int noOfWords = Integer.parseInt(br.readLine());
+- line 87: TreeSet<String> set = new TreeSet<String>();
+- line 88: for(int j=0; j<noOfWords; j++) {
+- line 89: String word = br.readLine();
+- line 90: set.add(word);
+- line 92: Iterator<String> wrd1 = set.iterator();
+- line 93: Iterator<String> wrd2 = set.iterator();
+- line 94: int c1 = 0, result = 0;
+- line 95: while(wrd1.hasNext()) {
+- line 96: int max = 0;
+- line 97: String key1 = "";
+- line 98: String key2 = "";
+- line 99: String w1 = wrd1.next();
+- line 100: if(w1.equals(key1)) {
+- line 101: wrd1.remove();
+- line 104: while(wrd2.hasNext()) {
+- line 105: String w2 = wrd2.next();
+- line 106: if(w2.equals(key2)) {
+- line 107: wrd2.remove();
+- line 110: int count =printLCSubStr(w1,w2,w1.length(),w2.length());
+- line 111: if(count > max) {
+- line 112: key1 = w1;
+- line 113: key2 = w2;
+- line 114: max = count;
+- line 117: result = result + max;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 83, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["BufferedReader", "InputStreamReader", "System", "br", "in", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 84, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["Integer", "br", "int", "parseInt", "readLine", "tc"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 85, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "tc"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 86, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["Integer", "br", "int", "noOfWords", "parseInt", "readLine"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 87, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["String"], "roles": ["use"], "source_identifiers": ["String", "TreeSet", "new", "set"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 88, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "int", "j", "noOfWords"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 89, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["String"], "roles": ["use"], "source_identifiers": ["String", "br", "readLine", "word"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 90, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["add", "set", "word"]}
+- {"definitions": ["wrd1"], "disposition": "inspect_against_official_dependence_definition", "line": 92, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["String", "wrd1"], "roles": ["definition", "use"], "source_identifiers": ["Iterator", "String", "iterator", "set", "wrd1"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 93, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["String"], "roles": ["use"], "source_identifiers": ["Iterator", "String", "iterator", "set", "wrd2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 94, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["c1", "int", "result"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 95, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["wrd1"], "roles": ["use", "control"], "source_identifiers": ["hasNext", "while", "wrd1"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 96, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "max"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 97, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["String"], "roles": ["use"], "source_identifiers": ["String", "key1"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 98, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["String"], "roles": ["use"], "source_identifiers": ["String", "key2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 99, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["String", "wrd1", "next"], "roles": ["use"], "source_identifiers": ["String", "next", "w1", "wrd1"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 100, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["equals", "if", "key1", "w1"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 101, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["wrd1"], "roles": ["use"], "source_identifiers": ["remove", "wrd1"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 104, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["hasNext", "while", "wrd2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 105, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["String", "next"], "roles": ["use"], "source_identifiers": ["String", "next", "w2", "wrd2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 106, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["equals", "if", "key2", "w2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 107, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["remove", "wrd2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 110, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["count", "int", "length", "printLCSubStr", "w1", "w2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 111, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["count", "if", "max"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 112, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["key1", "w1"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 113, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["key2", "w2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 114, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["count", "max"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 117, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["max", "result"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 81-121
+- source signature: `public static void main(String args[]) throws IOException`
+- source content hash: `37d4c06c2f62a37aaaeffd2ad925a613381b2e8238dea61405cd337db8bc21b8`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+  81      public static void main(String args[]) throws IOException 
+  82      { 
+  83       BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+  84    int tc = Integer.parseInt(br.readLine()); 
+  85    for(int i=1; i<=tc; i++) {
+  86     int noOfWords = Integer.parseInt(br.readLine()); 
+  87     TreeSet<String> set = new TreeSet<String>();
+  88     for(int j=0; j<noOfWords; j++) {
+  89      String word = br.readLine();
+  90      set.add(word);
+  91     }
+  92     Iterator<String> wrd1 = set.iterator();
+  93     Iterator<String> wrd2 = set.iterator();
+  94     int c1 = 0, result = 0;
+  95     while(wrd1.hasNext()) {
+  96      int max = 0;
+  97      String key1 = "";
+  98      String key2 = "";
+  99      String w1 = wrd1.next();
+ 100      if(w1.equals(key1)) {
+ 101       wrd1.remove();
+ 102       return;
+ 103      }
+ 104      while(wrd2.hasNext()) {
+ 105       String w2 = wrd2.next();
+ 106       if(w2.equals(key2)) {
+ 107        wrd2.remove();
+ 108        return;
+ 109       }
+ 110      int count =printLCSubStr(w1,w2,w1.length(),w2.length());
+ 111      if(count > max) {
+ 112       key1 = w1;
+ 113       key2 = w2;
+ 114       max = count;
+ 115      }
+ 116      }
+ 117      result = result + max;
+ 118     }
+ 119     System.out.println("Case #"+i+": "+result);
+ 120    }
+ 121      } 
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads a number of test cases, stores each case's words in a TreeSet to sort and de-duplicate them, and performs nested substring comparisons whose computed values are discarded." main]
+    [INPUTS]
+        <REF> args </REF>: String[] "Command-line arguments; not used by the method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a BufferedReader named br that wraps InputStreamReader(System.in). RESULT br]
+            [COMMAND Read the first line from br and parse it as an integer named tc. RESULT tc]
+            [COMMAND Start the outer for loop over test cases with i initialized to 0, continuing while i < tc, and incrementing i by 1 after each iteration. RESULT i]
+            [COMMAND Within the outer for loop over i, read one line from br and parse it as an integer named noOfWords. RESULT noOfWords]
+            [COMMAND Within the outer for loop over i, create an empty TreeSet named set to store strings in sorted order and remove duplicates. RESULT set]
+            [COMMAND Within the outer for loop over i, start a for loop with j initialized to 0, continuing while j < noOfWords, and incrementing j by 1 after each iteration. RESULT j]
+            [COMMAND Within the j loop, read a line from br as word and add it to set. RESULT set]
+            [COMMAND After reading all words for the current test case, create an Iterator named wrd1 over set. RESULT wrd1]
+            [COMMAND After reading all words for the current test case, create an Iterator named wrd2 over set; wrd2 is not reset afterward. RESULT wrd2]
+            [COMMAND Set c1 to 0. RESULT c1]
+            [COMMAND Enter the outer while loop and continue while wrd1.hasNext() is true. RESULT none]
+            [COMMAND Within the outer while loop, increment c1 by 1. RESULT c1]
+            [COMMAND Within the outer while loop, set c2 to 0. RESULT c2]
+            [COMMAND Within the outer while loop, set wordOne to wrd1.next(). RESULT wordOne]
+            [COMMAND Within the outer while loop, set result to 0; result is never subsequently read. RESULT result]
+            [COMMAND Within the outer while loop, enter the inner while loop and continue while wrd2.hasNext() is true. Because wrd2 is not reset, after the first outer iteration wrd2.hasNext() is normally false and this inner loop is skipped. RESULT none]
+            [COMMAND Within the inner while loop, increment c2 by 1. RESULT c2]
+            [COMMAND Within the inner while loop, when c1 equals c2, do not execute the if block, so wrd2 is not advanced and no substring comparison is performed for that iteration. RESULT none]
+            [COMMAND Within the inner while loop, when c1 is not equal to c2, set wordTwo to wrd2.next(); when the condition is false, wrd2 is not advanced. RESULT wordTwo]
+            [COMMAND When c1 is not equal to c2, initialize max to 0 and key to an empty string for the substring search. RESULT max]
+            [COMMAND When c1 is not equal to c2, start an l loop with l initialized to 0, continuing while l < wordTwo.length() - 1, and incrementing l by 1 after each iteration. RESULT l]
+            [COMMAND Within the l loop, start a k loop with k initialized to l + 2, continuing while k <= wordTwo.length(), and incrementing k by 1 after each iteration. RESULT k]
+            [COMMAND Within the k loop, using short-circuit &&, if wordOne contains wordTwo.substring(l, k) and k - l is greater than max, set max to k - l and key to wordTwo.substring(l, k); these values are not used outside the if block. RESULT max]
+            [COMMAND Within the k loop, if the preceding condition fails, break out of the k loop only. RESULT none]
+            [COMMAND Continue executing all loop levels until the outer for loop over i completes. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: BufferedReader.readLine() encounters an I/O error.]
+        [LOG "IOException is propagated from main because there is no catch block."]
+        [THROW IOException "Indicates an I/O error occurred while reading from standard input."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: An input line passed to Integer.parseInt is not a valid integer, or readLine() returns null before a required integer is read.]
+        [LOG "NumberFormatException is thrown while parsing the input as an int."]
+        [THROW NumberFormatException "Indicates that the input string is null or cannot be parsed as an integer."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

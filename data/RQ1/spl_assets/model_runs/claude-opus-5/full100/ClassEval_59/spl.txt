@@ -1,0 +1,118 @@
+# CLASS MovieBookingSystem
+
+[DEFINE_WORKER: "Initializes a new instance by setting up an empty movies list as a mutable instance attribute." __init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign a new empty list literal to the instance attribute self.movies, establishing it as an independent mutable collection with zero elements on this specific instance RESULT self.movies]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a movie record dictionary from the given parameters—parsing time strings into datetime objects and initializing an n×n zero-filled seat grid—then appends it to the instance's movie list." add_movie]
+    [INPUTS]
+        <REF> self </REF>: object "The containing object instance whose movies list will be mutated"
+        <REF> name </REF>: any "Movie title; passed through without transformation"
+        <REF> price </REF>: any "Ticket price; passed through without type enforcement"
+        <REF> start_time </REF>: str "Start time as a '%H:%M'-formatted string (e.g. '14:30')"
+        <REF> end_time </REF>: str "End time as a '%H:%M'-formatted string (e.g. '16:00')"
+        <REF> n </REF>: int "Dimension of the square seat grid; must be a non-negative integer"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse start_time string using the fixed format '%H:%M' via datetime.strptime and bind the resulting datetime object to the key 'start_time' in the new record RESULT parsed_start_time]
+            [COMMAND Parse end_time string using the fixed format '%H:%M' via datetime.strptime and bind the resulting datetime object to the key 'end_time' in the new record RESULT parsed_end_time]
+            [COMMAND Allocate an n×n NumPy array of float64 zeros via np.zeros((n, n)) and bind it to the key 'seats' in the new record RESULT seat_grid]
+            [COMMAND Assemble the movie dictionary with keys 'name' (bound to name), 'price' (bound to price), 'start_time' (bound to parsed_start_time), 'end_time' (bound to parsed_end_time), and 'seats' (bound to seat_grid); the dictionary is atomic—if any field fails, no partial dict is produced RESULT movie]
+            [COMMAND Append movie to self.movies in place RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: start_time or end_time is not a string, or its value does not exactly match the '%H:%M' format]
+        [LOG "datetime.strptime raises TypeError (non-string input) or ValueError (format mismatch); the movie dictionary is never created and self.movies is unchanged"]
+        [THROW ValueError/TypeError "Raised by datetime.strptime when the time string is missing, malformed, or of the wrong type; no guard logic is present—callers are responsible for input validation"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: n is not a non-negative integer (e.g. a float, a negative integer, or a non-numeric type)]
+        [LOG "np.zeros raises TypeError or ValueError; the movie dictionary is never created and self.movies is unchanged"]
+        [THROW TypeError/ValueError "Raised by np.zeros when n cannot be used as a valid non-negative integer dimension"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Searches for a movie by name and attempts to book a list of seats by marking each as taken, returning success if all seats are available or failure if any seat is already occupied, with no rollback on partial mutations." book_ticket]
+    [INPUTS]
+        <REF> name </REF>: string "The name of the movie to search for in the movies list"
+        <REF> seats_to_book </REF>: list "A list of seats to book, where each seat is a two-element indexer [row, col] into the movie's 2D seat map"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Returns 'Booking success.' if all seats were available and marked, 'Booking failed.' if any seat was already occupied (value != 0), or 'Movie not found.' if no movie matched the given name"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each movie object in self.movies RESULT current_movie]
+            [COMMAND Within the outer for loop over self.movies, check whether the current movie's 'name' field equals the input parameter name using an equality comparison RESULT name_match]
+            [COMMAND Within the outer for loop, when name_match is true, iterate over each seat in seats_to_book; each seat is a two-element indexer where seat[0] is the row and seat[1] is the column RESULT current_seat]
+            [COMMAND Within the seat loop, check whether movie['seats'][seat[0]][seat[1]] equals exactly 0, treating 0 as available and any other value as occupied RESULT seat_available]
+            [COMMAND Within the seat loop, when seat_available is true, set movie['seats'][seat[0]][seat[1]] to 1, marking that seat as taken; no rollback is performed if a later seat in the same pass fails RESULT seat_marked]
+            [COMMAND After the seat loop completes with all seats marked successfully, return the string 'Booking success.' and exit the method immediately RESULT booking_success_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the seat loop, the current seat value is not 0 (seat is already occupied)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Immediately return the string 'Booking failed.' and exit the method; any seats already marked as 1 in the current loop pass remain mutated with no rollback RESULT booking_failed_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The outer for loop over self.movies completes without any movie whose 'name' field matched the input parameter name]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string 'Movie not found.' and exit the method RESULT movie_not_found_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses two time strings into datetime objects and returns the names of all movies whose full showtime is inclusively contained within the requested [start_time, end_time] window." available_movies]
+    [INPUTS]
+        <REF> start_time </REF>: string "Window start time as a string in 'HH:MM' 24-hour format"
+        <REF> end_time </REF>: string "Window end time as a string in 'HH:MM' 24-hour format"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> available_movies </REF>: list[string] "List of movie names whose entire showtime falls within the inclusive [start_time, end_time] window; empty list if no movies qualify"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse the string parameter start_time using datetime.strptime with format '%H:%M' and reassign the resulting datetime object back to start_time, discarding the original string RESULT start_time]
+            [COMMAND Parse the string parameter end_time using datetime.strptime with format '%H:%M' and reassign the resulting datetime object back to end_time, discarding the original string RESULT end_time]
+            [COMMAND Initialize available_movies as an empty list to serve as the accumulator for qualifying movie names RESULT available_movies]
+            [COMMAND Iterate over every movie dict in self.movies; for each movie, evaluate whether start_time <= movie['start_time'] AND movie['end_time'] <= end_time using inclusive boundaries on both sides, short-circuiting on the first condition; if both conditions hold, append movie['name'] to available_movies; continue until all movies are exhausted without early exit RESULT available_movies]
+            [COMMAND Return available_movies containing the names of all movies whose full showtime was contained within the requested window RESULT available_movies]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: start_time string does not match the '%H:%M' format when datetime.strptime is called]
+        [LOG "datetime.strptime raises ValueError because start_time cannot be parsed with format '%H:%M'; no default or fallback exists"]
+        [THROW ValueError "Raised by datetime.strptime when the start_time string does not conform to '%H:%M'; propagates uncaught to the caller"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: end_time string does not match the '%H:%M' format when datetime.strptime is called]
+        [LOG "datetime.strptime raises ValueError because end_time cannot be parsed with format '%H:%M'; no default or fallback exists"]
+        [THROW ValueError "Raised by datetime.strptime when the end_time string does not conform to '%H:%M'; propagates uncaught to the caller"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

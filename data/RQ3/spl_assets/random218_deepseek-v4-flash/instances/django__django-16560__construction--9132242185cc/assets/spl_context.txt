@@ -1,0 +1,1009 @@
+# FILE: django/contrib/postgres/constraints.py
+# CLASS ExclusionConstraintExpression
+
+# CLASS ExclusionConstraint
+
+[DEFINE_WORKER: "Initializes an ExclusionConstraint after validating the index type, expressions, condition, deferrable, and include arguments, assigns normalized attribute values, and calls the superclass initializer." ExclusionConstraint.__init__]
+    [INPUTS]
+        <REF> name </REF>: str "Name of the exclusion constraint."
+        <REF> expressions </REF>: list of 2-tuples "Each element must be a list or tuple of length 2; at least one expression is required."
+        <REF> index_type </REF>: Optional[str] "Index type for the exclusion constraint; only 'gist' or 'spgist' are accepted case-insensitively. Defaults to 'GIST' when falsy."
+        <REF> condition </REF>: Optional[Q] "Optional Q instance representing the constraint condition."
+        <REF> deferrable </REF>: Optional[Deferrable] "Optional Deferrable instance controlling constraint deferrability."
+        <REF> include </REF>: Optional[list or tuple] "Optional columns to include in the constraint; stored as a tuple if provided."
+        <REF> violation_error_message </REF>: Optional[str] "Custom violation message passed to the superclass initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the __init__ method, validate index_type: if index_type is truthy, its lowercased value must be either 'gist' or 'spgist'; otherwise do not raise. RESULT index_type_validation]
+            [COMMAND Validate that expressions is truthy; if it is empty, None, or otherwise falsy, do not continue. RESULT expressions_presence_validation]
+            [COMMAND Validate that every item in expressions is a list or tuple with length exactly 2; stop at the first invalid item. RESULT expressions_shape_validation]
+            [COMMAND Validate that condition is either None or an instance of Q. RESULT condition_type_validation]
+            [COMMAND Validate that deferrable is either None or an instance of Deferrable. RESULT deferrable_type_validation]
+            [COMMAND Validate that include is either None, a list, or a tuple. RESULT include_type_validation]
+            [COMMAND After all validations pass, assign self.expressions = expressions. RESULT self.expressions]
+            [COMMAND Assign self.index_type = index_type if index_type is truthy, otherwise assign self.index_type = 'GIST'. RESULT self.index_type]
+            [COMMAND Assign self.condition = condition. RESULT self.condition]
+            [COMMAND Assign self.deferrable = deferrable. RESULT self.deferrable]
+            [COMMAND Assign self.include = tuple(include) if include is truthy, otherwise assign self.include = (). RESULT self.include]
+            [COMMAND Call super().__init__(name=name, violation_error_message=violation_error_message). RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: index_type is truthy and index_type.lower() is not in {'gist', 'spgist'}.]
+        [LOG "Exclusion constraints only support GiST or SP-GiST indexes."]
+        [THROW ValueError "Raises ValueError because a truthy index_type is not a supported GiST or SP-GiST index type."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: expressions is falsy (empty, None, or otherwise false).]
+        [LOG "At least one expression is required to define an exclusion constraint."]
+        [THROW ValueError "Raises ValueError because at least one expression is required."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Any expr in expressions is not a list or tuple, or len(expr) is not equal to 2.]
+        [LOG "The expressions must be a list of 2-tuples."]
+        [THROW ValueError "Raises ValueError because every expression must be a 2-element list or tuple."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: condition is not None and not an instance of Q.]
+        [LOG "ExclusionConstraint.condition must be a Q instance."]
+        [THROW ValueError "Raises ValueError because condition must be a Q instance or None."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: deferrable is not None and not an instance of Deferrable.]
+        [LOG "ExclusionConstraint.deferrable must be a Deferrable instance."]
+        [THROW ValueError "Raises ValueError because deferrable must be a Deferrable instance or None."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: include is not None and not a list or tuple.]
+        [LOG "ExclusionConstraint.include must be a list or tuple."]
+        [THROW ValueError "Raises ValueError because include must be a list, tuple, or None."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds ExclusionConstraintExpression objects from stored (expression, operator) pairs, initializes them with the schema editor connection, and resolves the resulting ExpressionList for the given query." _get_expressions]
+    [INPUTS]
+        <REF> self </REF>: object "Bound method instance that provides the expressions list to iterate over."
+        <REF> schema_editor </REF>: object "Schema editor whose connection is passed to set_wrapper_classes on each constructed constraint expression."
+        <REF> query </REF>: object "Query object used to resolve the assembled ExpressionList."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The resolved expression returned by ExpressionList(*expressions).resolve_expression(query)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named expressions to accumulate ExclusionConstraintExpression objects. RESULT expressions]
+            [COMMAND For each index idx (unused) and (expression, operator) pair from enumerate(self.expressions), process the pair as described in the following steps. RESULT pair]
+            [COMMAND Within the for loop over enumerate(self.expressions), if the current expression is a string instance, replace it with F(expression); otherwise leave expression unchanged. RESULT expression]
+            [COMMAND Within the for loop, construct ExclusionConstraintExpression(expression, operator=operator) using the possibly-converted expression and the current operator. RESULT constraint_expression]
+            [COMMAND Within the for loop, call constraint_expression.set_wrapper_classes(schema_editor.connection). RESULT constraint_expression]
+            [COMMAND Within the for loop, append constraint_expression to the expressions list. RESULT expressions]
+            [COMMAND After the loop completes, return ExpressionList(*expressions).resolve_expression(query). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a parameter-substituted SQL WHERE fragment for the stored query condition, or None when the condition is absent." _get_condition_sql]
+    [INPUTS]
+        <REF> compiler </REF>: SQLCompiler "Django SQL compiler used to render the WHERE clause."
+        <REF> schema_editor </REF>: BaseDatabaseSchemaEditor "Schema editor that provides the database connection and quote_value for parameter quoting."
+        <REF> query </REF>: Query "Query object used to build the WHERE node from self.condition."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> condition_sql </REF>: str or None "SQL WHERE fragment with quoted parameters substituted, or None if self.condition is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.condition is None; if so, follow the alternative flow that returns None immediately. RESULT condition_check]
+            [COMMAND Build the WHERE node by calling query.build_where(self.condition). RESULT where]
+            [COMMAND Convert the WHERE node to a SQL fragment and parameter list by calling where.as_sql(compiler, schema_editor.connection), unpacking the returned tuple into sql and params. RESULT sql_and_params]
+            [COMMAND For every parameter p in params, call schema_editor.quote_value(p) and collect the quoted values into a tuple. RESULT quoted_params]
+            [COMMAND Substitute quoted_params into the sql fragment using the Python % formatting operator to produce the final SQL string. RESULT condition_sql]
+            [COMMAND Return condition_sql. RESULT condition_sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.condition is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a Django database constraint SQL statement by creating a model query, compiling it with the schema editor connection, deriving expressions and condition SQL, resolving include columns, and rendering them through the configured template with quoted names and include/deferrable SQL fragments." constraint_sql]
+    [INPUTS]
+        <REF> self </REF>: Constraint object "The constraint instance providing template, name, index_type, include, deferrable, and the helper methods _get_expressions and _get_condition_sql."
+        <REF> model </REF>: django.db.models.Model subclass "The model whose database table and fields provide the basis for the constraint SQL."
+        <REF> schema_editor </REF>: SchemaEditor "The schema editor used to obtain a database connection, quote identifiers and values, and generate include and deferrable SQL fragments."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Statement "A rendered SQL Statement object built from the configured template and the computed table, name, index type, expressions, where clause, include SQL, and deferrable SQL."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a Django ORM Query for the model with alias_cols set to False. RESULT query]
+            [COMMAND Obtain the SQL compiler for the query using the schema editor connection. RESULT compiler]
+            [COMMAND Build the constraint expressions by calling self._get_expressions with schema_editor and query. RESULT expressions]
+            [COMMAND Set table to the model metadata database table name. RESULT table]
+            [COMMAND Build the condition SQL by calling self._get_condition_sql with compiler, schema_editor, and query. RESULT condition]
+            [COMMAND For each field name in self.include, resolve the model field and extract its database column name to form the include list. RESULT include]
+            [COMMAND If condition is truthy, compute where_clause as ' WHERE (%s)' formatted with condition; otherwise set where_clause to an empty string. RESULT where_clause]
+            [COMMAND Build the database table reference using Table with table and schema_editor.quote_name. RESULT table_ref]
+            [COMMAND Quote the constraint name using schema_editor.quote_name applied to self.name. RESULT quoted_name]
+            [COMMAND Build the index expression wrapper using Expressions with table, expressions, compiler, and schema_editor.quote_value. RESULT index_expressions]
+            [COMMAND Generate the include SQL fragment by calling schema_editor._index_include_sql with model and include. RESULT include_sql]
+            [COMMAND Generate the deferrable SQL fragment by calling schema_editor._deferrable_constraint_sql with self.deferrable. RESULT deferrable_sql]
+            [COMMAND Create and return a Statement using self.template, table_ref, quoted_name, self.index_type, index_expressions, where_clause, include_sql, and deferrable_sql. RESULT statement]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates schema editor support and returns a lazy Statement that adds a constraint to the model's table." create_sql]
+    [INPUTS]
+        <REF> model </REF>: Model "Model whose table will receive the constraint."
+        <REF> schema_editor </REF>: SchemaEditor "Schema editor used for support checking and for quoting the table name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> statement </REF>: Statement "Lazy SQL Statement object for 'ALTER TABLE %(table)s ADD %(constraint)s' with the table and constraint bound."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.check_supported(schema_editor) as a precondition guard; if it raises an exception, allow it to propagate and stop. RESULT check_supported_result]
+            [COMMAND Build a Table object using model._meta.db_table as the table name and schema_editor.quote_name as the quoting callable. RESULT table_obj]
+            [COMMAND Build the constraint SQL string by calling self.constraint_sql(model, schema_editor). RESULT constraint_sql]
+            [COMMAND Construct a Statement with the SQL template 'ALTER TABLE %(table)s ADD %(constraint)s', table=table_obj, constraint=constraint_sql, and return it. RESULT statement]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes a check constraint by delegating to the schema editor with the check deletion SQL template, the model, and the quoted constraint name." remove_sql]
+    [INPUTS]
+        <REF> model </REF>: Django model "The model whose check constraint is being removed."
+        <REF> schema_editor </REF>: SchemaEditor "The schema editor used to generate and execute the SQL for deleting the check constraint."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: SQL string or None "The SQL statement returned by schema_editor._delete_constraint_sql for removing the check constraint."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call schema_editor._delete_constraint_sql with schema_editor.sql_delete_check, model, and schema_editor.quote_name(self.name), then return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the current database backend supports covering SP-GiST indexes and raises NotSupportedError if a covering exclusion constraint would require PostgreSQL 14+." check_supported]
+    [INPUTS]
+        <REF> schema_editor </REF>: SchemaEditor "Schema editor exposing the database connection features used to test SP-GiST covering index support."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the guard condition from left to right with short-circuiting: self.include is truthy, self.index_type.lower() equals "spgist", and schema_editor.connection.features.supports_covering_spgist_indexes is false. RESULT guard_condition]
+            [COMMAND If guard_condition is false, continue past the if block and reach the end of check_supported normally. RESULT normal_completion]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: guard_condition is true, meaning self.include is truthy, self.index_type.lower() is "spgist", and the database backend does not support covering SP-GiST indexes.]
+        [LOG "Covering exclusion constraints using an SP-GiST index require PostgreSQL 14+."]
+        [THROW NotSupportedError "Raised to reject creation of a covering exclusion constraint on an SP-GiST index when the backend requires PostgreSQL 14+ but does not support it."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deconstructs this object by calling super().deconstruct(), storing self.expressions in kwargs, and conditionally adding condition, index_type, deferrable, and include keys before returning the path, args, and kwargs tuple." deconstruct]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple (path, args, kwargs) where kwargs includes expressions and, when applicable, condition, index_type, deferrable, and include."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().deconstruct() and unpack the returned tuple into path, args, and kwargs. RESULT path_args_kwargs]
+            [COMMAND Set kwargs["expressions"] to self.expressions. RESULT kwargs]
+            [COMMAND If self.condition is not None, set kwargs["condition"] to self.condition. RESULT kwargs]
+            [COMMAND If self.index_type.lower() is not equal to "gist", set kwargs["index_type"] to self.index_type. RESULT kwargs]
+            [COMMAND If self.deferrable is truthy, set kwargs["deferrable"] to self.deferrable. RESULT kwargs]
+            [COMMAND If self.include is truthy, set kwargs["include"] to self.include. RESULT kwargs]
+            [COMMAND Return the tuple (path, args, kwargs). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a model instance against an exclusion constraint by building a filtered queryset from configured expressions, substituting current field values, excluding the current row when persisted, and raising ValidationError if the constraint is violated." validate]
+    [INPUTS]
+        <REF> model </REF>: Django model class "The model class whose default manager provides the base queryset for validation."
+        <REF> instance </REF>: Django model instance "The instance being validated; its field values are used as replacements and its primary key is used to exclude itself when it is already saved."
+        <REF> exclude </REF>: optional iterable of field names "Field names to exclude from consideration; if any constraint expression references an excluded field, validation is skipped by returning early."
+        <REF> using </REF>: database alias "The database alias used for the validation queryset, defaulting to DEFAULT_DB_ALIAS."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: NoneType "Returns None when validation succeeds or when an excluded field is encountered before validation can complete."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create the base queryset as model._default_manager.using(using). RESULT queryset]
+            [COMMAND Build replacement_map by calling instance._get_field_value_map(meta=model._meta, exclude=exclude). RESULT replacement_map]
+            [COMMAND Build replacements by mapping F(field) to value for every field-value pair in replacement_map. RESULT replacements]
+            [COMMAND Initialize lookups as an empty list. RESULT lookups]
+            [COMMAND For each enumerated (expression, operator) in self.expressions, if expression is a string, convert it to F(expression). RESULT expression]
+            [COMMAND Within the same loop, if exclude is truthy, check whether the expression is an F whose name is in exclude and return None immediately; otherwise flatten the expression and return None immediately if any flattened F has a name in exclude. RESULT None_or_continue]
+            [COMMAND Within the same loop, compute rhs_expression by calling expression.replace_expressions(replacements). RESULT rhs_expression]
+            [COMMAND Within the same loop, if expression is an OpClass, replace it with expression.get_source_expressions()[0]; if rhs_expression is an OpClass, replace it with rhs_expression.get_source_expressions()[0]. RESULT expression_and_rhs_expression]
+            [COMMAND Within the same loop, create PostgresOperatorLookup(lhs=expression, rhs=rhs_expression), set lookup.postgres_operator to operator, and append lookup to lookups. RESULT lookups]
+            [COMMAND After the loop, apply the accumulated lookups to the queryset by setting queryset = queryset.filter(*lookups). RESULT queryset]
+            [COMMAND Get model_class_pk by calling instance._get_pk_val(model._meta). RESULT model_class_pk]
+            [COMMAND If not instance._state.adding and model_class_pk is not None, exclude the current row by setting queryset = queryset.exclude(pk=model_class_pk). RESULT queryset]
+            [COMMAND Determine whether validation fails: if self.condition is not set, fail when queryset.exists() is true; if self.condition is set, fail when (self.condition & Exists(queryset.filter(self.condition))).check(replacement_map, using=using) is truthy. RESULT violation_detected]
+            [COMMAND If violation_detected is true, follow the applicable exception_flows entry; otherwise return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Inside the loop, exclude is truthy and either expression is an F whose name is in exclude, or any flattened sub-expression of expression is an F whose name is in exclude.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately to skip validation because the constraint references an excluded field. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.condition is falsy and queryset.exists() returns True.]
+        [LOG "Raises a ValidationError using the violation error message from get_violation_error_message()."]
+        [THROW ValidationError "Indicates that the exclusion constraint without a configured condition is violated because a matching row exists."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.condition is truthy and (self.condition & Exists(queryset.filter(self.condition))).check(replacement_map, using=using) returns a truthy value.]
+        [LOG "Raises a ValidationError using the violation error message from get_violation_error_message()."]
+        [THROW ValidationError "Indicates that the exclusion constraint with a configured condition is violated because the combined condition and existence check succeeds."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# FILE: django/db/models/constraints.py
+# CLASS BaseConstraint
+
+[DEFINE_WORKER: "Initializes an instance by validating and storing the name, setting the violation error message or its class default, and handling deprecated positional arguments as backward-compatible overrides." BaseConstraint.__init__]
+    [INPUTS]
+        <REF> name </REF>: str or None "Optional keyword-only name for the constraint. If None and no positional arguments are supplied, a TypeError is raised."
+        <REF> violation_error_message </REF>: str or None "Optional keyword-only message used when the constraint is violated. If not supplied, self.default_violation_error_message is used."
+        <REF> args </REF>: tuple "Deprecated positional arguments accepted for backward compatibility; the first truthy value maps to name and the second truthy value maps to violation_error_message."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that a name is available; if name is None and args is empty/falsy, enter the exception flow. RESULT name_check_done]
+            [COMMAND Assign the name argument to the instance attribute self.name. RESULT self.name]
+            [COMMAND Check whether violation_error_message is not None. RESULT violation_error_message_provided]
+            [COMMAND If violation_error_message_provided is true, assign violation_error_message to self.violation_error_message; otherwise assign self.default_violation_error_message to self.violation_error_message. RESULT self.violation_error_message]
+            [COMMAND Check whether args is truthy. RESULT args_provided]
+            [COMMAND If args_provided is true, run the deprecated positional-argument fallback alternative flow. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: args is truthy (non-empty)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit a RemovedInDjango60Warning with stacklevel 2 stating that passing positional arguments to the current class is deprecated. RESULT None]
+            [COMMAND For each pair (arg, attr) produced by zip(args, ['name', 'violation_error_message']) - covering at most the first two positional arguments - if arg is truthy, call setattr(self, attr, arg) to set the target attribute to arg. RESULT self.<attr>]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: name is None and args is empty/falsy]
+        [LOG "The current class's __init__() method is missing 1 required keyword-only argument: 'name'."]
+        [THROW TypeError "TypeError raised because the constructor was called without the required keyword-only 'name' argument and with no deprecated positional arguments to supply it."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Always returns False to indicate that the object contains no expressions." contains_expressions]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "Always False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant boolean False as the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to indicate that a subclass must implement the SQL constraint generation for the given model and schema editor." constraint_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which constraint_sql is called."
+        <REF> model </REF>: Model "The model for which constraint SQL is requested."
+        <REF> schema_editor </REF>: SchemaEditor "The schema editor used to generate SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the exact message 'This method must be implemented by a subclass.' RESULT NotImplementedError]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Any invocation of constraint_sql reaches the unconditional raise.]
+        [LOG "This method must be implemented by a subclass."]
+        [THROW NotImplementedError "Indicates that constraint_sql has no implementation and must be overridden by the subclass."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to signal that create_sql must be implemented by a subclass." create_sql]
+    [INPUTS]
+        <REF> model </REF>: object "The model for which SQL is to be created."
+        <REF> schema_editor </REF>: object "The schema editor used to generate SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enter create_sql with the given model and schema_editor and immediately reach the NotImplementedError raise statement. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When create_sql is called directly and this method is not overridden by a subclass.]
+        [LOG "This method must be implemented by a subclass."]
+        [THROW NotImplementedError "create_sql is not implemented for this class; a subclass must provide the implementation."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError because the base remove_sql method is intentionally unimplemented and requires a subclass to provide SQL removal behavior." remove_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance of the class."
+        <REF> model </REF>: object "Model whose SQL removal is requested."
+        <REF> schema_editor </REF>: object "Schema editor used for executing schema changes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with message 'This method must be implemented by a subclass.' RESULT _exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: remove_sql is called on the base implementation]
+        [LOG "This method must be implemented by a subclass."]
+        [THROW NotImplementedError "Signals that remove_sql must be implemented by a subclass."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defines a validation method stub that unconditionally raises NotImplementedError, requiring subclasses to provide their own implementation." validate]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance of the class that defines the validate method."
+        <REF> model </REF>: Model "Model class or instance on which validation is performed."
+        <REF> instance </REF>: Model instance "Existing instance being validated, if any."
+        <REF> exclude </REF>: iterable or None "Fields to exclude from validation; defaults to None."
+        <REF> using </REF>: str "Database alias used for validation; defaults to DEFAULT_DB_ALIAS."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError immediately when validate is called, because the method contains no subclass implementation. RESULT exception_raised]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Always, because the method body consists solely of a raise statement.]
+        [LOG "This method must be implemented by a subclass."]
+        [THROW NotImplementedError "Indicates that a subclass must provide the actual validation implementation."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Formats the stored violation_error_message template with the current name and returns the resulting string." get_violation_error_message]
+    [INPUTS]
+        <REF> self </REF>: object "The instance providing violation_error_message as the format template and name as the substitution value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> formatted_message </REF>: str "The violation error message after substituting the name value into the template."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a temporary mapping containing the key 'name' associated with the value of self.name. RESULT name_mapping]
+            [COMMAND Apply old-style percent formatting to self.violation_error_message using name_mapping and return the resulting string. RESULT formatted_message]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deconstructs this constraint into a normalized class path, an empty positional arguments tuple, and a kwargs dictionary containing the constraint name and, when present, a non-default custom violation error message." deconstruct]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> deconstruction_result </REF>: tuple "A tuple (path, args, kwargs) where path is the normalized class path string, args is an empty tuple, and kwargs contains 'name' and, when a non-default custom violation error message is present, 'violation_error_message'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the initial path as a string by concatenating self.__class__.__module__, '.', and self.__class__.__name__. RESULT path]
+            [COMMAND Replace every occurrence of 'django.db.models.constraints' in path with 'django.db.models' to normalize the module path. RESULT path]
+            [COMMAND Create kwargs as a dictionary containing the key 'name' with the value self.name. RESULT kwargs]
+            [COMMAND Using short-circuit evaluation, if self.violation_error_message is not None and self.violation_error_message is not equal to self.default_violation_error_message, set kwargs['violation_error_message'] to self.violation_error_message. RESULT kwargs]
+            [COMMAND Return the tuple (path, (), kwargs) as the deconstruction result. RESULT deconstruction_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a new instance of the same class by unpacking deconstruct() into positional and keyword arguments and passing them to the class constructor." clone]
+    [INPUTS]
+        <REF> self </REF>: object "The source object whose deconstruct() method provides the path, positional arguments, and keyword arguments for reconstruction."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cloned_instance </REF>: instance of self.__class__ "A newly created instance of the same class constructed from args and kwargs returned by deconstruct()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.deconstruct() and unpack the returned iterable into _, args, and kwargs. RESULT unpacked_values]
+            [COMMAND Instantiate self.__class__ with *args and **kwargs, and return the resulting object. RESULT cloned_instance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS CheckConstraint
+
+[DEFINE_WORKER: "Initializes a CheckConstraint by assigning the check condition, validating that it is a Q instance or boolean expression with a truthy 'conditional' attribute, and delegating name and violation_error_message to the parent constructor." CheckConstraint.__init__]
+    [INPUTS]
+        <REF> check </REF>: Any "The condition to be enforced; must have a truthy 'conditional' attribute, such as a Q instance or boolean expression."
+        <REF> name </REF>: str "The name of the check constraint."
+        <REF> violation_error_message </REF>: str | None "Optional custom violation error message; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.check to the provided check argument. RESULT self.check]
+            [COMMAND Evaluate getattr(check, 'conditional', False) and test whether it is falsy; if it is falsy, follow the TypeError exception flow, otherwise continue. RESULT validation_result]
+            [COMMAND Call super().__init__ with name=name and violation_error_message=violation_error_message. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: getattr(check, 'conditional', False) is missing or falsy, meaning check is not a Q instance or boolean expression.]
+        [LOG "CheckConstraint.check must be a Q instance or boolean expression."]
+        [THROW TypeError "Raised to indicate that the provided check is not a valid conditional expression for a CheckConstraint."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the SQL WHERE clause for a model check constraint by compiling the query and interpolating database-quoted parameter values." _get_check_sql]
+    [INPUTS]
+        <REF> model </REF>: model "The model used to create the Query instance for building the check constraint SQL."
+        <REF> schema_editor </REF>: schema_editor "The schema editor providing the database connection and the quote_value method for parameter quoting."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The final SQL string for the check constraint with all parameters quoted and interpolated."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a Query instance for the given model with alias_cols=False. RESULT query]
+            [COMMAND Build the WHERE condition from self.check using query.build_where. RESULT where]
+            [COMMAND Get the SQL compiler from the query using schema_editor.connection. RESULT compiler]
+            [COMMAND Generate the SQL statement and bound parameters by calling where.as_sql with the compiler and schema_editor.connection. RESULT sql_params]
+            [COMMAND Return the SQL string formatted with each parameter quoted via schema_editor.quote_value and combined into a tuple. RESULT final_sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Formats the check constraint SQL for a model by retrieving the check expression and delegating to the schema editor's check SQL method." constraint_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The constraint instance providing the name used in the generated SQL."
+        <REF> model </REF>: object "The model for which the check constraint SQL is generated."
+        <REF> schema_editor </REF>: object "The schema editor used to format the final check constraint SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "The formatted check constraint SQL generated from the constraint name and check SQL."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._get_check_sql(model, schema_editor) and store the returned SQL check expression in the variable check. RESULT check]
+            [COMMAND Return schema_editor._check_sql(self.name, check) to produce the final check constraint SQL. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates a check constraint SQL statement by calling _get_check_sql to obtain the check expression and then delegating to schema_editor._create_check_sql with the constraint name and that expression." create_sql]
+    [INPUTS]
+        <REF> model </REF>: Model "The model on which the check constraint is created."
+        <REF> schema_editor </REF>: SchemaEditor "The schema editor used to generate and execute database schema SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: str "The generated SQL for the check constraint, returned by schema_editor._create_check_sql."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._get_check_sql with model and schema_editor, and assign the returned check constraint SQL fragment to check. RESULT check]
+            [COMMAND Call schema_editor._create_check_sql with model, self.name, and check, and return the resulting SQL string as sql. RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the SQL statement for removing the named check constraint by delegating to the provided database schema editor." remove_sql]
+    [INPUTS]
+        <REF> model </REF>: Model "The database model whose check constraint is being removed."
+        <REF> schema_editor </REF>: SchemaEditor "The schema editor object that implements _delete_check_sql."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_statement </REF>: str "The SQL statement produced for deleting the named check constraint."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call schema_editor._delete_check_sql(model, self.name) and return the resulting SQL statement to the caller. RESULT sql_statement]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a field-value map for the instance and validates it against the Q(self.check) constraint, raising ValidationError on violation and silently ignoring FieldError." validate]
+    [INPUTS]
+        <REF> self </REF>: validator object "The validator instance providing the check constraint and the violation error message."
+        <REF> model </REF>: model class "The model whose metadata is used to construct the field-value map."
+        <REF> instance </REF>: model instance "The instance to validate."
+        <REF> exclude </REF>: iterable or None "Field names to exclude from the field-value map; defaults to None."
+        <REF> using </REF>: database alias "The database alias used for the check; defaults to DEFAULT_DB_ALIAS."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None when validation succeeds or when a FieldError is caught; raises ValidationError when the check fails."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the field-value map for the instance by calling instance._get_field_value_map(meta=model._meta, exclude=exclude) and assign the result to against. RESULT against]
+            [COMMAND Within the try block, evaluate the condition by constructing Q(self.check) and calling its check method with against and using=using, assigning the result to check_result. RESULT check_result]
+            [COMMAND When check_result is true, complete the validation successfully with no explicit return value. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: A FieldError is raised during evaluation of Q(self.check).check(against, using=using)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the FieldError and do nothing, so the validation is treated as successful and the method returns None. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: check_result is false, meaning Q(self.check).check(against, using=using) did not match the field-value map]
+        [LOG "Validation failed; the check constraint was not satisfied by the instance."]
+        [THROW ValidationError "Raised with the message returned by self.get_violation_error_message()."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates to the parent deconstruct method, adds the 'check' attribute to the keyword arguments, and returns the resulting path, args, and kwargs tuple." deconstruct]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose deconstruct representation is being built."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple (path, args, kwargs) where kwargs includes the added 'check' key from self.check."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().deconstruct() and unpack the returned tuple into path, args, and kwargs. RESULT path, args, kwargs]
+            [COMMAND Add the key 'check' to the kwargs dictionary with the value of self.check. RESULT kwargs]
+            [COMMAND Return the tuple (path, args, kwargs) to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Deferrable
+
+# CLASS UniqueConstraint
+
+[DEFINE_WORKER: "Initializes a Django UniqueConstraint by validating name, fields/expressions, condition, deferrable, include, and opclasses combinations, then normalizing stored tuple attributes and string expressions before calling the parent initializer." UniqueConstraint.__init__]
+    [INPUTS]
+        <REF> expressions </REF>: tuple "Variable-length positional arguments representing expressions; string entries are later wrapped with F()."
+        <REF> fields </REF>: tuple "Field names for the constraint; default empty tuple."
+        <REF> name </REF>: string or None "Unique constraint name; must be truthy."
+        <REF> condition </REF>: Q or None "Optional Q object restricting the constraint."
+        <REF> deferrable </REF>: Deferrable or None "Optional Deferrable instance controlling deferrability."
+        <REF> include </REF>: list, tuple, or None "Optional fields to include in the constraint."
+        <REF> opclasses </REF>: tuple or list "Operator classes for indexed fields; default empty tuple."
+        <REF> violation_error_message </REF>: string or None "Optional custom message used when the constraint is violated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that name is truthy; if not, the first ValueError in exception_flows is raised; otherwise continue. RESULT name_validated]
+            [COMMAND Validate that at least one of expressions or fields is truthy; if both are empty or falsy, the corresponding ValueError in exception_flows is raised. RESULT at_least_one_field_or_expression_validated]
+            [COMMAND Validate that expressions and fields are not both truthy; if they are, the mutually exclusive ValueError in exception_flows is raised. RESULT expressions_fields_exclusivity_validated]
+            [COMMAND Validate that condition is None or a Q instance; otherwise the condition type ValueError in exception_flows is raised. RESULT condition_type_validated]
+            [COMMAND Validate that condition and deferrable are not both truthy; if they are, the cannot-defer-with-conditions ValueError in exception_flows is raised. RESULT condition_deferrable_validated]
+            [COMMAND Validate that include and deferrable are not both truthy; if they are, the include-deferrable ValueError in exception_flows is raised. RESULT include_deferrable_validated]
+            [COMMAND Validate that opclasses and deferrable are not both truthy; if they are, the opclasses-deferrable ValueError in exception_flows is raised. RESULT opclasses_deferrable_validated]
+            [COMMAND Validate that expressions and deferrable are not both truthy; if they are, the expressions-deferrable ValueError in exception_flows is raised. RESULT expressions_deferrable_validated]
+            [COMMAND Validate that expressions and opclasses are not both truthy; if they are, the opclasses-with-expressions ValueError in exception_flows is raised. RESULT expressions_opclasses_validated]
+            [COMMAND Validate that deferrable is None or a Deferrable instance; otherwise the deferrable type ValueError in exception_flows is raised. RESULT deferrable_type_validated]
+            [COMMAND Validate that include is None, a list, or a tuple; otherwise the include type ValueError in exception_flows is raised. RESULT include_type_validated]
+            [COMMAND Validate that opclasses is a list or tuple; otherwise the opclasses type ValueError in exception_flows is raised. RESULT opclasses_type_validated]
+            [COMMAND Validate that if opclasses is truthy, len(fields) equals len(opclasses); otherwise the length-mismatch ValueError in exception_flows is raised. RESULT opclasses_length_validated]
+            [COMMAND Convert fields iterable to a tuple and assign to self.fields. RESULT self.fields]
+            [COMMAND Assign condition directly to self.condition. RESULT self.condition]
+            [COMMAND Assign deferrable directly to self.deferrable. RESULT self.deferrable]
+            [COMMAND If include is truthy, convert it to a tuple; otherwise use an empty tuple; assign to self.include. RESULT self.include]
+            [COMMAND Assign opclasses directly to self.opclasses. RESULT self.opclasses]
+            [COMMAND Convert expressions to a tuple, wrapping string items with F(expression) and leaving non-string items unchanged; assign to self.expressions. RESULT self.expressions]
+            [COMMAND Call super().__init__ with name=name and violation_error_message=violation_error_message. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: name is falsy, meaning not provided, empty, or otherwise false.]
+        [LOG "ValueError: A unique constraint must be named."]
+        [THROW ValueError "Raised when the constraint is not named."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: both expressions and fields are empty or falsy.]
+        [LOG "ValueError: At least one field or expression is required to define a unique constraint."]
+        [THROW ValueError "Raised when no fields or expressions are supplied."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: expressions and fields are both truthy.]
+        [LOG "ValueError: UniqueConstraint.fields and expressions are mutually exclusive."]
+        [THROW ValueError "Raised when fields and expressions are both supplied because they are mutually exclusive."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: condition is not None and is not a Q instance.]
+        [LOG "ValueError: UniqueConstraint.condition must be a Q instance."]
+        [THROW ValueError "Raised when condition is not a Q instance or None."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: condition is truthy and deferrable is truthy.]
+        [LOG "ValueError: UniqueConstraint with conditions cannot be deferred."]
+        [THROW ValueError "Raised when a deferred constraint also has a condition."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: include is truthy and deferrable is truthy.]
+        [LOG "ValueError: UniqueConstraint with include fields cannot be deferred."]
+        [THROW ValueError "Raised when a deferred constraint also has include fields."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: opclasses is truthy and deferrable is truthy.]
+        [LOG "ValueError: UniqueConstraint with opclasses cannot be deferred."]
+        [THROW ValueError "Raised when a deferred constraint also has opclasses."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: expressions is truthy and deferrable is truthy.]
+        [LOG "ValueError: UniqueConstraint with expressions cannot be deferred."]
+        [THROW ValueError "Raised when a deferred constraint also has expressions."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: expressions is truthy and opclasses is truthy.]
+        [LOG "ValueError: UniqueConstraint.opclasses cannot be used with expressions. Use django.contrib.postgres.indexes.OpClass() instead."]
+        [THROW ValueError "Raised when expressions are combined with opclasses; use django.contrib.postgres.indexes.OpClass() instead."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: deferrable is not None and is not an instance of Deferrable.]
+        [LOG "ValueError: UniqueConstraint.deferrable must be a Deferrable instance."]
+        [THROW ValueError "Raised when deferrable is not a Deferrable instance or None."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: include is not None and is not a list or tuple.]
+        [LOG "ValueError: UniqueConstraint.include must be a list or tuple."]
+        [THROW ValueError "Raised when include is not a list, tuple, or None."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: opclasses is not a list or tuple.]
+        [LOG "ValueError: UniqueConstraint.opclasses must be a list or tuple."]
+        [THROW ValueError "Raised when opclasses is not a list or tuple."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: opclasses is truthy and len(fields) differs from len(opclasses).]
+        [LOG "ValueError: UniqueConstraint.fields and UniqueConstraint.opclasses must have the same number of elements."]
+        [THROW ValueError "Raised when opclasses length does not match fields length."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a boolean indicating whether the expressions attribute of the instance is truthy." contains_expressions]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose expressions attribute is inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if self.expressions is truthy, otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.expressions, propagating AttributeError if the attribute is absent; evaluate bool(self.expressions) and return the resulting boolean. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates a parameterized SQL WHERE clause from self.condition using Django query compilation and SQL parameter interpolation, or returns None when self.condition is None." _get_condition_sql]
+    [INPUTS]
+        <REF> model </REF>: object "The model class or instance used to construct the Query object for the WHERE clause."
+        <REF> schema_editor </REF>: object "Schema editor providing the database connection and the quote_value method used for SQL parameter interpolation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string or None "The final SQL WHERE clause string with quoted parameter values, or None when self.condition is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Given that self.condition is not None, create a Query object for the model with alias_cols=False. RESULT query]
+            [COMMAND Build the WHERE representation from self.condition using query.build_where. RESULT where]
+            [COMMAND Obtain the SQL compiler for the query using schema_editor.connection. RESULT compiler]
+            [COMMAND Compile the WHERE representation into sql and params by calling where.as_sql(compiler, schema_editor.connection). RESULT sql_params]
+            [COMMAND Substitute each bound parameter into the SQL template using sql % tuple(schema_editor.quote_value(p) for p in params). RESULT final_sql]
+            [COMMAND Return final_sql. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.condition is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT return_none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and resolves an ExpressionList from the configured index expressions against the supplied model, or returns None when no expressions are configured." _get_index_expressions]
+    [INPUTS]
+        <REF> model </REF>: Model "The model against which the index expressions are resolved."
+        <REF> schema_editor </REF>: BaseDatabaseSchemaEditor "The schema editor whose connection is used to set wrapper classes on each index expression."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> resolved_expression </REF>: Expression or None "The resolved expression list, or None if self.expressions is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize index_expressions as an empty list. RESULT index_expressions]
+            [COMMAND For each expression in self.expressions, construct an IndexExpression from expression and assign it to index_expression. RESULT index_expression]
+            [COMMAND For each iteration, call index_expression.set_wrapper_classes(schema_editor.connection) to configure wrapper classes. RESULT index_expression]
+            [COMMAND For each iteration, append index_expression to index_expressions. RESULT index_expressions]
+            [COMMAND Construct ExpressionList from all collected index_expressions, resolve it using Query(model, alias_cols=False), and return the resolved result. RESULT resolved_expression]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.expressions is empty or falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without building any index expressions. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the SQL for a unique constraint by resolving configured field objects, included column names, condition SQL, and index expressions, then delegates to schema_editor._unique_sql to produce the final SQL." constraint_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The constraint instance providing fields, include, name, deferrable, opclasses, and helper methods."
+        <REF> model </REF>: Model "The model on which the unique constraint is being generated."
+        <REF> schema_editor </REF>: SchemaEditor "The schema editor responsible for generating the unique constraint SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "The generated SQL statement for the unique constraint."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each field_name in self.fields in order, resolve the model field with model._meta.get_field(field_name) and collect the field objects into a list named fields. RESULT fields]
+            [COMMAND For each field_name in self.include in order, resolve the database column with model._meta.get_field(field_name).column and collect the column names into a list named include. RESULT include]
+            [COMMAND Call self._get_condition_sql(model, schema_editor) and store the returned condition SQL in condition. RESULT condition]
+            [COMMAND Call self._get_index_expressions(model, schema_editor) and store the returned index expressions in expressions. RESULT expressions]
+            [COMMAND Return the result of schema_editor._unique_sql(model, fields, self.name, condition=condition, deferrable=self.deferrable, include=include, opclasses=self.opclasses, expressions=expressions). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs SQL for a unique constraint by resolving model fields, included columns, condition SQL, and index expressions, then delegates to schema_editor._create_unique_sql." create_sql]
+    [INPUTS]
+        <REF> self </REF>: object "Method receiver providing fields, include, name, deferrable, and opclasses."
+        <REF> model </REF>: Model "Django model whose unique constraint SQL is being generated."
+        <REF> schema_editor </REF>: SchemaEditor "Schema editor instance providing _create_unique_sql."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: str "SQL statement for the unique constraint, as returned by schema_editor._create_unique_sql."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each field_name in self.fields, resolve model._meta.get_field(field_name) and collect the field objects into a list named fields; if self.fields is empty, fields is an empty list. RESULT fields]
+            [COMMAND For each field_name in self.include, resolve model._meta.get_field(field_name).column and collect the column names into a list named include; if self.include is empty, include is an empty list. RESULT include]
+            [COMMAND Call self._get_condition_sql(model, schema_editor) and store the returned value as condition, even if the value is None. RESULT condition]
+            [COMMAND Call self._get_index_expressions(model, schema_editor) and store the returned value as expressions, even if the value is None. RESULT expressions]
+            [COMMAND Return schema_editor._create_unique_sql(model, fields, self.name, condition=condition, deferrable=self.deferrable, include=include, opclasses=self.opclasses, expressions=expressions). RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the SQL used to remove a unique constraint by computing its condition, included column names, and index expressions, then delegates to the schema editor to generate and return the deletion SQL." remove_sql]
+    [INPUTS]
+        <REF> model </REF>: Model "The model whose unique constraint is being removed."
+        <REF> schema_editor </REF>: SchemaEditor "The schema editor used to generate the SQL for deleting the unique constraint."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The SQL statement for removing the unique constraint."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._get_condition_sql(model, schema_editor) and store the resulting SQL condition in condition. RESULT condition]
+            [COMMAND Build include by iterating over self.include in order, resolving each field_name to its database column via model._meta.get_field(field_name).column; if self.include is empty, include becomes an empty list. RESULT include]
+            [COMMAND Call self._get_index_expressions(model, schema_editor) and store the resulting expressions in expressions. RESULT expressions]
+            [COMMAND Call schema_editor._delete_unique_sql(model, self.name, condition=condition, deferrable=self.deferrable, include=include, opclasses=self.opclasses, expressions=expressions) and return the generated SQL. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deconstructs the object by delegating to the parent deconstruct() method and returning its path, the instance's expressions, and kwargs augmented with any present optional attributes fields, condition, deferrable, include, and opclasses." deconstruct]
+    [INPUTS]
+        <REF> self </REF>: object "Instance whose expressions attribute is returned and whose optional fields, condition, deferrable, include, and opclasses attributes are conditionally added to kwargs."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (path, self.expressions, kwargs) where path comes from the parent deconstruct() method and kwargs contains the optional attributes when they are truthy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().deconstruct() and unpack its returned iterable into exactly path, args, and kwargs. RESULT path, args, kwargs]
+            [COMMAND If self.fields is truthy, set kwargs['fields'] to self.fields. RESULT kwargs]
+            [COMMAND If self.condition is truthy, set kwargs['condition'] to self.condition. RESULT kwargs]
+            [COMMAND If self.deferrable is truthy, set kwargs['deferrable'] to self.deferrable. RESULT kwargs]
+            [COMMAND If self.include is truthy, set kwargs['include'] to self.include. RESULT kwargs]
+            [COMMAND If self.opclasses is truthy, set kwargs['opclasses'] to self.opclasses. RESULT kwargs]
+            [COMMAND Return the tuple (path, self.expressions, kwargs). RESULT path, self.expressions, kwargs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a Django model constraint by building a queryset from the instance's field values or expressions, excluding the current instance primary key when appropriate, and raising ValidationError if a conflicting row exists, with special handling for conditional constraints and FieldError." validate]
+    [INPUTS]
+        <REF> model </REF>: Django model class "The model class whose default manager is used to build the validation queryset."
+        <REF> instance </REF>: Django model instance "The instance being validated; its field values are used to detect constraint conflicts."
+        <REF> exclude </REF>: iterable of field names or None "Field names to exclude from the validation check; defaults to None."
+        <REF> using </REF>: database alias string "Database alias used for queryset routing; defaults to DEFAULT_DB_ALIAS."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None on successful validation or early return; raises ValidationError when a conflict is detected."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create the base queryset by evaluating model._default_manager.using(using); assign it to queryset. RESULT queryset]
+            [COMMAND Apply the field-based or expression-based lookup filtering selected by self.fields to queryset; terminate with None if an excluded field or NULL-valued lookup prevents filtering. RESULT queryset]
+            [COMMAND Retrieve the primary key value of instance by calling instance._get_pk_val(model._meta); assign it to model_class_pk. RESULT model_class_pk]
+            [COMMAND Apply the current-instance exclusion stage: if the instance is not being added and model_class_pk is not None, exclude pk=model_class_pk from queryset; otherwise keep queryset unchanged. RESULT queryset]
+            [COMMAND Run the conflict-detection stage according to self.condition; raise ValidationError if a conflict is detected, and in the condition-aware path ignore FieldError. RESULT validation_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.fields is non-empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize lookup_kwargs as an empty dictionary. RESULT lookup_kwargs]
+            [COMMAND For each field_name in self.fields, if exclude is truthy and field_name is in exclude, return None immediately. RESULT None]
+            [COMMAND For each field_name in self.fields, get field = model._meta.get_field(field_name) and lookup_value = getattr(instance, field.attname). RESULT field, lookup_value]
+            [COMMAND For each field_name in self.fields, if lookup_value is None, or lookup_value equals an empty string and connections[using].features.interprets_empty_strings_as_nulls is true, return None immediately. RESULT None]
+            [COMMAND For each field_name in self.fields, store lookup_kwargs[field.name] = lookup_value. RESULT lookup_kwargs]
+            [COMMAND Filter queryset with queryset.filter(**lookup_kwargs) and assign the result back to queryset. RESULT queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.fields is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If exclude is truthy, scan self.expressions for F references to excluded fields: for each expression, if it has flatten(), traverse all flattened expressions; if any flattened expression is an F whose name is in exclude, return None immediately. If the expression itself is an F and its name is in exclude, return None immediately. RESULT None]
+            [COMMAND Build replacements by mapping F(field) to value for each field, value in instance._get_field_value_map(meta=model._meta, exclude=exclude).items(). RESULT replacements]
+            [COMMAND Initialize expressions as an empty list; for each expr in self.expressions, if expr is an OrderBy, replace expr with expr.expression; then append Exact(expr, expr.replace_expressions(replacements)) to expressions. RESULT expressions]
+            [COMMAND Filter queryset with queryset.filter(*expressions) and assign the result back to queryset. RESULT queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: not instance._state.adding and model_class_pk is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call queryset.exclude(pk=model_class_pk) and assign the resulting queryset back to queryset. RESULT queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: instance._state.adding is true or model_class_pk is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave queryset unchanged and continue with the current queryset. RESULT queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.condition is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate queryset.exists(); if it is false, validation passes silently. RESULT exists]
+            [COMMAND If exists is true and self.expressions is truthy, raise ValidationError using self.get_violation_error_message(). RESULT validation_error]
+            [COMMAND If exists is true and self.expressions is empty, iterate over instance.get_constraints(); for each model, constraints pair and each constraint, if constraint is self, raise ValidationError using instance.unique_error_message(model, self.fields). RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.condition is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build against = instance._get_field_value_map(meta=model._meta, exclude=exclude). RESULT against]
+            [COMMAND Evaluate (self.condition & Exists(queryset.filter(self.condition))).check(against, using=using); if it returns true, raise ValidationError using self.get_violation_error_message(). RESULT validation_error]
+            [COMMAND If FieldError is raised during the check, catch it, ignore it, and allow validation to pass. RESULT validation_passed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: not self.condition and queryset.exists() and self.expressions is truthy]
+        [LOG "A conflicting row exists for the expression-based constraint; raise the constraint violation error."]
+        [THROW ValidationError "Raised with self.get_violation_error_message()."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: not self.condition and queryset.exists() and self.expressions is empty and a constraint in instance.get_constraints() is self]
+        [LOG "A conflicting row exists for the field-based constraint; raise the model's unique error message."]
+        [THROW ValidationError "Raised with instance.unique_error_message(model, self.fields)."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.condition is truthy and (self.condition & Exists(queryset.filter(self.condition))).check(against, using=using) returns true]
+        [LOG "The conditioned existence check found a conflicting row; raise the constraint violation error."]
+        [THROW ValidationError "Raised with self.get_violation_error_message()."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

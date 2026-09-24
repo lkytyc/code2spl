@@ -1,0 +1,431 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include<stdio.h>
+2   #include<string.h>
+3   #include<stdlib.h>
+4   #include<stdbool.h>
+5   #include<time.h>
+6   #include<assert.h>
+7   #define inf 1072114514
+8   #define llinf 4154118101919364364
+9   #define mod 1000000007
+10  #define pi 3.1415926535897932384
+11  int max(int a,int b){if(a>b){return a;}return b;}
+12  int min(int a,int b){if(a<b){return a;}return b;}
+13  int zt(int a,int b){return max(a,b)-min(a,b);}
+14  int round(int a,int b){if((a%b)*2 >= b){return (a/b)+1;}return a/b;}
+15  int ceil(int a,int b){if(a%b==0){return a/b;}return (a/b)+1;}
+16  int gcd(int a,int b){int c;while(b!=0){c=a%b;a=b;b=c;}return a;}
+17  int lcm(int a,int b){int c=gcd(a,b);a/=c;return a*b;}
+18  int nCr(int a,int b){int i,r=1;for(i=1;i<=b;i++){r*=(a+1-i);r/=i;}return r;}
+19  int nHr(int a,int b){return nCr(a+b-1,b);}
+20  int fact(int a){int i,r=1;for(i=1;i<=a;i++){r*=i;}return r;}
+21  int pow(int a,int b){int i,r=1;for(i=1;i<=b;i++){r*=a;}return r;}
+22  int dsum(int x){int r=0;while(x){r+=(x%10);x/=10;}return r;}
+23  int dsumb(int x,int b){int r=0;while(x){r+=(x%b);x/=b;}return r;}
+24  int sankaku(int x){return ((1+x)*x)/2;}
+25  void swap(int *a,int *b){int c;c=(*a);(*a)=(*b);(*b)=c;}
+26  long long llmax(long long a,long long b){if(a>b){return a;}return b;}
+27  long long llmin(long long a,long long b){if(a<b){return a;}return b;}
+28  long long llzt(long long a,long long b){return llmax(a,b)-llmin(a,b);}
+29  long long llround(long long a,long long b){if((a%b)*2 >= b){return (a/b)+1;}return a/b;}
+30  long long llceil(long long a,long long b){if(a%b==0){return a/b;}return (a/b)+1;}
+31  long long llgcd(long long a,long long b){long long c;while(b!=0){c=a%b;a=b;b=c;}return a;}
+32  long long lllcm(long long a,long long b){long long c=llgcd(a,b);a/=c;return a*b;}
+33  long long llnCr(long long a,long long b){long long i,r=1;for(i=1;i<=b;i++){r*=(a+1-i);r/=i;}return r;}
+34  long long llnHr(long long a,long long b){return llnCr(a+b-1,b);}
+35  long long llfact(long long a){long long i,r=1;for(i=1;i<=a;i++){r*=i;}return r;}
+36  long long llpow(long long a,long long b){long long i,r=1;for(i=1;i<=b;i++){r*=a;}return r;}
+37  long long lldsum(long long x){long long r=0;while(x){r+=(x%10);x/=10;}return r;}
+38  long long lldsumb(long long x,long long b){long long r=0;while(x){r+=(x%b);x/=b;}return r;}
+39  long long llsankaku(long long x){return ((1+x)*x)/2;}
+40  void llswap(long long *a,long long *b){long long c;c=(*a);(*a)=(*b);(*b)=c;}
+41  double dbmax(double a,double b){if(a>b){return a;}return b;}
+42  double dbmin(double a,double b){if(a<b){return a;}return b;}
+43  double dbzt(double a,double b){return dbmax(a,b)-dbmin(a,b);}
+44  void dbswap(double *a,double *b){double c;c=(*a);(*a)=(*b);(*b)=c;}
+45  void chswap(char *a,char *b){char c;c=(*a);(*a)=(*b);(*b)=c;}
+46  int sortfncsj(const void *a,const void *b){if(*(int *)a>*(int *)b){return 1;}if(*(int *)a==*(int *)b){return 0;}return -1;}
+47  int sortfnckj(const void *a,const void *b){if(*(int *)a<*(int *)b){return 1;}if(*(int *)a==*(int *)b){return 0;}return -1;}
+48  int llsortfncsj(const void *a,const void *b){if(*(long long *)a>*(long long *)b){return 1;}if(*(long long *)a==*(long long *)b){return 0;}return -1;}
+49  int llsortfnckj(const void *a,const void *b){if(*(long long *)a<*(long long *)b){return 1;}if(*(long long *)a==*(long long *)b){return 0;}return -1;}
+50  int dbsortfncsj(const void *a,const void *b){if(*(double *)a>*(double *)b){return 1;}if(*(double *)a==*(double *)b){return 0;}return -1;}
+51  int dbsortfnckj(const void *a,const void *b){if(*(double *)a<*(double *)b){return 1;}if(*(double *)a==*(double *)b){return 0;}return -1;}
+52  int strsortfncsj(const void *a,const void *b){return strcmp((char *)a,(char *)b);}
+53  int strsortfnckj(const void *a,const void *b){return strcmp((char *)b,(char *)a);}
+54  int chsortfncsj(const void *a,const void *b){if(*(char *)a>*(char *)b){return 1;}if(*(char *)a==*(char *)b){return 0;}return -1;}
+55  int chsortfnckj(const void *a,const void *b){if(*(char *)a<*(char *)b){return 1;}if(*(char *)a==*(char *)b){return 0;}return -1;}
+56  void shuffledget(int x[],int n){
+57      int i,b[524288],p,c;
+58      for(i=0;i<n;i++){
+59          b[i]=i;
+60      }
+61      for(i=n;i>=1;i--){
+62          p=rand()%i;
+63          c=b[i-1];b[i-1]=b[p];b[p]=c;
+64      }
+65      for(i=0;i<n;i++){
+66          scanf("%d",&x[b[i]]);
+67      }
+68  }
+69  int dx4[4]={1,-1,0,0};
+70  int dy4[4]={0,0,1,-1};
+71  int dx8[8]={-1,-1,-1,0,0,1,1,1};
+72  int dy8[8]={-1,0,1,-1,1,-1,0,1};
+73  int search(int x,int a[],int n){
+74      int st=0,fi=n-1,te;
+75      while(st<=fi){
+76          te=(st+fi)/2;
+77          if(a[te]<x){st=te+1;}else{fi=te-1;}
+78      }
+79      return st;
+80  }
+81  void prarr(int arr[],int n){
+82    int i;
+83    for(i=0;i<n;i++){
+84      if(i){printf(" ");}
+85      printf("%d",arr[i]);
+86    }
+87    printf("\n");
+88    return;
+89  }
+90  void getperm(int a[],int n){
+91    int i,p;
+92    for(i=0;i<n;i++){
+93      a[i]=i;
+94    }
+95    for(i=n-1;i>=1;i--){
+96      p=rand()%(i+1);
+97      swap(&a[p],&a[i]);
+98    }
+99  }
+100  typedef struct{
+101  int val;
+102  int node;
+103  }sd;
+104  int sdsortfnc(const void *a,const void *b){
+105  if(((sd*)a)->val < ((sd*)b)->val){return -1;}
+106  if(((sd*)a)->val > ((sd*)b)->val){return 1;}
+107  return 0;
+108  }
+109  void coordinate_comp(int a[],int n){
+110    int i,c=0;
+111    sd dat[524288];
+112    for(i=0;i<n;i++){
+113      dat[i].val=a[i];
+114      dat[i].node=i;
+115    }
+116    qsort(dat,n,sizeof(dat[0]),sdsortfnc);
+117    a[dat[0].node]=c;
+118    for(i=1;i<n;i++){
+119      if(dat[i-1].val!=dat[i].val){c++;}
+120      a[dat[i].node]=c;
+121    }
+122  }
+123  int main(void){
+124    int cs;
+125    int i,j,n,m,k,a,b,c,h,w,l,t,sn;
+126    int r=0;
+127    int fl[64];
+128    scanf("%d",&t);
+129    for(cs=1;cs<=t;cs++){
+130      scanf("%d",&n);
+131      sn=n;
+132      printf("Case #%d:\n",cs);
+133      w=0;
+134      for(i=1;i<50;i++){
+135        w+=(1<<(i-1));
+136        if(w>=n){
+137          l=i;
+138          break;
+139        }
+140      }
+141      for(i=l;i>=1;i--){
+142        if(n>=(1<<(i-1))+(i-1)){
+143          fl[i]=1;
+144          n-=(1<<(i-1));
+145        }
+146        else{
+147          fl[i]=0;
+148          n--;
+149          }
+150      }
+151      a=0;
+152      w=0;
+153      for(i=1;i<=l;i++){
+154        if(fl[i]==1){
+155          w+=(1<<(i-1));
+156          if(a==0){
+157            for(j=1;j<=i;j++){
+158              printf("%d %d\n",i,j);
+159            }
+160          }
+161          else{
+162            for(j=i;j>=1;j--){
+163              printf("%d %d\n",i,j);
+164            }
+165          }
+166          a=1-a;
+167        }
+168        else{
+169          w++;
+170          if(a==0)
+171            printf("%d %d\n",i,1);
+172          else
+173            printf("%d %d\n",i,i);
+174        }
+175      }
+176      while(w!=sn){
+177        l++;
+178        if(a==0)
+179          printf("%d %d\n",l,1);
+180        else
+181          printf("%d %d\n",l,l);
+182        w++;
+183      }
+184    }
+185    return 0;
+186  }
+```
+
+
+**Question**: Does `(fl,143)` have data dependence over `(cs,129)` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function main: Reads the number of test cases and, for each input n, prints a case header and a sequence of row/column coordinate pairs generated from a decreasing-power-of-two decomposition with alternating row direction.
+It returns result (int) — Always returns 0 after all test cases are processed.
+The behaviour proceeds in this order:
+1. Set up local state: declare integer variables cs, i, j, n, m, k, a, b, c, h, w, l, t, sn, and r, and integer array fl of size 64; initialize r to 0. This produces local_state.
+2. Read an integer t from standard input into variable t. This produces t.
+3. For each test case with cs from 1 to t inclusive, read an integer n from standard input into variable n, and copy n to sn. This produces case_input.
+4. Print the case header line "Case #%d:\n" using cs. This produces case_header.
+5. Set w to 0, then iterate i from 1 to 49 inclusive; add 2^(i-1) to w on each iteration, and when w is greater than or equal to n, set l to i and break out of the loop. This produces l.
+6. Iterate i downward from l to 1 inclusive; if n is greater than or equal to 2^(i-1) + (i-1), set fl[i] to 1 and subtract 2^(i-1) from n; otherwise set fl[i] to 0 and decrement n by 1. This produces fl.
+7. Set a to 0 and w to 0. This produces a_and_w.
+8. Iterate i from 1 to l inclusive; if fl[i] is 1, add 2^(i-1) to w, print coordinate pairs (i,j) with j from 1 to i when a is 0 or with j from i down to 1 when a is 1, then set a to 1 - a; otherwise increment w by 1 and print coordinate pair (i,1) when a is 0 or (i,i) when a is 1. This produces row_coordinates.
+9. While w is not equal to sn, increment l by 1 and w by 1, and print coordinate pair (l,1) when a is 0 or (l,l) when a is 1. This produces remaining_coordinates.
+10. Return 0 after all test cases have been processed. This produces return_value.

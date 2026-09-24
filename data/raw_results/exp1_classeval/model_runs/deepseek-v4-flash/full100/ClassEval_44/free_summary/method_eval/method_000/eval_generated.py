@@ -1,0 +1,77 @@
+from bs4 import BeautifulSoup
+import re
+import html
+
+class HtmlUtil:
+    @staticmethod
+    def format_line_html_text(html_text):
+        soup = BeautifulSoup(html_text, 'html.parser')
+        
+        # Replace pre and blockquote with code marker
+        for tag in soup.find_all(['pre', 'blockquote']):
+            tag.replace_with('<<<CODE>>>')
+        
+        # Process list items
+        for li in soup.find_all('li'):
+            text = li.get_text()
+            text = text.strip()
+            if text:
+                if not text.startswith('-'):
+                    text = '- ' + text
+                if not text.endswith('.'):
+                    text += '.'
+                li.string = text
+        
+        # Process paragraphs
+        for p in soup.find_all('p'):
+            text = p.get_text().strip()
+            if text:
+                if not text.endswith(('.', ':', ';', '!', '?')):
+                    # Check if next sibling is a code marker
+                    next_sib = p.find_next_sibling()
+                    if next_sib and next_sib.name in ['pre', 'blockquote']:
+                        text += ':'
+                    else:
+                        text += '.'
+                p.string = text
+        
+        # Get text and normalize whitespace
+        text = soup.get_text()
+        text = html.unescape(text)
+        text = re.sub(r'\n+', '\n', text)
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = re.sub(r'\n\s+', '\n', text)
+        text = text.strip()
+        
+        return text
+    
+    @staticmethod
+    def extract_code_from_html_text(html_text):
+        soup = BeautifulSoup(html_text, 'html.parser')
+        code_blocks = []
+        for tag in soup.find_all(['pre', 'blockquote']):
+            code_blocks.append(tag.get_text())
+        return code_blocks
+
+import unittest
+import sys
+
+class HtmlUtilTestFormatLineFeed(unittest.TestCase):
+    def test_format_line_feed_1(self):
+        self.assertEqual(HtmlUtil._HtmlUtil__format_line_feed('aaa\n\n\n'), 'aaa\n')
+
+    def test_format_line_feed_2(self):
+        self.assertEqual(HtmlUtil._HtmlUtil__format_line_feed('aaa\n\n\n\n'), 'aaa\n')
+
+    def test_format_line_feed_3(self):
+        self.assertEqual(HtmlUtil._HtmlUtil__format_line_feed('aaa\n\n\nbbb\n\n'), 'aaa\nbbb\n')
+
+    def test_format_line_feed_4(self):
+        self.assertEqual(HtmlUtil._HtmlUtil__format_line_feed('ccc\n\n\n'), 'ccc\n')
+
+    def test_format_line_feed_5(self):
+        self.assertEqual(HtmlUtil._HtmlUtil__format_line_feed(''), '')
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

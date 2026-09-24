@@ -1,0 +1,509 @@
+# FILE: sklearn/tree/export.py
+# CLASS Sentinel
+
+# CLASS _BaseTreeExporter
+
+[DEFINE_WORKER: "Initializes a tree visualization/export object by copying all constructor arguments into instance attributes, applying display defaults for labels, colors, impurity, node IDs, proportions, rotation, rounding, precision, and font size." __init__]
+    [INPUTS]
+        <REF> max_depth </REF>: int or None "Maximum depth of the tree to display; default is None."
+        <REF> feature_names </REF>: list of str or None "Names of features for node labels; default is None."
+        <REF> class_names </REF>: list of str or dict or None "Names of classes for classification targets; default is None."
+        <REF> label </REF>: str "Kind of node label to show, usually 'all' or 'root'; default is 'all'."
+        <REF> filled </REF>: bool "Whether nodes should be filled with color according to class; default is False."
+        <REF> impurity </REF>: bool "Whether impurity values should be displayed in nodes; default is True."
+        <REF> node_ids </REF>: bool "Whether node IDs should be displayed; default is False."
+        <REF> proportion </REF>: bool "Whether sample counts should be displayed as proportions; default is False."
+        <REF> rotate </REF>: bool "Whether to rotate the tree plot to left-to-right orientation; default is False."
+        <REF> rounded </REF>: bool "Whether node boxes should be rounded; default is False."
+        <REF> precision </REF>: int "Number of decimal digits for displayed values; default is 3."
+        <REF> fontsize </REF>: int or None "Font size for text in the plot; default is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.max_depth from the max_depth parameter (default None). RESULT self.max_depth]
+            [COMMAND Assign self.feature_names from the feature_names parameter (default None). RESULT self.feature_names]
+            [COMMAND Assign self.class_names from the class_names parameter (default None). RESULT self.class_names]
+            [COMMAND Assign self.label from the label parameter (default 'all'). RESULT self.label]
+            [COMMAND Assign self.filled from the filled parameter (default False). RESULT self.filled]
+            [COMMAND Assign self.impurity from the impurity parameter (default True). RESULT self.impurity]
+            [COMMAND Assign self.node_ids from the node_ids parameter (default False). RESULT self.node_ids]
+            [COMMAND Assign self.proportion from the proportion parameter (default False). RESULT self.proportion]
+            [COMMAND Assign self.rotate from the rotate parameter (default False). RESULT self.rotate]
+            [COMMAND Assign self.rounded from the rounded parameter (default False). RESULT self.rounded]
+            [COMMAND Assign self.precision from the precision parameter (default 3). RESULT self.precision]
+            [COMMAND Assign self.fontsize from the fontsize parameter (default None). RESULT self.fontsize]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes an HTML color code for a tree node by selecting the appropriate RGB color and blending it with white using an alpha value derived from classification confidence or normalized bounds." get_color]
+    [INPUTS]
+        <REF> self </REF>: object "The tree object exposing a colors dictionary with an 'rgb' list and an optional 'bounds' list."
+        <REF> value </REF>: array-like or numeric "For classification, an array of class probabilities; for regression or multi-output, the target value to normalize against bounds."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "HTML color code in #RRGGBB format."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.colors['bounds'] is None; if true, follow the classification alternative flow, otherwise follow the regression alternative flow, to obtain color and alpha. RESULT branch_condition]
+            [COMMAND Convert alpha to a Python float using float(alpha). RESULT alpha_float]
+            [COMMAND For each component c in color, compute int(round(alpha * c + (1 - alpha) * 255, 0)) to blend color with white, and replace color with the resulting list. RESULT blended_color]
+            [COMMAND Return the HTML color code '#%2x%2x%2x' formatted with tuple(color). RESULT html_color_code]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.colors['bounds'] is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set color to list(self.colors['rgb'][np.argmax(value)]). RESULT color]
+            [COMMAND Set sorted_values to sorted(value, reverse=True). RESULT sorted_values]
+            [COMMAND Within the classification branch, if len(sorted_values) == 1 then set alpha to 0; otherwise set alpha to (sorted_values[0] - sorted_values[1]) / (1 - sorted_values[1]). RESULT alpha]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.colors['bounds'] is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set color to list(self.colors['rgb'][0]). RESULT color]
+            [COMMAND Set alpha to (value - self.colors['bounds'][0]) / (self.colors['bounds'][1] - self.colors['bounds'][0]). RESULT alpha]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates the formatted text representation of a single decision-tree node, including optional node id, split rule, impurity, sample count, value distribution, and majority class, under configurable label and proportion options." node_to_str]
+    [INPUTS]
+        <REF> self </REF>: exporter object "Configuration object providing label mode, characters, node_ids flag, feature_names, precision, impurity flag, proportion flag, and class_names."
+        <REF> tree </REF>: decision tree object "Decision tree structure with n_outputs, value, children_left, feature, threshold, impurity, n_node_samples, weighted_n_node_samples, and n_classes attributes."
+        <REF> node_id </REF>: int "Index of the tree node to format."
+        <REF> criterion </REF>: str or criterion object "Impurity criterion used for labeling; non-string and FriedmanMSE objects may be normalized to display names."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> node_string </REF>: str "Fully formatted node text, equal to the final node_string plus the terminal character characters[5]."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Select the node value array: if tree.n_outputs == 1, set value = tree.value[node_id][0, :] to keep the single-output row; otherwise set value = tree.value[node_id] to keep all output rows. RESULT value]
+            [COMMAND Compute labels flag with short-circuit boolean evaluation: labels = ((self.label == 'root') and (node_id == 0)) or (self.label == 'all'). RESULT labels]
+            [COMMAND Set characters = self.characters and initialize node_string = characters[-1] (the terminal character); this assumes characters is long enough for later indexing through characters[5]. RESULT node_string]
+            [COMMAND If self.node_ids is truthy, append the node id: when labels is truthy first append 'node ', then append characters[0] + str(node_id) + characters[4] to node_string. RESULT node_string]
+            [COMMAND If tree.children_left[node_id] != _tree.TREE_LEAF (node is not a leaf), determine feature: if self.feature_names is not None, feature = self.feature_names[tree.feature[node_id]]; otherwise feature = 'X' + characters[1] + str(tree.feature[node_id]) + characters[2]. Then append the decision rule formatted as feature + space + characters[3] + space + str(round(tree.threshold[node_id], self.precision)) + characters[4]. RESULT node_string]
+            [COMMAND If self.impurity is truthy, normalize criterion: if criterion is an instance of _criterion.FriedmanMSE, set criterion = 'friedman_mse'; elif criterion is not a string, set criterion = 'impurity'; otherwise leave criterion unchanged. RESULT criterion]
+            [COMMAND If self.impurity is truthy, append the impurity portion: if labels is truthy append '%s = ' % criterion to node_string, then append str(round(tree.impurity[node_id], self.precision)) + characters[4] to node_string. RESULT node_string]
+            [COMMAND If labels is truthy, append 'samples = ' to node_string. RESULT node_string]
+            [COMMAND Append the sample count portion: if self.proportion is truthy, compute percent = 100. * tree.n_node_samples[node_id] / float(tree.n_node_samples[0]), round percent to 1 decimal, then append str(round(percent, 1)) + '%' + characters[4]; otherwise append str(tree.n_node_samples[node_id]) + characters[4]. RESULT node_string]
+            [COMMAND If self.proportion is truthy and tree.n_classes[0] != 1, normalize the classification value by setting value = value / tree.weighted_n_node_samples[node_id]. RESULT value]
+            [COMMAND If labels is truthy, append 'value = ' to node_string. RESULT node_string]
+            [COMMAND Format value_text using the first matching rule: if tree.n_classes[0] == 1, set value_text = np.around(value, self.precision); elif self.proportion, set value_text = np.around(value, self.precision); elif np.all(np.equal(np.mod(value, 1), 0)), set value_text = value.astype(int); else set value_text = np.around(value, self.precision). RESULT value_text]
+            [COMMAND Convert value_text to a displayed string: set value_text = str(value_text.astype('S32')).replace("b'", "'"); then set value_text = value_text.replace("' '", ", ").replace("'", ""); if tree.n_classes[0] == 1 and tree.n_outputs == 1, remove '[' and ']' from value_text; then set value_text = value_text.replace('\n ', characters[4]). RESULT value_text]
+            [COMMAND Append value_text + characters[4] to node_string. RESULT node_string]
+            [COMMAND If self.class_names is not None and tree.n_classes[0] != 1 and tree.n_outputs == 1, append the majority class: if labels is truthy append 'class = '; if self.class_names is not True, set class_name = self.class_names[np.argmax(value)]; otherwise set class_name = 'y' + characters[1] + str(np.argmax(value)) + characters[2]; then append class_name to node_string. RESULT node_string]
+            [COMMAND Clean up trailing delimiter: if node_string ends with characters[4], set node_string = node_string[:-len(characters[4])]. RESULT node_string]
+            [COMMAND Return node_string + characters[5] as the final generated node text. RESULT node_string]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS _DOTTreeExporter
+
+[DEFINE_WORKER: "Exports a decision tree to the current output file by validating optional feature names, writing a header, recursively writing tree node and edge attributes, and writing a footer." export]
+    [INPUTS]
+        <REF> decision_tree </REF>: object "A fitted decision tree estimator or a raw _tree.Tree instance to export."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND When self.feature_names is not None, compare len(self.feature_names) with decision_tree.n_features_; if they differ, raise ValueError and stop. If self.feature_names is None, skip validation and continue. RESULT feature_names_validated]
+            [COMMAND Write the header section of the export by calling self.head(). RESULT header_written]
+            [COMMAND If decision_tree is an instance of _tree.Tree, recursively write the tree nodes and edges starting at root node 0 with criterion="impurity" by calling self.recurse(decision_tree, 0, criterion="impurity"). RESULT tree_attributes_written]
+            [COMMAND Write the footer section of the export by calling self.tail(). RESULT footer_written]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: decision_tree is not an instance of _tree.Tree; it is treated as a fitted decision-tree estimator exposing .tree_ and .criterion.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the else branch, recursively write the tree nodes and edges starting at root node 0 with criterion equal to decision_tree.criterion by calling self.recurse(decision_tree.tree_, 0, criterion=decision_tree.criterion). RESULT tree_attributes_written]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.feature_names is not None and len(self.feature_names) != decision_tree.n_features_]
+        [LOG "Length of feature_names, %d does not match number of features, %d"]
+        [THROW ValueError "Raised when the supplied feature_names length differs from decision_tree.n_features_."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Writes the closing brace to the output file, and when leaves_parallel is enabled, first writes DOT rank=same lines for each rank so leaf nodes are drawn at the same depth." tail]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.leaves_parallel is truthy, execute the alternative flow that writes rank=same lines for all ranks before finishing the method. RESULT self.out_file]
+            [COMMAND Write the closing brace character '}' to self.out_file. RESULT self.out_file]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.leaves_parallel is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each rank in sorted(self.ranks), in ascending rank order, join the node names in self.ranks[rank] with '; ', then write '{rank=same ; ' + joined + '} ;' followed by a newline to self.out_file. RESULT self.out_file]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Writes the opening Graphviz digraph header, node style options, and optional graph, edge, and rank directives to the output file for the tree visualization." head]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Write 'digraph Tree {' followed by a newline to self.out_file. RESULT self.out_file]
+            [COMMAND Write 'node [shape=box' to self.out_file. RESULT self.out_file]
+            [COMMAND Initialize rounded_filled to an empty list. RESULT rounded_filled]
+            [COMMAND If self.filled is truthy, append 'filled' to rounded_filled. RESULT rounded_filled]
+            [COMMAND If self.rounded is truthy, append 'rounded' to rounded_filled. RESULT rounded_filled]
+            [COMMAND If rounded_filled is not empty, join its elements with ', ', substitute the joined string into ', style="%s", color="black"', and write the resulting string to self.out_file. RESULT self.out_file]
+            [COMMAND If self.rounded is truthy, write ', fontname=helvetica' to self.out_file. RESULT self.out_file]
+            [COMMAND Write '] ;' followed by a newline to self.out_file. RESULT self.out_file]
+            [COMMAND If self.leaves_parallel is truthy, write 'graph [ranksep=equally, splines=polyline] ;' followed by a newline to self.out_file. RESULT self.out_file]
+            [COMMAND If self.rounded is truthy, write 'edge [fontname=helvetica] ;' followed by a newline to self.out_file. RESULT self.out_file]
+            [COMMAND If self.rotate is truthy, write 'rankdir=LR ;' followed by a newline to self.out_file. RESULT self.out_file]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively writes Graphviz DOT node and edge statements for a decision tree, collecting rank information and cropping subtrees beyond max_depth with grey placeholders." recurse]
+    [INPUTS]
+        <REF> tree </REF>: object "Decision tree object exposing children_left and children_right array-like attributes."
+        <REF> node_id </REF>: int "Current node index in the tree arrays."
+        <REF> criterion </REF>: str "Criteria name used in the node label via node_to_str."
+        <REF> parent </REF>: int | None "Parent node index, or None for the root node."
+        <REF> depth </REF>: int "Current depth in the tree; incremented on recursive calls."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that node_id is not _tree.TREE_LEAF; if it is, the ValueError exception flow is taken. RESULT none]
+            [COMMAND Assign left_child = tree.children_left[node_id] and right_child = tree.children_right[node_id]. RESULT left_child, right_child]
+            [COMMAND Check whether the current node should be fully expanded: self.max_depth is None or depth <= self.max_depth. If false, use the cropping alternative flow. RESULT none]
+            [COMMAND Within the full-expansion branch, collect rank information: if left_child == _tree.TREE_LEAF, append str(node_id) to self.ranks['leaves']; elif str(depth) not in self.ranks, set self.ranks[str(depth)] = [str(node_id)]; else append str(node_id) to self.ranks[str(depth)]. RESULT none]
+            [COMMAND Within the full-expansion branch, write the start of the node statement: self.out_file.write('%d [label=%s' % (node_id, self.node_to_str(tree, node_id, criterion))). RESULT none]
+            [COMMAND Within the full-expansion branch, if self.filled is true, write ', fillcolor="%s"' % self.get_fill_color(tree, node_id) to self.out_file. RESULT none]
+            [COMMAND Within the full-expansion branch, close the node statement by writing '] ;\n' to self.out_file. RESULT none]
+            [COMMAND Within the full-expansion branch, if parent is not None, write the edge start '%d -> %d' % (parent, node_id) to self.out_file. RESULT none]
+            [COMMAND Within the full-expansion branch, if parent == 0, compute angles = np.array([45, -45]) * ((self.rotate - .5) * -2); then write ' [labeldistance=2.5, labelangle=' to self.out_file; if node_id == 1 write '%d, headlabel="True"]' % angles[0], otherwise write '%d, headlabel="False"]' % angles[1]. RESULT none]
+            [COMMAND Within the full-expansion branch, if parent is not None, close the edge statement by writing ' ;\n' to self.out_file. RESULT none]
+            [COMMAND Within the full-expansion branch, if left_child != _tree.TREE_LEAF, recursively call self.recurse(tree, left_child, criterion=criterion, parent=node_id, depth=depth + 1) and then self.recurse(tree, right_child, criterion=criterion, parent=node_id, depth=depth + 1). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.max_depth is not None and depth > self.max_depth (the else branch of the expansion limit check)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append str(node_id) to self.ranks['leaves']. RESULT none]
+            [COMMAND Write '%d [label="(...)"' % node_id to self.out_file. RESULT none]
+            [COMMAND If self.filled is true, write ', fillcolor="#C0C0C0"' to self.out_file. RESULT none]
+            [COMMAND Close the placeholder node statement by writing '] ;\n' % node_id to self.out_file. RESULT none]
+            [COMMAND If parent is not None, write '%d -> %d ;\n' % (parent, node_id) to self.out_file. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: node_id == _tree.TREE_LEAF]
+        [LOG "Invalid node_id (the value of _tree.TREE_LEAF)"]
+        [THROW ValueError "Raised when the supplied node_id is the tree leaf sentinel."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS _MPLTreeExporter
+
+[DEFINE_WORKER: "Initializes a tree visualization exporter by forwarding configuration to the superclass, validating precision, and setting up internal plotting state for ranks, colors, characters, bounding boxes, and arrows." __init__]
+    [INPUTS]
+        <REF> max_depth </REF>: int or None "Maximum depth of the tree to render; default None."
+        <REF> feature_names </REF>: array-like of str or None "Optional names for input features; default None."
+        <REF> class_names </REF>: array-like of str or None "Optional names for target classes; default None."
+        <REF> label </REF>: str "Determines which node labels are displayed; default 'all'."
+        <REF> filled </REF>: bool "Whether nodes are filled with color; default False."
+        <REF> impurity </REF>: bool "Whether impurity values are displayed; default True."
+        <REF> node_ids </REF>: bool "Whether node identifiers are displayed; default False."
+        <REF> proportion </REF>: bool "Whether class proportions are displayed instead of raw counts; default False."
+        <REF> rotate </REF>: bool "Whether the tree plot is rotated; default False."
+        <REF> rounded </REF>: bool "Whether bounding boxes use rounded corners; default False."
+        <REF> precision </REF>: int "Number of decimal places used for displayed values; must be a non-negative Integral; default 3."
+        <REF> fontsize </REF>: int or None "Font size for text labels; default None uses the default font size."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the superclass constructor with max_depth, feature_names, class_names, label, filled, impurity, node_ids, proportion, rotate, rounded, and precision as keyword arguments. RESULT self]
+            [COMMAND Assign the fontsize parameter to self.fontsize. RESULT self.fontsize]
+            [COMMAND Validate precision: check that it is an instance of Integral and, when it is, that it is not negative; reject invalid values as described in exception_flows. RESULT validated_precision]
+            [COMMAND Initialize self.ranks as {'leaves': []}. RESULT self.ranks]
+            [COMMAND Initialize self.colors as {'bounds': None}. RESULT self.colors]
+            [COMMAND Initialize self.characters as ['#', '[', ']', '<=', newline, '', '']. RESULT self.characters]
+            [COMMAND Initialize self.bbox_args as {'fc': 'w'}. RESULT self.bbox_args]
+            [COMMAND Evaluate self.rounded to decide whether the bounding-box style should be round or square. RESULT self.rounded]
+            [COMMAND Initialize self.arrow_args as {'arrowstyle': '<-'}. RESULT self.arrow_args]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.rounded is truthy when evaluated after initializing self.bbox_args with {'fc': 'w'}.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.bbox_args['boxstyle'] to 'round'. RESULT self.bbox_args['boxstyle']]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.rounded is falsy when evaluated after initializing self.bbox_args with {'fc': 'w'}.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.bbox_args['boxstyle'] to 'square'; this explicit style is required for matplotlib versions older than 1.5. RESULT self.bbox_args['boxstyle']]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: precision is not an instance of Integral.]
+        [LOG "'precision' should be an integer. Got {type(precision)} instead."]
+        [THROW ValueError "Raises ValueError because precision must have an integer-like type."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: precision is an instance of Integral and precision is less than 0.]
+        [LOG "'precision' should be greater or equal to 0. Got {precision} instead."]
+        [THROW ValueError "Raises ValueError because precision must be a non-negative integer."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively converts a decision tree node and its children into a Reingold-Tilford Tree representation, stopping at leaf nodes or the configured maximum depth." _make_tree]
+    [INPUTS]
+        <REF> node_id </REF>: int "Identifier of the current node in the tree structure."
+        <REF> et </REF>: object "Tree structure object with children_left and children_right arrays."
+        <REF> criterion </REF>: string "Splitting criterion used to label nodes."
+        <REF> depth </REF>: int "Current depth in the recursive traversal; defaults to 0."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> tree </REF>: Tree "A Reingold-Tilford Tree object for the current node, including children when expanded."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the current node to its display name by calling node_to_str(et, node_id, criterion=criterion). RESULT name]
+            [COMMAND Determine whether the node is expandable by first checking whether et.children_left[node_id] is not equal to _tree.TREE_LEAF and, only if that holds, checking whether self.max_depth is None or depth <= self.max_depth. RESULT expandable]
+            [COMMAND If expandable, recursively build the left subtree by calling _make_tree(et.children_left[node_id], et, criterion, depth=depth + 1). RESULT left_subtree]
+            [COMMAND If expandable, recursively build the right subtree by calling _make_tree(et.children_right[node_id], et, criterion, depth=depth + 1). RESULT right_subtree]
+            [COMMAND If expandable, combine left_subtree and right_subtree into a two-element children list in left-to-right order. RESULT children]
+            [COMMAND If expandable, after building children, return Tree(name, node_id, *children). RESULT expanded_tree]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If et.children_left[node_id] equals _tree.TREE_LEAF, or self.max_depth is not None and depth > self.max_depth, then the node is a leaf or the depth limit has been reached.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return Tree(name, node_id) as a terminal node with no children. RESULT leaf_tree]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates a list of n RGB colors by stepping hue values from 25 to just below 385 in increments of 360/n and converting each hue to an [R, G, B] integer triple using an HSV-to-RGB sector lookup table." _color_brew]
+    [INPUTS]
+        <REF> n </REF>: int "Number of colors required; controls the step size 360/n and the number of generated colors."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> color_list </REF>: list "List of n [R, G, B] integer lists, each channel computed as int(255 * (channel + m))."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize color_list as an empty list to accumulate the generated RGB colors. RESULT color_list]
+            [COMMAND Set saturation s = 0.75. RESULT s]
+            [COMMAND Set value v = 0.9. RESULT v]
+            [COMMAND Compute chroma c = s * v = 0.675. RESULT c]
+            [COMMAND Compute value shift m = v - c = 0.225. RESULT m]
+            [COMMAND Iterate over integer hue values h produced by np.arange(25, 385, 360.0 / n).astype(int), where the first hue is 25, hues increase by 360/n, values before 385 are included, and each value is truncated to int. RESULT h]
+            [COMMAND Within the loop over h, compute h_bar = h / 60.0. RESULT h_bar]
+            [COMMAND Within the loop over h, compute x = c * (1 - abs((h_bar % 2) - 1)). RESULT x]
+            [COMMAND Within the loop over h, create the seven-entry RGB sector lookup table [(c, x, 0), (x, c, 0), (0, c, x), (0, x, c), (x, 0, c), (c, 0, x), (c, x, 0)] and select r, g, b from this table using index int(h_bar). RESULT r, g, b]
+            [COMMAND Within the loop over h, compute the final 8-bit RGB values as rgb = [int(255 * (r + m)), int(255 * (g + m)), int(255 * (b + m))]. RESULT rgb]
+            [COMMAND Within the loop over h, append the computed rgb list to color_list. RESULT color_list]
+            [COMMAND Return color_list. RESULT color_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Plots a decision tree by building an _MPLTreeExporter with the supplied rendering options and returning the result of exporting the tree to the specified matplotlib axis." plot_tree]
+    [INPUTS]
+        <REF> decision_tree </REF>: decision tree regressor or classifier "The decision tree to be exported to GraphViz."
+        <REF> max_depth </REF>: int or None "The maximum depth of the representation. If None, the tree is fully generated."
+        <REF> feature_names </REF>: list of strings or None "Names of each of the features."
+        <REF> class_names </REF>: list of strings, bool or None "Names of each of the target classes in ascending numerical order. Only relevant for classification and not supported for multi-output. If True, shows a symbolic representation of the class name."
+        <REF> label </REF>: string in {'all', 'root', 'none'} "Whether to show informative labels for impurity, etc. 'all' shows at every node, 'root' shows only at the top root node, and 'none' does not show at any node."
+        <REF> filled </REF>: bool "When True, paint nodes to indicate majority class for classification, extremity of values for regression, or purity of node for multi-output."
+        <REF> impurity </REF>: bool "When True, show the impurity at each node."
+        <REF> node_ids </REF>: bool "When True, show the ID number on each node."
+        <REF> proportion </REF>: bool "When True, change the display of 'values' and/or 'samples' to be proportions and percentages respectively."
+        <REF> rotate </REF>: bool "When True, orient tree left to right rather than top-down."
+        <REF> rounded </REF>: bool "When True, draw node boxes with rounded corners and use Helvetica fonts instead of Times-Roman."
+        <REF> precision </REF>: int "Number of digits of precision for floating point in the values of impurity, threshold and value attributes of each node."
+        <REF> ax </REF>: matplotlib axis or None "Axes to plot to. If None, use current axis. Any previous content is cleared."
+        <REF> fontsize </REF>: int or None "Size of text font. If None, determined automatically to fit figure."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> annotations </REF>: list of artists "List containing the artists for the annotation boxes making up the tree."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a new _MPLTreeExporter instance with max_depth=max_depth, feature_names=feature_names, class_names=class_names, label=label, filled=filled, impurity=impurity, node_ids=node_ids, proportion=proportion, rotate=rotate, rounded=rounded, precision=precision, fontsize=fontsize. RESULT exporter]
+            [COMMAND Call exporter.export with decision_tree and ax=ax, and return the resulting list of annotation artists. RESULT annotations]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Exports a fitted decision tree to GraphViz DOT format by writing DOT output to a file object, a file path, or a returned string, with configurable labels, colors, orientation, rounding, and precision." export_graphviz]
+    [INPUTS]
+        <REF> decision_tree </REF>: decision tree classifier "The fitted decision tree to be exported to GraphViz DOT format."
+        <REF> out_file </REF>: file object or string or None "Handle or name of the output file. If None, the result is returned as a string."
+        <REF> max_depth </REF>: int or None "Maximum depth of the representation. If None, the tree is fully generated."
+        <REF> feature_names </REF>: list of str or None "Names of each of the features."
+        <REF> class_names </REF>: list of str, bool, or None "Names of each target class in ascending numerical order. If True, shows a symbolic representation of the class name."
+        <REF> label </REF>: str "Whether to show informative labels for impurity, etc.; one of 'all', 'root', or 'none'."
+        <REF> filled </REF>: bool "When True, paint nodes to indicate majority class, regression extremity, or node purity."
+        <REF> leaves_parallel </REF>: bool "When True, draw all leaf nodes at the bottom of the tree."
+        <REF> impurity </REF>: bool "When True, show the impurity at each node."
+        <REF> node_ids </REF>: bool "When True, show the ID number on each node."
+        <REF> proportion </REF>: bool "When True, display 'values' and/or 'samples' as proportions and percentages respectively."
+        <REF> rotate </REF>: bool "When True, orient the tree left to right rather than top-down."
+        <REF> rounded </REF>: bool "When True, draw node boxes with rounded corners and use Helvetica fonts instead of Times-Roman."
+        <REF> special_characters </REF>: bool "When False, ignore special characters for PostScript compatibility."
+        <REF> precision </REF>: int "Number of digits of precision for floating point values of impurity, threshold, and value attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> dot_data </REF>: string "String representation of the input tree in GraphViz DOT format, returned only when out_file is None; otherwise the function returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that decision_tree is fitted by calling check_is_fitted(decision_tree, 'tree_'). RESULT none]
+            [COMMAND Initialize own_file to False and return_string to False. RESULT own_file, return_string]
+            [COMMAND Enter the try block that manages output handling and export. RESULT none]
+            [COMMAND Within the try block, if out_file is a string, open it with open(out_file, 'w', encoding='utf-8'), assign the resulting file object to out_file, and set own_file to True. RESULT out_file, own_file]
+            [COMMAND Within the try block, if out_file is None, set return_string to True and assign StringIO() to out_file. RESULT out_file, return_string]
+            [COMMAND Within the try block, construct _DOTTreeExporter with out_file, max_depth, feature_names, class_names, label, filled, leaves_parallel, impurity, node_ids, proportion, rotate, rounded, special_characters, and precision. RESULT exporter]
+            [COMMAND Within the try block, call exporter.export(decision_tree) to write the DOT representation to out_file. RESULT none]
+            [COMMAND Within the try block, if return_string is True, store exporter.out_file.getvalue() in return_value as the pending return value. RESULT return_value]
+            [COMMAND Execute the finally block: if own_file is True, close out_file; this runs on normal completion and on exception propagation. RESULT none]
+            [COMMAND If return_string is True, return return_value; otherwise return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the maximum depth of the subtree rooted at the given node by recursively recording visited node depths and descending only when both child pointers exist, with the starting node counted as depth 1." _compute_depth]
+    [INPUTS]
+        <REF> tree </REF>: object "Binary tree structure exposing children_left and children_right arrays, where -1 indicates no child."
+        <REF> node </REF>: int "Index of the node whose subtree depth is to be computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> max_depth </REF>: int "Maximum depth among visited nodes in the subtree, with the starting node counted as depth 1."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested recursive helper compute_depth_(current_node, current_depth, children_left, children_right, depths) that appends current_depth to depths, reads left = children_left[current_node] and right = children_right[current_node], and if both left != -1 and right != -1, recursively calls compute_depth_ on the left child with current_depth + 1 and then on the right child with current_depth + 1, passing the same children arrays and depths; if either child is missing, it does not recurse further. RESULT compute_depth_]
+            [COMMAND Initialize depths to an empty list. RESULT depths]
+            [COMMAND Call compute_depth_ with current_node=node, current_depth=1, children_left=tree.children_left, children_right=tree.children_right, and depths=depths so that depths is populated by the recursive traversal. RESULT depths]
+            [COMMAND Return the maximum value contained in depths. RESULT max_depth]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Exports a fitted scikit-learn decision tree as a human-readable text report by recursively rendering split rules, leaf class/value information, and depth-limited truncated branches." export_text]
+    [INPUTS]
+        <REF> decision_tree </REF>: object "Fitted DecisionTreeClassifier or DecisionTreeRegressor instance to export."
+        <REF> feature_names </REF>: list or None "Optional list of feature names; if None, generic feature_<index> names are generated."
+        <REF> max_depth </REF>: int "Maximum depth of the tree to export; default is 10."
+        <REF> spacing </REF>: int "Number of spaces between edges; default is 3."
+        <REF> decimals </REF>: int "Number of decimal digits to display for thresholds and values; default is 2."
+        <REF> show_weights </REF>: bool "Whether to show classification weights on leaves; default is False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> report </REF>: string "Text summary of all rules in the decision tree."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call check_is_fitted(decision_tree, 'tree_') to confirm that the estimator has been fitted. RESULT none]
+            [COMMAND Assign decision_tree.tree_ to tree_. RESULT tree_]
+            [COMMAND Assign decision_tree.classes_ to class_names. RESULT class_names]
+            [COMMAND Set right_child_fmt to '{} {} <= {}\n', left_child_fmt to '{} {} >  {}\n', and truncation_fmt to '{} {}\n'. RESULT right_child_fmt, left_child_fmt, truncation_fmt]
+            [COMMAND If max_depth is less than 0, raise ValueError with message 'max_depth bust be >= 0, given %d' formatted with max_depth. RESULT none]
+            [COMMAND If feature_names is not None and len(feature_names) does not equal tree_.n_features, raise ValueError with message 'feature_names must contain %d elements, got %d' formatted with tree_.n_features and len(feature_names). RESULT none]
+            [COMMAND If spacing is less than or equal to 0, raise ValueError with message 'spacing must be > 0, given %d' formatted with spacing. RESULT none]
+            [COMMAND If decimals is less than 0, raise ValueError with message 'decimals must be >= 0, given %d' formatted with decimals. RESULT none]
+            [COMMAND Select value_fmt: if decision_tree is a DecisionTreeClassifier, set it to '{}{} weights: {}\n' and then, if show_weights is false, override it to '{}{}{}\n'; otherwise set it to '{}{} value: {}\n'. RESULT value_fmt]
+            [COMMAND If feature_names is truthy, build feature_names_ as [feature_names[i] for i in tree_.feature]; otherwise build it as ['feature_' + str(i) for i in tree_.feature]. RESULT feature_names_]
+            [COMMAND Reset export_text.report to an empty string. RESULT export_text.report]
+            [COMMAND Define the helper _add_leaf(value, class_name, indent) that appends a leaf line to export_text.report. It sets is_classification to whether decision_tree is a DecisionTreeClassifier; if show_weights is true or is_classification is false, it formats each value component with decimals precision as a comma-space separated list wrapped in square brackets, removing the trailing comma and space; if is_classification, it appends ' class: ' plus str(class_name) to the formatted value; finally it appends value_fmt.format(indent, '', val) to export_text.report. RESULT _add_leaf]
+            [COMMAND Define the recursive helper print_tree_recurse(node, depth) that appends formatted tree lines to export_text.report. It computes indent as ('|' + ' ' * spacing) repeated depth times, then replaces the trailing spacing characters with '-' * spacing. It extracts value from tree_.value[node][0] if tree_.n_outputs == 1, otherwise from tree_.value[node].T[0], and sets class_name to np.argmax(value); if tree_.n_classes[0] != 1 and tree_.n_outputs == 1, it maps class_name through class_names. When depth <= max_depth + 1 and the node is an internal split with tree_.feature[node] != _tree.TREE_UNDEFINED, it formats threshold to decimals precision, appends right_child_fmt with that threshold (the <= branch), recurses into children_left, appends left_child_fmt with that threshold (the > branch), and recurses into children_right; for a leaf node it calls _add_leaf. When depth > max_depth + 1, it computes subtree_depth = _compute_depth(tree_, node); if subtree_depth == 1 it calls _add_leaf, otherwise it appends truncation_fmt with 'truncated branch of depth %d' formatted with subtree_depth. RESULT print_tree_recurse]
+            [COMMAND Call print_tree_recurse(0, 1) to generate the complete text report. RESULT export_text.report]
+            [COMMAND Return export_text.report as the text report. RESULT report]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: decision_tree is not fitted]
+        [LOG "check_is_fitted detects the tree estimator has not been fitted"]
+        [THROW NotFittedError "The decision tree estimator is missing the fitted tree_ attribute."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: max_depth < 0]
+        [LOG "max_depth bust be >= 0, given {max_depth}"]
+        [THROW ValueError "max_depth is negative."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: feature_names is not None and len(feature_names) != tree_.n_features]
+        [LOG "feature_names must contain {tree_.n_features} elements, got {len(feature_names)}"]
+        [THROW ValueError "feature_names length does not match the number of features in the decision tree."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: spacing <= 0]
+        [LOG "spacing must be > 0, given {spacing}"]
+        [THROW ValueError "spacing is not positive."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: decimals < 0]
+        [LOG "decimals must be >= 0, given {decimals}"]
+        [THROW ValueError "decimals is negative."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

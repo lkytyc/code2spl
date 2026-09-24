@@ -1,0 +1,304 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.Scanner;
+2   public class Solution {
+3       static Long shootDamage;
+4       static Long shootCounter;
+5       static Long shield;
+6       static String code;
+7       static Long damage;
+8       static Long movements;
+9       static int lastIterableElement;
+10      public static String hackTheSystem(String[] softwareToHack) {
+11          shootDamage = 1L;
+12          shootCounter = 0L;
+13          shield = Long.parseLong(softwareToHack[0]);
+14          code = softwareToHack[1];
+15          damage = 0L;
+16          movements = 0L;
+17          int sizeScript = code.length() - 1;
+18          lastIterableElement = sizeScript;
+19          for (int i = 0; i < code.length(); i++) {
+20              if (code.charAt(i) == 'S') {
+21                  damage += shootDamage;
+22                  shootCounter++;
+23              }
+24              if (code.charAt(i) == 'C') {
+25                  shootDamage *= 2;
+26              }
+27          }
+28          if (damage <= shield) {
+29              return String.valueOf(movements);
+30          }
+31          if (shootCounter > shield) {
+32              return "IMPOSSIBLE";
+33          }
+34          for (int i = sizeScript; i >= 0; i--) {
+35              for (int j = sizeScript - 1; j >= 0; j--) {
+36                  if(code.charAt(j) == 'S' && code.charAt(i) == 'S') {
+37                      i--;
+38                      continue;
+39                  }
+40                  if(code.charAt(i) == 'C') {
+41                      shootDamage /= 2;
+42                      i--;
+43                      lastIterableElement--;
+44                      continue;
+45                  }
+46                  if (code.charAt(j) == 'C' && code.charAt(i) == 'S') {
+47                      movements++;
+48                      damage -= (shootDamage / 2);
+49                      char[] c = code.toCharArray();
+50                      if (damage <= shield) {
+51                          return String.valueOf(movements);
+52                      }
+53                      char temp = c[j];
+54                      c[j] = c[i];
+55                      c[i] = temp;
+56                      code = String.valueOf(c);
+57                      if (i == lastIterableElement) {
+58                          shootDamage /= 2;
+59                          if(i>0) {
+60                              i--;
+61                          }
+62                      } else {
+63                          i++;
+64                          j += 2;
+65                      }
+66                  }
+67              }
+68          }
+69          return String.valueOf(movements);
+70      }
+71      private static final Scanner scan = new Scanner(System.in);
+72      public static void main(String[] args) {
+73          int numberOfCases = Integer.parseInt(scan.nextLine());
+74          String[][] cases = new String[numberOfCases][2];
+75          for (int i = 0; i < numberOfCases; i++) {
+76              String[] caseNumber = scan.nextLine().split(" ");
+77              cases[i][0] = caseNumber[0];
+78              cases[i][1] = caseNumber[1];
+79          }
+80          for (int i = 0; i < numberOfCases; i++) {
+81              System.out.println("Case #" + i + ": " + hackTheSystem(cases[i]));
+82          }
+83      }
+84  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(c,54)` in function `hackTheSystem`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+This code calculates the minimum number of adjacent swaps needed to reduce the total damage from a sequence of "S" (shoot) and "C" (charge) commands to be within a given shield capacity. It first computes the initial damage, then if it's already within limits returns 0, if impossible returns "IMPOSSIBLE", otherwise it iteratively swaps adjacent "CS" pairs to reduce damage until the shield threshold is met, counting each swap.
+

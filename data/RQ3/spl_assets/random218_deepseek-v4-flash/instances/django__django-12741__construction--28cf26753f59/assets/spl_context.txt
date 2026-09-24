@@ -1,0 +1,1584 @@
+# FILE: django/core/management/commands/flush.py
+# CLASS Command
+
+[DEFINE_WORKER: "Registers the --noinput/--no-input boolean flag and the --database string option on the provided argument parser." add_arguments]
+    [INPUTS]
+        <REF> self </REF>: object "The command instance on which the method is called."
+        <REF> parser </REF>: ArgumentParser "The argument parser to which the command-line options are added."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Add the boolean flag options '--noinput' and '--no-input' to the parser with action 'store_false', destination 'interactive', implicit default True, and help text 'Tells Django to NOT prompt the user for input of any kind.' RESULT parser]
+            [COMMAND Add the string option '--database' to the parser with default DEFAULT_DB_ALIAS, destination 'database', and help text 'Nominates a database to flush. Defaults to the "default" database.' RESULT parser]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Implements the Django flush command: reads database and flush options, registers app management modules, generates SQL to flush Django tables, asks for interactive confirmation, and either executes the SQL with an optional post-migrate signal or cancels." handle]
+    [INPUTS]
+        <REF> self </REF>: object "Django management command instance; self.style is assigned and self.stdout is used to write the cancellation message."
+        <REF> options </REF>: dict "Keyword arguments containing required keys 'database', 'verbosity', and 'interactive', and optional keys 'reset_sequences', 'allow_cascade', and 'inhibit_post_migrate'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extract database from the required options key 'database'. RESULT database]
+            [COMMAND Look up connection = connections[database]. RESULT connection]
+            [COMMAND Extract verbosity from the required options key 'verbosity'. RESULT verbosity]
+            [COMMAND Extract interactive from the required options key 'interactive'. RESULT interactive]
+            [COMMAND Extract the optional stealth option reset_sequences from options.get('reset_sequences', True), defaulting to True if absent. RESULT reset_sequences]
+            [COMMAND Extract the optional stealth option allow_cascade from options.get('allow_cascade', False), defaulting to False if absent. RESULT allow_cascade]
+            [COMMAND Extract the optional stealth option inhibit_post_migrate from options.get('inhibit_post_migrate', False), defaulting to False if absent. RESULT inhibit_post_migrate]
+            [COMMAND Set self.style to the return value of no_style(). RESULT self.style]
+            [COMMAND For each app_config in apps.get_app_configs(), within the loop try to import_module('.management', app_config.name); if an ImportError is raised, silently pass and continue to the next app_config; any other exception is not caught by this block and propagates. RESULT none]
+            [COMMAND Generate sql_list = sql_flush(self.style, connection, only_django=True, reset_sequences=reset_sequences, allow_cascade=allow_cascade). RESULT sql_list]
+            [COMMAND Determine confirm: if interactive is truthy, prompt the user with the flush warning message interpolated with connection.settings_dict['NAME'] and assign the typed response to confirm; otherwise assign the exact string 'yes' to confirm. RESULT confirm]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: confirm is exactly the case-sensitive string 'yes']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Try to execute connection.ops.execute_sql_flush(database, sql_list); if an exception is raised, use the CommandError exception flow. RESULT none]
+            [COMMAND After a successful flush, if sql_list is truthy and inhibit_post_migrate is falsy (using short-circuit evaluation), call emit_post_migrate_signal(verbosity, interactive, database). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: confirm is not exactly the case-sensitive string 'yes']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Write the text 'Flush cancelled.' followed by a newline to self.stdout. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: connection.ops.execute_sql_flush(database, sql_list) raises an Exception]
+        [LOG "The database name from connection.settings_dict['NAME'] couldn't be flushed. Possible reasons: the database isn't running or isn't configured correctly; at least one expected database table doesn't exist; the SQL was invalid. Hint: look at the output of 'django-admin sqlflush' — that is the SQL this command wasn't able to run. The original exception is chained via 'from exc'."]
+        [THROW CommandError "Raised when the database flush operation fails; the message includes the database name and a troubleshooting hint, with the original exception chained."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# FILE: django/db/backends/base/operations.py
+# CLASS BaseDatabaseOperations
+
+[DEFINE_WORKER: "Initializes a new instance by storing the supplied connection object and setting the internal cache to None." __init__]
+    [INPUTS]
+        <REF> connection </REF>: object "External connection object to be stored on the instance; may be None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the caller-supplied connection object by reference into the instance attribute self.connection; it may be None. RESULT self.connection]
+            [COMMAND Initialize the instance attribute self._cache to the constant None. RESULT self._cache]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns None to indicate that no SQL is needed to support auto-incrementing primary keys when a table is created." autoinc_sql]
+    [INPUTS]
+        <REF> table </REF>: object "The table for which auto-increment SQL is being requested."
+        <REF> column </REF>: object "The column that requires auto-increment support."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: null "Always None, meaning no SQL is necessary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately, indicating that no SQL is necessary for auto-incrementing primary keys. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the length of objs as the maximum allowed batch size for the backend." bulk_batch_size]
+    [INPUTS]
+        <REF> fields </REF>: list "Fields to be inserted in the batch."
+        <REF> objs </REF>: Sized "All objects to be inserted; must support the len() operation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> batch_size </REF>: int "Maximum allowed batch size, equal to the number of objects in objs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the length of the objs collection by calling len(objs). RESULT batch_size]
+            [COMMAND Return batch_size from the bulk_batch_size method. RESULT batch_size]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a parameterized SQL query template that selects the first cache_key after the n smallest cache keys, used by the database cache backend to determine where to start culling." cache_key_culling_sql]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_template </REF>: string "Parameterized SQL query string with a table-name placeholder and an OFFSET placeholder for later binding."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the SQL query template literal 'SELECT cache_key FROM %s ORDER BY cache_key LIMIT 1 OFFSET %%s', preserving `%s` as the table placeholder and `%%s` as the deferred OFFSET placeholder. RESULT sql_template]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a constant SQL cast placeholder string '%s' for use when casting the result of a union to the output field's type." unification_cast_sql]
+    [INPUTS]
+        <REF> output_field </REF>: object "The field instance for which the cast SQL would be generated; unused by the current implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The constant SQL cast placeholder string '%s'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant string literal '%s' as the SQL cast template. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to require subclasses of BaseDatabaseOperations to provide SQL for extracting a year, month, or day value from a date field." date_extract_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The BaseDatabaseOperations instance on which the method is called."
+        <REF> lookup_type </REF>: string "The extraction type: 'year', 'month', or 'day'."
+        <REF> field_name </REF>: string "The name of the date field from which to extract the value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept lookup_type and field_name parameters as the intended inputs for extraction. RESULT method_context]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The method is called, because it is a subclass responsibility stub that always raises.]
+        [LOG "subclasses of BaseDatabaseOperations may require a date_extract_sql() method"]
+        [THROW NotImplementedError "Indicates that subclasses of BaseDatabaseOperations must implement date_extract_sql()."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to require subclasses of BaseDatabaseOperations to provide a date_interval_sql implementation for timedelta expressions." date_interval_sql]
+    [INPUTS]
+        <REF> timedelta </REF>: datetime.timedelta "The timedelta value for which a SQL date interval expression should be generated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enter the date_interval_sql method and raise NotImplementedError because the base class does not implement SQL date interval generation. RESULT _exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The method is called on a base class that has not overridden date_interval_sql.]
+        [LOG "subclasses of BaseDatabaseOperations may require a date_interval_sql() method"]
+        [THROW NotImplementedError "Indicates that the date_interval_sql method must be implemented by a subclass of BaseDatabaseOperations."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Base implementation of date_trunc_sql that raises NotImplementedError, requiring subclasses to provide SQL for truncating a date field to year, month, or day." date_trunc_sql]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "Truncation specificity: 'year', 'month', or 'day'."
+        <REF> field_name </REF>: string "Name of the date field to truncate in the generated SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'subclasses of BaseDatabaseOperations may require a date_trunc_sql() method.' RESULT not_implemented_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Always, because the method body unconditionally raises NotImplementedError.]
+        [LOG "subclasses of BaseDatabaseOperations may require a date_trunc_sql() method."]
+        [THROW NotImplementedError "Indicates that the base class does not implement date_trunc_sql and a subclass must provide the SQL truncation behavior."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to require subclasses to provide SQL that casts a datetime value to a date value." datetime_cast_date_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The BaseDatabaseOperations instance on which the method is called."
+        <REF> field_name </REF>: string "The name of the datetime field to be cast to a date."
+        <REF> tzname </REF>: string "The timezone name used in the datetime-to-date cast."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message that subclasses of BaseDatabaseOperations may require a datetime_cast_date_sql() method. RESULT not_implemented_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The method is called on the base implementation without a subclass override.]
+        [LOG "NotImplementedError: subclasses of BaseDatabaseOperations may require a datetime_cast_date_sql() method."]
+        [THROW NotImplementedError "Indicates that the SQL-specific datetime-to-date casting operation is not implemented by the base class."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to require subclasses to implement SQL for casting a datetime value to a time value." datetime_cast_time_sql]
+    [INPUTS]
+        <REF> field_name </REF>: str "Name of the datetime field to cast to a time value."
+        <REF> tzname </REF>: str "Name of the timezone to use for the cast, if applicable."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'subclasses of BaseDatabaseOperations may require a datetime_cast_time_sql() method' to indicate that the base class method must be overridden. RESULT exception_raised]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: This base method is invoked without being overridden by a subclass.]
+        [LOG "subclasses of BaseDatabaseOperations may require a datetime_cast_time_sql() method"]
+        [THROW NotImplementedError "Indicates that a concrete database operations subclass must implement datetime_cast_time_sql()."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to require concrete database operation subclasses to provide SQL for extracting the specified datetime part from a datetime field." datetime_extract_sql]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "The datetime part to extract: 'year', 'month', 'day', 'hour', 'minute', or 'second'."
+        <REF> field_name </REF>: string "The name of the datetime field from which the part should be extracted."
+        <REF> tzname </REF>: string or null "The timezone name to use for the extraction, if any."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'subclasses of BaseDatabaseOperations may require a datetime_extract_sql() method'. RESULT not_implemented_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: datetime_extract_sql() is called without a subclass override that provides the required database-specific SQL.]
+        [LOG "NotImplementedError: subclasses of BaseDatabaseOperations may require a datetime_extract_sql() method"]
+        [THROW NotImplementedError "Indicates that the method must be implemented by a subclass of BaseDatabaseOperations."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defines an abstract database-operation hook that raises NotImplementedError because subclasses must provide database-specific SQL for truncating a datetime field to the requested lookup_type specificity." datetime_trunc_sql]
+    [INPUTS]
+        <REF> self </REF>: object "Bound BaseDatabaseOperations instance on which the method is called."
+        <REF> lookup_type </REF>: str "Truncation specificity: 'year', 'month', 'day', 'hour', 'minute', or 'second'."
+        <REF> field_name </REF>: str "Database column or field name of the datetime value to truncate."
+        <REF> tzname </REF>: str "Name of the time zone to use for the SQL truncation, if any."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept the lookup_type, field_name, and tzname arguments and immediately raise NotImplementedError with message 'subclasses of BaseDatabaseOperations may require a datetime_trunc_sql() method'. RESULT exception_raised]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When this method is called on the base class without a subclass override.]
+        [LOG "subclasses of BaseDatabaseOperations may require a datetime_trunc_sql() method"]
+        [THROW NotImplementedError "Indicates that a subclass must implement datetime_trunc_sql() to provide database-specific SQL for datetime truncation."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to require subclasses to provide a database-specific SQL implementation that truncates the given time field to the requested hour, minute, or second specificity." time_trunc_sql]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "The truncation specificity: 'hour', 'minute', or 'second'."
+        <REF> field_name </REF>: string "The name of the time field to be truncated in the generated SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Document that the intended behavior is to return SQL truncating the given time field to the specified lookup_type precision. RESULT _documentation]
+            [COMMAND Raise NotImplementedError with the message that subclasses of BaseDatabaseOperations may require a time_trunc_sql() method. RESULT _exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Always, because the base implementation unconditionally raises NotImplementedError.]
+        [LOG "subclasses of BaseDatabaseOperations may require a time_trunc_sql() method"]
+        [THROW NotImplementedError "Signals that subclasses must override time_trunc_sql() with a database-specific implementation."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the SQL expression for extracting the specified time part from the given field by delegating to self.date_extract_sql." time_extract_sql]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "The time part to extract; one of 'hour', 'minute', or 'second'."
+        <REF> field_name </REF>: string "The name of the time field from which the value is extracted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The SQL expression returned by date_extract_sql for extracting the requested time part."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.date_extract_sql with lookup_type and field_name, then return its result directly. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the SQL fragment used to mark a constraint as initially deferred during CREATE TABLE; the implementation returns an empty string." deferrable_sql]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_fragment </REF>: string "The SQL fragment to declare a constraint as INITIALLY DEFERRED; currently an empty string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the literal empty string as the SQL snippet for making a constraint initially deferred during CREATE TABLE. RESULT sql_fragment]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a plain SQL DISTINCT clause with an empty parameter list when no fields are provided, and raises NotSupportedError if fields are supplied because DISTINCT ON fields is unsupported." distinct_sql]
+    [INPUTS]
+        <REF> fields </REF>: iterable "The fields to use for DISTINCT ON. If truthy, the database backend raises NotSupportedError because DISTINCT ON fields is unsupported."
+        <REF> params </REF>: list "The SQL parameter list passed to the method; it is unused in this implementation and the returned result always contains an empty params list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> distinct_sql_tuple </REF>: tuple "A two-item tuple (['DISTINCT'], []) containing the SQL DISTINCT clause and an empty list of SQL parameters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether the fields argument is truthy. RESULT fields_truthiness]
+            [COMMAND If fields is falsy, return the tuple (['DISTINCT'], []). RESULT distinct_sql_tuple]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: fields is truthy]
+        [LOG "DISTINCT ON fields is not supported by this database backend"]
+        [THROW NotSupportedError "Raised because DISTINCT ON fields is not supported by this database backend."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fetches and returns the single row produced by an INSERT ... RETURNING statement from the provided cursor, or None if no row is available." fetch_returned_insert_columns]
+    [INPUTS]
+        <REF> cursor </REF>: database cursor "Active cursor positioned after an INSERT ... RETURNING statement."
+        <REF> returning_params </REF>: unknown "Not referenced by the method body; accepted for interface compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple or None "The fetched row as a tuple of column values, or None if the result set is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call fetchone() on the cursor to obtain the next row from the result set of the just-executed INSERT ... RETURNING statement. RESULT row]
+            [COMMAND Return row to the caller. row is a tuple of the RETURNING column values if a row exists, or None if no row is available. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Return the SQL format string '%s' used to represent the target column in a WHERE clause, without using the supplied db_type or internal_type values." field_cast_sql]
+    [INPUTS]
+        <REF> db_type </REF>: unknown "The database column type, such as 'BLOB' or 'VARCHAR'."
+        <REF> internal_type </REF>: unknown "The internal field type, such as 'GenericIPAddressField'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The SQL cast template literal '%s' containing a placeholder for the column."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the literal string '%s' as the SQL cast template. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty list so that the ORDER BY clause includes nothing and no ordering is applied." force_no_ordering]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list used in the ORDER BY clause to force no ordering."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list to force no ordering in the ORDER BY clause. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a SQL FOR UPDATE clause with optional OF, NOWAIT, and SKIP LOCKED suffixes according to the supplied parameters." for_update_sql]
+    [INPUTS]
+        <REF> nowait </REF>: bool "If true, appends the NOWAIT suffix to the clause."
+        <REF> skip_locked </REF>: bool "If true, appends the SKIP LOCKED suffix to the clause."
+        <REF> of </REF>: iterable "Iterable of column names or expressions to include in an OF clause; if falsy, no OF clause is generated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The constructed FOR UPDATE SQL clause string, such as 'FOR UPDATE OF a, b NOWAIT SKIP LOCKED'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Start with the literal string 'FOR UPDATE' as the base clause. RESULT base_clause]
+            [COMMAND If `of` is truthy, join its items with ', ', prefix the joined string with ' OF ', and set `of_clause` to that value; otherwise set `of_clause` to an empty string. RESULT of_clause]
+            [COMMAND If `nowait` is truthy, set `nowait_clause` to ' NOWAIT'; otherwise set `nowait_clause` to an empty string. RESULT nowait_clause]
+            [COMMAND If `skip_locked` is truthy, set `skip_locked_clause` to ' SKIP LOCKED'; otherwise set `skip_locked_clause` to an empty string. RESULT skip_locked_clause]
+            [COMMAND Concatenate `base_clause`, `of_clause`, `nowait_clause`, and `skip_locked_clause` in that order, then return the resulting string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts low and high query marks into a (limit, offset) pair, preferring an explicit high mark, falling back to a no-limit database value when only an offset is present, and returning (None, offset) otherwise." _get_limit_offset_params]
+    [INPUTS]
+        <REF> low_mark </REF>: integer or None "Lower boundary or starting position; falsy values are normalized to 0."
+        <REF> high_mark </REF>: integer or None "Upper boundary; if not None, used to compute the limit as high_mark - offset."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A (limit, offset) tuple. Limit is high_mark - offset when high_mark is not None, the database no-limit value when high_mark is None and offset is non-zero, or None otherwise. Offset is low_mark if truthy, otherwise 0."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute offset as low_mark if low_mark is truthy; otherwise set offset to 0. RESULT offset]
+            [COMMAND If high_mark is not None, calculate limit as high_mark - offset and return the tuple (limit, offset). RESULT explicit_limit_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When high_mark is None and offset is non-zero]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the database no-limit value by calling self.connection.ops.no_limit_value(). RESULT no_limit_value]
+            [COMMAND Return the tuple (no_limit_value, offset). RESULT offset_only_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When high_mark is None and offset is 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the tuple (None, offset). RESULT fallback_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a SQL LIMIT/OFFSET clause from the pagination boundary marks by using the helper to compute limit and offset and joining the non-empty generated fragments." limit_offset_sql]
+    [INPUTS]
+        <REF> low_mark </REF>: int "Starting index of the pagination range; passed to the helper to derive the OFFSET value."
+        <REF> high_mark </REF>: int|None "Ending index of the pagination range; when not None, used to derive the LIMIT value as high_mark minus low_mark."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_clause </REF>: string "A SQL string containing LIMIT and/or OFFSET clauses joined by a single space, or an empty string when neither fragment is truthy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._get_limit_offset_params(low_mark, high_mark), which computes offset as low_mark and limit as high_mark - low_mark when high_mark is not None, and unpack the returned tuple into limit and offset. RESULT limit, offset]
+            [COMMAND If limit is truthy, set limit_fragment to the string 'LIMIT %d' formatted with limit; otherwise set limit_fragment to None. RESULT limit_fragment]
+            [COMMAND If offset is truthy, set offset_fragment to the string 'OFFSET %d' formatted with offset; otherwise set offset_fragment to None. RESULT offset_fragment]
+            [COMMAND Build the final sql_clause by joining the non-None values among limit_fragment and offset_fragment in that order with a single space; this yields an empty string if both fragments are None. RESULT sql_clause]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a debug string containing the raw SQL query and the stringified query parameters, normalizing list/tuple/None/mapping params into a consistent tuple or dict representation." last_executed_query]
+    [INPUTS]
+        <REF> cursor </REF>: object "Database cursor passed for interface compatibility; not used by this implementation."
+        <REF> sql </REF>: str "Raw SQL query string containing placeholders."
+        <REF> params </REF>: list, tuple, dict, or None "Query parameters. Lists and tuples are converted to a tuple of stringified values; None becomes an empty tuple; other mapping objects have keys and values stringified into a dict."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Formatted debug string: 'QUERY = <repr(sql)> - PARAMS = <repr(u_params)>'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define a local helper function to_string(s) that returns force_str(s, strings_only=True, errors='replace'). RESULT to_string]
+            [COMMAND Normalize params into u_params by selecting the first matching type branch (list/tuple, None, or mapping) and executing the corresponding steps. RESULT u_params]
+            [COMMAND Return the string 'QUERY = %r - PARAMS = %r' formatted with sql and u_params using Python repr formatting. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: params is a list or tuple, including subclasses of either.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Apply to_string to every element of params and assign u_params as a tuple of the resulting string values. RESULT u_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: params is None, reached only when the list/tuple check has failed.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign u_params as an empty tuple. RESULT u_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: params is neither a list/tuple nor None, so it is treated as a mapping with an items() method.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each key-value pair in params.items(), apply to_string to both the key and the value, and assign u_params as the resulting dict. RESULT u_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the database-generated auto-incrementing ID for the most recent INSERT operation on the given cursor by reading cursor.lastrowid." last_insert_id]
+    [INPUTS]
+        <REF> cursor </REF>: object "A database cursor object that has just executed an INSERT statement and exposes the lastrowid attribute."
+        <REF> table_name </REF>: str "Name of the table that received the INSERT. Accepted for interface compatibility; not used in this method."
+        <REF> pk_name </REF>: str "Name of the primary-key column. Accepted for interface compatibility; not used in this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> last_insert_id </REF>: int | None "The auto-incrementing row ID generated by the last INSERT operation on the cursor, or the driver-specific default value when no row ID is available."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of cursor.lastrowid as the last inserted ID. RESULT last_insert_id]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the fixed SQL lookup-cast pattern '%s' containing a placeholder for the column, regardless of the provided lookup type or internal type." lookup_cast]
+    [INPUTS]
+        <REF> lookup_type </REF>: string "The lookup type such as 'contains' or 'like'; ignored by the method."
+        <REF> internal_type </REF>: string "Optional internal type; ignored by the method and defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> lookup_cast </REF>: string "The constant SQL lookup-cast pattern '%s' with a placeholder for the column being searched."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant lookup-cast pattern '%s'. RESULT lookup_cast]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns None to indicate that the backend does not impose a maximum number of items in a single IN list condition." max_in_list_size]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> none_result </REF>: NoneType "Always None, meaning there is no backend-imposed limit on the number of items allowed in a single IN list condition."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None to indicate that the backend imposes no maximum number of items in a single IN list condition. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns None to indicate that table and column names have no maximum length limit." max_name_length]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: NoneType "Always None, representing that there is no maximum length limit for table and column names."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None as the maximum name length to indicate there is no limit. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defines the base implementation of no_limit_value that raises NotImplementedError to require subclasses to supply the LIMIT infinity value." no_limit_value]
+    [INPUTS]
+        <REF> self </REF>: BaseDatabaseOperations "The database operations instance on which the method is called."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'subclasses of BaseDatabaseOperations may require a no_limit_value() method'. RESULT no_limit_value_exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The base implementation is invoked without being overridden by a subclass.]
+        [LOG "NotImplementedError: subclasses of BaseDatabaseOperations may require a no_limit_value() method"]
+        [THROW NotImplementedError "Indicates that subclasses must implement no_limit_value() to provide the value for LIMIT infinity."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the literal string 'DEFAULT' as the sentinel value that tells an INSERT statement to use the field's default value." pk_default_value]
+    [INPUTS]
+        <REF> self </REF>: object "The method receiver; not used in the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The literal string 'DEFAULT', used as the value to specify that the field should use its default value during an INSERT statement."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string literal 'DEFAULT' to represent the field's default-value sentinel. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Splits an input SQL script into individual statements, removes comments via formatting, and returns them as a list ready for sequential cursor.execute() calls." prepare_sql_script]
+    [INPUTS]
+        <REF> sql </REF>: str "SQL script text that may contain multiple statements and comments."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list of str "List of formatted SQL statements with comments stripped; empty if no non-empty statements are present."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Partition the input sql into individual SQL statements using sqlparse.split(sql). RESULT statements]
+            [COMMAND For each truthy statement in statements, format the statement with sqlparse.format(statement, strip_comments=True) to remove comments and normalize formatting. RESULT formatted_statement]
+            [COMMAND Collect all formatted_statement values into a list and return that list. RESULT prepared_statements]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the provided CLOB column value unchanged for database backends that may return a locator object requiring additional processing." process_clob]
+    [INPUTS]
+        <REF> value </REF>: object "The CLOB column value or locator object to be returned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> value </REF>: object "The unchanged CLOB column value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the input CLOB value unchanged. RESULT value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the SQL fragment and parameters to append to an INSERT query for backends that support returning columns, with the SQL fragment containing a format string placeholder for the appropriate column." return_insert_columns]
+    [INPUTS]
+        <REF> fields </REF>: list "The fields to be returned by the INSERT query."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_and_params </REF>: tuple "A tuple containing the SQL fragment to append to the INSERT query and the parameters to bind, with the SQL fragment containing a format string placeholder for the appropriate column."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For backends that support returning columns as part of an insert query, return the SQL and params to append to the INSERT query for the given fields, where the returned SQL fragment contains a format string placeholder for the appropriate column. RESULT sql_and_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Lazily imports the backend compiler module if it has not been cached, then returns the SQLCompiler class with the requested compiler_name from the cache." compiler]
+    [INPUTS]
+        <REF> self </REF>: object "The backend instance that exposes the compiler_module attribute and holds the lazy _cache state."
+        <REF> compiler_name </REF>: str "Name of the SQLCompiler class to look up from the cached compiler module."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: type "The SQLCompiler class resolved by getattr from the cached compiler module."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self._cache is None. RESULT cache_was_none]
+            [COMMAND If cache_was_none, import the module named by self.compiler_module and assign it to self._cache. RESULT self._cache]
+            [COMMAND Look up the attribute compiler_name on self._cache with getattr and return the resolved SQLCompiler class. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Intended to return a quoted version of a table, index, or column name without re-quoting already quoted names, but the base implementation raises NotImplementedError to require subclass support." quote_name]
+    [INPUTS]
+        <REF> name </REF>: string "The table, index, or column name to be quoted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise a NotImplementedError with the message 'subclasses of BaseDatabaseOperations may require a quote_name() method'. RESULT not_implemented_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The base quote_name() method is invoked without an overriding subclass implementation.]
+        [LOG "subclasses of BaseDatabaseOperations may require a quote_name() method"]
+        [THROW NotImplementedError "Indicates that quote_name() must be provided by a database-specific subclass."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the SQL expression string 'RANDOM()' for generating a random value." random_function_sql]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The SQL expression RANDOM() as a string literal."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant string literal 'RANDOM()' as the method's result. RESULT random_function_sql_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the regex lookup query fragment with a %s placeholder, but raises NotImplementedError in the base class because subclasses must provide the actual implementation." regex_lookup]
+    [INPUTS]
+        <REF> lookup_type </REF>: str "Type of regex lookup, either 'regex' or 'iregex', used to select the appropriate SQL operator."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Begin execution of regex_lookup with lookup_type and immediately raise NotImplementedError, because the base implementation does not provide a regex lookup fragment; include the message 'subclasses of BaseDatabaseOperations may require a regex_lookup() method'. RESULT exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: regex_lookup is invoked on the base BaseDatabaseOperations class]
+        [LOG "subclasses of BaseDatabaseOperations may require a regex_lookup() method"]
+        [THROW NotImplementedError "The base class does not implement regex lookup support; subclasses must override this method."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs the SQL statement that starts a new savepoint by formatting the quoted savepoint identifier into the SAVEPOINT template." savepoint_create_sql]
+    [INPUTS]
+        <REF> sid </REF>: str "Savepoint identifier string to quote and embed in the SQL statement."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "SQL statement of the form 'SAVEPOINT <quoted_sid>'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.quote_name with sid to obtain the quoted savepoint identifier. RESULT quoted_sid]
+            [COMMAND Insert quoted_sid into the '%s' placeholder of the 'SAVEPOINT %s' template to build the savepoint SQL statement. RESULT savepoint_sql]
+            [COMMAND Return savepoint_sql. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a SQL RELEASE SAVEPOINT statement for the given savepoint identifier, quoting the savepoint name via self.quote_name." savepoint_commit_sql]
+    [INPUTS]
+        <REF> sid </REF>: string "Savepoint identifier to be quoted and embedded into the RELEASE SAVEPOINT SQL statement."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: string "SQL statement that releases the specified savepoint."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.quote_name(sid) to produce the quoted savepoint name. RESULT quoted_sid]
+            [COMMAND Build the SQL statement by formatting the template 'RELEASE SAVEPOINT %s' with quoted_sid. RESULT sql]
+            [COMMAND Return the SQL statement. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a SQL ROLLBACK TO SAVEPOINT statement for the given savepoint identifier, with the identifier quoted by quote_name." savepoint_rollback_sql]
+    [INPUTS]
+        <REF> sid </REF>: string "Savepoint identifier to embed in the SQL statement."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_statement </REF>: string "The formatted SQL statement: ROLLBACK TO SAVEPOINT <quoted sid>."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.quote_name(sid) to produce the quoted savepoint identifier. RESULT quoted_sid]
+            [COMMAND Format the SQL template 'ROLLBACK TO SAVEPOINT %s' with the quoted savepoint identifier. RESULT sql_statement]
+            [COMMAND Return the formatted SQL statement. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty SQL string for setting the connection's time zone, indicating that the backend does not support time zones." set_time_zone_sql]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Empty string representing the SQL to set the connection's time zone, or nothing when unsupported."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty string as the SQL statement for setting the connection's time zone. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to require subclasses to provide a backend-specific implementation that returns SQL statements for removing all data from the given tables, optionally resetting sequences and cascading truncation." sql_flush]
+    [INPUTS]
+        <REF> self </REF>: object "The BaseDatabaseOperations instance on which sql_flush is called."
+        <REF> style </REF>: object "A Style object returned by color_style() or no_style() in django.core.management.color."
+        <REF> tables </REF>: list "The database tables from which all data is to be removed without dropping the tables themselves."
+        <REF> reset_sequences </REF>: bool "Whether the returned SQL statements should include resetting sequences; defaults to False."
+        <REF> allow_cascade </REF>: bool "Whether truncation may cascade to tables with foreign keys pointing to the truncated tables; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The sql_flush method is reached on a class that does not override it with a backend-specific implementation.]
+        [LOG "subclasses of BaseDatabaseOperations must provide a sql_flush() method"]
+        [THROW NotImplementedError "Indicates that sql_flush is not implemented in this database operations class."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Executes a list of SQL statements atomically against the selected database connection, honoring the connection's DDL rollback capability for savepoint usage." execute_sql_flush]
+    [INPUTS]
+        <REF> using </REF>: string "The database connection alias to use for the transaction."
+        <REF> sql_list </REF>: list of strings "The SQL statements to execute in order."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Start an atomic transaction on the database identified by using, setting savepoint according to self.connection.features.can_rollback_ddl. RESULT transaction_context]
+            [COMMAND Open a database cursor from self.connection within the active transaction. RESULT cursor]
+            [COMMAND Within the transaction's open cursor, for each SQL statement sql in sql_list, execute sql on the cursor. RESULT execution_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty list of SQL statements unconditionally, regardless of the provided style and sequences arguments." sequence_reset_by_name_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance of the class."
+        <REF> style </REF>: Style "A Style object as returned by color_style() or no_style() in django.core.management.color."
+        <REF> sequences </REF>: list "A list of sequences for which reset SQL statements are requested."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "An empty list of SQL statements."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list as the list of SQL statements, without processing the style or sequences arguments. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty list of SQL statements required to reset sequences for the given models." sequence_reset_sql]
+    [INPUTS]
+        <REF> style </REF>: Style "Style object used for SQL statement coloring."
+        <REF> model_list </REF>: list "List of models for which sequence reset SQL statements are requested."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_statements </REF>: list "Empty list of SQL statements, as the method does not generate any sequence reset SQL."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list as the SQL statements required to reset sequences for the given models. RESULT sql_statements]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the constant SQL statement 'BEGIN;' required to start a transaction." start_transaction_sql]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> transaction_sql </REF>: string "The SQL statement 'BEGIN;' used to start a transaction."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant string 'BEGIN;' as the SQL transaction start statement. RESULT transaction_sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the SQL statement to end a transaction, using ROLLBACK when the success flag is falsy and COMMIT when it is truthy." end_transaction_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The instance of the class."
+        <REF> success </REF>: boolean "Indicates whether the transaction succeeded. Defaults to True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_statement </REF>: string "The SQL statement to end the transaction: ROLLBACK; for failure or COMMIT; for success."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of the success argument. RESULT success_truthy]
+            [COMMAND If success is truthy, return the string literal 'COMMIT;' as the SQL statement to end the transaction. RESULT sql_statement]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If success is falsy, return the string literal 'ROLLBACK;' instead of commit.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string literal 'ROLLBACK;'. RESULT sql_statement]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Always returns an empty string as the SQL fragment for defining a tablespace, ignoring the tablespace and inline parameters." tablespace_sql]
+    [INPUTS]
+        <REF> tablespace </REF>: string "The name of the tablespace."
+        <REF> inline </REF>: boolean "Whether the tablespace SQL should be appended to a row instead of the entire CREATE TABLE or CREATE INDEX statement."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The SQL fragment used to define the tablespace; always an empty string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ignore the tablespace and inline parameters, and set the tablespace SQL fragment to the empty string. RESULT tablespace_sql_fragment]
+            [COMMAND Return tablespace_sql_fragment. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares a value for use in a LIKE query by converting it to a string and escaping backslashes, percent signs, and underscores." prep_for_like_query]
+    [INPUTS]
+        <REF> x </REF>: any "The value to be escaped for use in a LIKE query. It is converted to a string with str(x) before escaping."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The final escaped string, with every backslash doubled and every percent sign or underscore prefixed by one backslash."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the input x to its string representation with str(x) and store it as v0. RESULT v0]
+            [COMMAND In v0, replace every single backslash with two consecutive backslashes and store the result as v1. RESULT v1]
+            [COMMAND In v1, replace every percent sign with a backslash followed by a percent sign and store the result as v2. RESULT v2]
+            [COMMAND In v2, replace every underscore with a backslash followed by an underscore and store the result as v3. RESULT v3]
+            [COMMAND Return v3 as the final result of the method. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the supplied serial-field value unchanged, with a docstring noting that certain database backends reject some values for serial fields." validate_autopk_value]
+    [INPUTS]
+        <REF> value </REF>: any "The candidate value to validate as an automatic primary key value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> validated_value </REF>: any "The unchanged input value returned as the validated automatic primary key value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept the value parameter as the candidate automatic primary key value. RESULT value]
+            [COMMAND Return the value unchanged as the validated automatic primary key value. RESULT validated_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Dispatches a value of unknown type to the appropriate backend adapt_*field_value method based on its Python type, returning the value unchanged if no specialized adapter matches." adapt_unknown_value]
+    [INPUTS]
+        <REF> value </REF>: any "The value to transform into a backend-compatible representation; its runtime type determines which adapter is called."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> adapted_value </REF>: any "The result of the matching adapt_*field_value method for datetime, date, time, or Decimal values; otherwise the original value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether value is an instance of datetime.datetime; this check must be performed before datetime.date because datetime.datetime is a subclass of datetime.date. RESULT is_datetime]
+            [COMMAND If is_datetime is true, call self.adapt_datetimefield_value(value) and return its result immediately. RESULT adapted_value]
+            [COMMAND Otherwise, check whether value is an instance of datetime.date. RESULT is_date]
+            [COMMAND If is_date is true, call self.adapt_datefield_value(value) and return its result immediately. RESULT adapted_value]
+            [COMMAND Otherwise, check whether value is an instance of datetime.time. RESULT is_time]
+            [COMMAND If is_time is true, call self.adapt_timefield_value(value) and return its result immediately. RESULT adapted_value]
+            [COMMAND Otherwise, check whether value is an instance of decimal.Decimal. RESULT is_decimal]
+            [COMMAND If is_decimal is true, call self.adapt_decimalfield_value(value) and return its result immediately. RESULT adapted_value]
+            [COMMAND Otherwise, return value unchanged as the fallback for all other types. RESULT adapted_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Transforms a date value for the backend driver by returning None when the value is None and returning its string representation otherwise." adapt_datefield_value]
+    [INPUTS]
+        <REF> value </REF>: date|None "The date value to transform; may be None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string|None "The string representation of value, or None if value is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If value is None, return None. RESULT return_value]
+            [COMMAND Otherwise, convert value to a string using str(value). RESULT string_repr]
+            [COMMAND Return string_repr. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns None when the input is None, otherwise converts the datetime value to its string representation for compatibility with the backend datetime driver." adapt_datetimefield_value]
+    [INPUTS]
+        <REF> value </REF>: datetime or None "Datetime value, or None, to be adapted for the backend driver."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string or None "String representation of value when value is not None; None when value is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the guard condition by checking whether value is exactly None using identity comparison (value is None). RESULT none_check]
+            [COMMAND If none_check is false, convert value to its string form using str(value). RESULT converted_value]
+            [COMMAND Return converted_value as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If none_check is true, meaning value is exactly None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without converting the value. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adapts a time value for a Django backend driver by returning None for null, rejecting timezone-aware values with ValueError, and otherwise returning its string representation." adapt_timefield_value]
+    [INPUTS]
+        <REF> value </REF>: time/datetime or None "The time value to adapt; may be None, a naive time/datetime, or a timezone-aware time/datetime."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string or None "The string representation of the adapted time value, or None if value is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether value is None. RESULT none_check]
+            [COMMAND If none_check is true, follow the alternative flow that returns None. RESULT none_flow]
+            [COMMAND For non-None values, evaluate whether timezone.is_aware(value) is true. RESULT awareness_check]
+            [COMMAND If awareness_check is true, follow the ValueError exception flow. RESULT awareness_flow]
+            [COMMAND Convert value to a string using str(value). RESULT converted_value]
+            [COMMAND Return converted_value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately and terminate the method. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: timezone.is_aware(value) is true]
+        [LOG "Django does not support timezone-aware times."]
+        [THROW ValueError "Raised when value is timezone-aware because Django does not support timezone-aware times."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Transforms a decimal.Decimal value into a backend-driver-compatible decimal/numeric value by calling utils.format_number with the provided max_digits and decimal_places settings." adapt_decimalfield_value]
+    [INPUTS]
+        <REF> value </REF>: decimal.Decimal "The decimal value to be formatted for the backend driver."
+        <REF> max_digits </REF>: int | None "Optional maximum number of digits to use when formatting the value."
+        <REF> decimal_places </REF>: int | None "Optional number of decimal places to use when formatting the value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The formatted value returned by utils.format_number, compatible with the backend driver for decimal or numeric columns."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of calling utils.format_number with value, max_digits, and decimal_places as positional arguments, preserving the None defaults when those arguments were not supplied. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the provided IP address string if it is truthy, otherwise returns None, adapting the value for the backend driver." adapt_ipaddressfield_value]
+    [INPUTS]
+        <REF> value </REF>: string "String representation of an IP address to transform."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string|null "The original value when truthy, otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate value for truthiness; if value is truthy, return value; otherwise return None. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a two-element list containing the lower and upper date bounds for the given year, normalized through adapt_datefield_value, for use with a BETWEEN query." year_lookup_bounds_for_date_field]
+    [INPUTS]
+        <REF> value </REF>: int "The looked-up year used to construct the lower and upper boundary dates."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A two-element list [first, second] with the normalized lower bound (January 1) and upper bound (December 31) of the given year."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct the lower-bound date as January 1 of the given year using datetime.date(value, 1, 1), preserving the month and day constants 1 and 1. RESULT first_date]
+            [COMMAND Construct the upper-bound date as December 31 of the given year using datetime.date(value, 12, 31), preserving the month and day constants 12 and 31. RESULT second_date]
+            [COMMAND Normalize the lower-bound date by assigning first = self.adapt_datefield_value(first_date). RESULT first]
+            [COMMAND Normalize the upper-bound date by assigning second = self.adapt_datefield_value(second_date). RESULT second]
+            [COMMAND Return a two-element list containing first and second in that order. RESULT final_bounds]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the inclusive lower and upper datetime bounds for a year lookup, optionally applies the current timezone when settings.USE_TZ is enabled, and adapts both bounds through self.adapt_datetimefield_value before returning a two-element list." year_lookup_bounds_for_datetime_field]
+    [INPUTS]
+        <REF> self </REF>: object "The field instance on which the method is invoked; provides the adapt_datetimefield_value method."
+        <REF> value </REF>: int "The looked-up year, valid from 1 to 9999."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "A two-element list [first, second] containing the adapted lower and upper bounds to use with a BETWEEN operator."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create first as datetime.datetime(value, 1, 1), preserving the constants 1 and 1 for January 1 at midnight. RESULT first]
+            [COMMAND Create second as datetime.datetime(value, 12, 31, 23, 59, 59, 999999), preserving the constants 12, 31, 23, 59, 59, and 999999 for the inclusive upper bound at the end of December 31. RESULT second]
+            [COMMAND If settings.USE_TZ is truthy, obtain the current timezone with timezone.get_current_timezone() and assign it to tz. RESULT tz]
+            [COMMAND Within the settings.USE_TZ truthy branch, convert first to an aware datetime by assigning timezone.make_aware(first, tz) back to first. RESULT first]
+            [COMMAND Within the settings.USE_TZ truthy branch, convert second to an aware datetime by assigning timezone.make_aware(second, tz) back to second. RESULT second]
+            [COMMAND Adapt first by assigning self.adapt_datetimefield_value(first) back to first. RESULT first]
+            [COMMAND Adapt second by assigning self.adapt_datetimefield_value(second) back to second. RESULT second]
+            [COMMAND Return the two-element list [first, second]. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty list of converter functions for the given expression because no field data conversion is needed." get_db_converters]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance of the database converter object."
+        <REF> expression </REF>: object "The field expression for which converter functions are requested."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> converters </REF>: list "An empty list of converter functions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list as the list of converter functions. RESULT empty_converters_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a non-None duration value into a datetime.timedelta measured in microseconds, and returns None when value is None." convert_durationfield_value]
+    [INPUTS]
+        <REF> value </REF>: number or None "Duration in microseconds to convert. The conversion is skipped when this is None."
+        <REF> expression </REF>: Any "Unused parameter retained for interface compatibility."
+        <REF> connection </REF>: Any "Unused parameter retained for interface compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: datetime.timedelta or None "A datetime.timedelta representing value microseconds when value is not None; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the identity check value is not None. RESULT value_is_not_none]
+            [COMMAND If value_is_not_none is true, construct datetime.timedelta with days=0, seconds=0, and microseconds=value. RESULT converted_duration]
+            [COMMAND If value_is_not_none is true, return converted_duration immediately, exiting the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value is None (value_is_not_none is false)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the timedelta construction and the return statement, then fall through to the end of the method and implicitly return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Provide a default no-op implementation of expression support checking, accepting any expression and returning None without validating it." check_expression_support]
+    [INPUTS]
+        <REF> expression </REF>: object "The expression whose backend support should be checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: null "Always returns None because the default implementation performs no operation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Perform no operation for the provided expression and return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a conditional expression is supported in the WHERE clause by unconditionally returning True." conditional_expression_supported_in_where_clause]
+    [INPUTS]
+        <REF> expression </REF>: object "Conditional expression to be checked; not used because the method always returns True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "Always True, indicating the conditional expression is supported."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean constant True. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines a list of subexpression strings into a single expression string by joining them with the given connector surrounded by spaces." combine_expression]
+    [INPUTS]
+        <REF> connector </REF>: str "The connecting operator to insert between subexpressions."
+        <REF> sub_expressions </REF>: list[str] "The subexpression strings to combine."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "The combined expression string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format connector by inserting its string representation between one leading and one trailing space using the template ' %s ', and assign the result to conn. RESULT conn]
+            [COMMAND Join the sub_expressions iterable using conn as the separator; if sub_expressions is empty, the result is an empty string, otherwise return the joined string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the combination of duration sub-expressions using the given connector to combine_expression and returns its result." combine_duration_expression]
+    [INPUTS]
+        <REF> connector </REF>: unknown "Connector value passed to combine_expression."
+        <REF> sub_expressions </REF>: unknown "Sub-expressions passed to combine_expression."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: unknown "Value returned by combine_expression."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of calling combine_expression with connector and sub_expressions. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the constant SQL placeholder string '%s' for inserting binary content." binary_placeholder_sql]
+    [INPUTS]
+        <REF> value </REF>: any "Accepted for interface compatibility; not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> placeholder </REF>: string "The constant SQL placeholder '%s'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant string '%s'. RESULT placeholder]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Allows subclasses to modify insert parameters and returns them unchanged, addressing Oracle Spatial backend requirements." modify_insert_params]
+    [INPUTS]
+        <REF> placeholder </REF>: object "Placeholder parameter for the insert operation."
+        <REF> params </REF>: object "Insert parameters to be returned unchanged."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> params </REF>: object "The insert parameters, returned unmodified."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the provided insert parameters unchanged. RESULT params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the (min_value, max_value) range tuple associated with the given integer field internal type from the integer_field_ranges mapping." integer_field_range]
+    [INPUTS]
+        <REF> internal_type </REF>: string "Internal type name of an integer field, for example 'PositiveIntegerField'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> range_tuple </REF>: tuple "A (min_value, max_value) tuple representing the range of the column type bound to the field."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the value stored in self.integer_field_ranges using internal_type as the key and return that value to the caller. RESULT range_tuple]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts two temporal SQL operands, each represented as a SQL string and bind parameter tuple, into a SQL subtraction expression with merged parameters when the backend supports temporal subtraction, and raises NotSupportedError otherwise." subtract_temporals]
+    [INPUTS]
+        <REF> self </REF>: object "Database connection wrapper exposing the connection features registry."
+        <REF> internal_type </REF>: string "Name of the temporal type being subtracted, used in the error message."
+        <REF> lhs </REF>: tuple "Left-hand operand as a (sql_string, params_tuple) pair."
+        <REF> rhs </REF>: tuple "Right-hand operand as a (sql_string, params_tuple) pair."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (sql_expression, merged_params) where sql_expression is '(%s - %s)' formatted with the operand SQL strings and merged_params is the concatenation of lhs_params and rhs_params."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate self.connection.features.supports_temporal_subtraction as a boolean condition. RESULT condition_result]
+            [COMMAND In the true branch of if self.connection.features.supports_temporal_subtraction, unpack lhs into lhs_sql and lhs_params. RESULT lhs_sql, lhs_params]
+            [COMMAND In the true branch, unpack rhs into rhs_sql and rhs_params. RESULT rhs_sql, rhs_params]
+            [COMMAND In the true branch, build sql_expression as '(%s - %s)' % (lhs_sql, rhs_sql). RESULT sql_expression]
+            [COMMAND In the true branch, merge parameters as (*lhs_params, *rhs_params). RESULT merged_params]
+            [COMMAND In the true branch, return the tuple (sql_expression, merged_params), exiting the method immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When self.connection.features.supports_temporal_subtraction evaluates to false.]
+        [LOG "NotSupportedError: This backend does not support <internal_type> subtraction."]
+        [THROW NotSupportedError "Raised to indicate that the backend cannot perform temporal subtraction using SQL."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the window frame end boundary value to a SQL frame-end keyword, returning CURRENT ROW for zero, N FOLLOWING for positive integers, and UNBOUNDED FOLLOWING for None, while raising ValueError for any other input." window_frame_end]
+    [INPUTS]
+        <REF> end </REF>: integer or None "Boundary value for the window frame end; expected to be a positive integer, zero, or None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Window frame end keyword: self.CURRENT_ROW, '<n> FOLLOWING', or self.UNBOUNDED_FOLLOWING."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether end is an instance of int. RESULT is_int]
+            [COMMAND If end is an int and end == 0, return self.CURRENT_ROW. RESULT current_row]
+            [COMMAND If end is an int and end > 0, return a formatted string '%d %s' with end and self.FOLLOWING. RESULT formatted_following]
+            [COMMAND If end is not an int and end is None, return self.UNBOUNDED_FOLLOWING. RESULT unbounded_following]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: end is a negative integer, or end is neither an int nor None, so no return branch matches.]
+        [LOG "end argument must be a positive integer, zero, or None, but got '<end>'."]
+        [THROW ValueError "Signals that end was not 0, a positive integer, or None, and therefore cannot be converted to a window frame end keyword."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns SQL fragments for the start and end points of an OVER clause window frame after verifying that the backend supports window expressions." window_frame_rows_start_end]
+    [INPUTS]
+        <REF> start </REF>: object "Optional start boundary for the window frame; defaults to None."
+        <REF> end </REF>: object "Optional end boundary for the window frame; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A two-element tuple containing the SQL start and end boundaries for the window frame."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.connection.features.supports_over_clause is true; if it is false, go to the exception flow for NotSupportedError. RESULT supports_over_clause_flag]
+            [COMMAND Evaluate self.window_frame_start(start) and self.window_frame_end(end) in left-to-right order and pack the two computed values into a two-element tuple. RESULT frame_boundaries]
+            [COMMAND Return frame_boundaries as the method result. RESULT method_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.connection.features.supports_over_clause is false]
+        [LOG "Backend does not support window expressions; raising NotSupportedError."]
+        [THROW NotSupportedError "Raised to indicate that the database backend does not support OVER clause window expressions."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves row-based window frame start and end offsets, rejecting unsupported bounded preceding/following boundaries when the connection only supports UNBOUNDED with those modifiers." window_frame_range_start_end]
+    [INPUTS]
+        <REF> start </REF>: int or None "Optional start boundary offset. If None, the default row-frame start is used. A negative truthy value represents a preceding offset."
+        <REF> end </REF>: int or None "Optional end boundary offset. If None, the default row-frame end is used. A positive truthy value represents a following offset."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> start_, end_ </REF>: tuple of int "Resolved row window frame start and end boundaries returned by the method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call window_frame_rows_start_end on self with start and end, and unpack the returned pair into start_ and end_. RESULT start_, end_]
+            [COMMAND Evaluate the connection capability flag and the boundary condition; if the condition is true, trigger the NotSupportedError exception flow, otherwise continue normally. RESULT none]
+            [COMMAND Return the resolved start_ and end_ values. RESULT start_, end_]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.connection.features.only_supports_unbounded_with_preceding_and_following is true and ((start is truthy and start < 0) or (end is truthy and end > 0))]
+        [LOG "NotSupportedError raised because the connection only supports UNBOUNDED together with PRECEDING and FOLLOWING, but the requested frame uses an unsupported bounded boundary."]
+        [THROW NotSupportedError "Indicates that the requested window frame boundary is not supported by the connected database dialect."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that the backend supports EXPLAIN execution and that any supplied format and options are acceptable, then returns the backend-specific explain prefix." explain_query_prefix]
+    [INPUTS]
+        <REF> self </REF>: object "Database backend instance exposing connection.features and explain_prefix."
+        <REF> format </REF>: string or None "Optional EXPLAIN format; checked case-insensitively after being converted to uppercase."
+        <REF> options </REF>: dict "Keyword arguments for EXPLAIN options; must be empty or a ValueError is raised."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The value of self.explain_prefix returned after validations pass."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.connection.features.supports_explaining_query_execution is true. RESULT supports_explaining_query_execution]
+            [COMMAND Determine whether format is truthy; if it is falsy, skip the entire format validation block and continue to the options check. RESULT format_is_truthy]
+            [COMMAND If format was truthy, retrieve self.connection.features.supported_explain_formats. RESULT supported_formats]
+            [COMMAND If format was truthy, set normalized_format to format.upper(). RESULT normalized_format]
+            [COMMAND If format was truthy, check whether normalized_format is in supported_formats. RESULT format_is_supported]
+            [COMMAND If format was truthy and normalized_format is in supported_formats, exit the format validation block and continue to the options check. RESULT none]
+            [COMMAND Check whether options is empty; if it is not empty, an exception flow is taken. RESULT options_is_empty]
+            [COMMAND If options is empty, return self.explain_prefix. RESULT explain_prefix]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.connection.features.supports_explaining_query_execution is false]
+        [LOG "Raises NotSupportedError with the message 'This backend does not support explaining query execution.'"]
+        [THROW NotSupportedError "Raised when the backend does not support explaining query execution."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: format is truthy and normalized_format is not in supported_formats]
+        [LOG "Builds a ValueError message containing normalized_format, and appends the sorted allowed formats when supported_formats is non-empty."]
+        [THROW ValueError "Raised when the requested EXPLAIN format is not recognized by the backend."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: options is truthy, meaning it contains at least one key]
+        [LOG "Raises ValueError with 'Unknown options: ' followed by the sorted option names."]
+        [THROW ValueError "Raised when unknown EXPLAIN options are supplied."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the constant SQL fragment 'INSERT INTO' without using any parameters." insert_statement]
+    [INPUTS]
+        <REF> ignore_conflicts </REF>: bool "Flag indicating whether conflicts should be ignored; unused in the current implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The constant SQL fragment 'INSERT INTO'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant string 'INSERT INTO'. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty string as the SQL suffix for ignore-conflicts handling, without using the ignore_conflicts parameter." ignore_conflicts_suffix_sql]
+    [INPUTS]
+        <REF> ignore_conflicts </REF>: Any "Optional argument specifying ignore-conflict behavior; unused by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "An empty SQL suffix fragment."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the empty string literal as the SQL suffix. RESULT empty_sql_suffix]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

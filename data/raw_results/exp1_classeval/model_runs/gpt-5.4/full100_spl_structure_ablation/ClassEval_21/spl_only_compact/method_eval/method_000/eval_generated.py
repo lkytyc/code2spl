@@ -1,0 +1,95 @@
+class Classroom:
+    def __init__(self, id):
+        self.id = id
+        self.courses = []
+
+    def add_course(self, course):
+        is_missing = course not in self.courses
+        if is_missing:
+            self.courses.append(course)
+
+    def check_course_conflict(self, new_course: dict) -> bool:
+        from datetime import datetime
+
+        new_start_time = datetime.strptime(new_course["start_time"], "%H:%M")
+        new_end_time = datetime.strptime(new_course["end_time"], "%H:%M")
+        flag = True
+
+        for course in self.courses:
+            start_time = datetime.strptime(course["start_time"], "%H:%M")
+            end_time = datetime.strptime(course["end_time"], "%H:%M")
+
+            if start_time <= new_start_time and end_time >= new_start_time:
+                flag = False
+
+            if start_time <= new_end_time and end_time >= new_end_time:
+                flag = False
+
+        return flag
+
+    def is_free_at(self, check_time: str) -> bool:
+        from datetime import datetime
+
+        check_time = datetime.strptime(check_time, "%H:%M")
+
+        for course in self.courses:
+            course_start_time = datetime.strptime(course["start_time"], "%H:%M")
+            course_end_time = datetime.strptime(course["end_time"], "%H:%M")
+            is_within_course_interval = (
+                course_start_time <= check_time <= course_end_time
+            )
+
+            if is_within_course_interval:
+                return False
+
+        return True
+
+    def remove_course(self, course) -> None:
+        presence_check = course in self.courses
+        if presence_check:
+            self.courses.remove(course)
+
+import unittest
+from datetime import datetime
+
+class ClassroomTestAddCourse(unittest.TestCase):
+    def test_add_course_1(self):
+        classroom = Classroom(1)
+        course = {'name': 'math', 'start_time': '09:00', 'end_time': '10:00'}
+        classroom.add_course(course)
+        self.assertIn(course, classroom.courses)
+
+    def test_add_course_2(self):
+        classroom = Classroom(1)
+        course = {'name': 'Chinese', 'start_time': '10:00', 'end_time': '11:00'}
+        classroom.add_course(course)
+        self.assertIn(course, classroom.courses)
+
+    def test_add_course_3(self):
+        classroom = Classroom(1)
+        course = {'name': 'English', 'start_time': '11:00', 'end_time': '12:00'}
+        classroom.add_course(course)
+        self.assertIn(course, classroom.courses)
+
+    def test_add_course_4(self):
+        classroom = Classroom(1)
+        course = {'name': 'Art', 'start_time': '14:00', 'end_time': '15:00'}
+        classroom.add_course(course)
+        self.assertIn(course, classroom.courses)
+
+    def test_add_course_5(self):
+        classroom = Classroom(1)
+        course = {'name': 'P.E.', 'start_time': '15:00', 'end_time': '16:00'}
+        classroom.add_course(course)
+        self.assertIn(course, classroom.courses)
+
+    def test_add_course_6(self):
+        classroom = Classroom(1)
+        course = {'name': 'math', 'start_time': '09:00', 'end_time': '10:00'}
+        classroom.add_course(course)
+        classroom.add_course(course)
+        self.assertIn(course, classroom.courses)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

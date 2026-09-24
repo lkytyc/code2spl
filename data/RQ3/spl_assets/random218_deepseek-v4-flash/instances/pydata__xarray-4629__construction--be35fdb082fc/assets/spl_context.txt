@@ -1,0 +1,569 @@
+# FILE: xarray/core/merge.py
+# CLASS MergeError
+
+# CLASS _MergeResult
+
+[DEFINE_WORKER: "Merges dimension sizes from a list of variables into a single mapping, raising an error if any dimension is declared with conflicting sizes." broadcast_dimension_size]
+    [INPUTS]
+        <REF> variables </REF>: List[Variable] "List of variables whose dims and shape pairs are to be merged"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> dims </REF>: Dict[Hashable, int] "Mapping from dimension name to its confirmed size"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize dims as an empty dictionary mapping hashable dimension names to integer sizes. RESULT dims]
+            [COMMAND Iterate over each variable in variables. RESULT var]
+            [COMMAND For the current variable, iterate over the zipped pairs of dim and size from var.dims and var.shape. RESULT dim, size]
+            [COMMAND Within the inner loop over dim and size, check whether dim is already in dims and size is not equal to the existing dims[dim]; if so, trigger the ValueError exception path. RESULT conflict]
+            [COMMAND Within the inner loop over dim and size, when no conflicting size is found, set dims[dim] to size. RESULT dims]
+            [COMMAND After all variables and their dimension pairs have been processed, return dims. RESULT dims]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Within the inner loop over dim and size, dim is already present in dims and size differs from the existing dims[dim].]
+        [LOG "Raise ValueError with message 'index %r not aligned' formatting the conflicting dimension dim."]
+        [THROW ValueError "Indicates that the same dimension name was declared with at least two different sizes across the input variables."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that compat is one of the allowed values in _VALID_COMPAT, raising a ValueError with a descriptive message when it is not." _assert_compat_valid]
+    [INPUTS]
+        <REF> compat </REF>: Any "The compatibility value to validate against the allowed members of _VALID_COMPAT."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "No meaningful return value; the method returns None after successful validation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Test whether compat is a member of _VALID_COMPAT. RESULT compat_is_valid]
+            [COMMAND If compat_is_valid is true, skip the raise and complete the method returning None implicitly. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: compat_is_valid is false, meaning compat is not in _VALID_COMPAT]
+        [LOG "Raises ValueError with the message built from the repr of compat and the set of valid values using the format: 'compat={!r} invalid: must be {}'"]
+        [THROW ValueError "Rejects an unsupported compat value; the exception message includes the invalid compat value and the set of allowed values."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges grouped variable collections into variable and index dictionaries, honoring prioritized names and validating index and attribute conflicts according to the compatibility mode." merge_collected]
+    [INPUTS]
+        <REF> grouped </REF>: Dict[Hashable, List[MergeElement]] "Mapping from names to lists of (variable, index) pairs collected for merging."
+        <REF> prioritized </REF>: Mapping[Hashable, MergeElement] "Mapping from names to prioritized (variable, index) pairs; when a name appears here, its values are used directly. Defaults to an empty mapping when None."
+        <REF> compat </REF>: str "Compatibility mode for equality checks: 'minimal' or 'identical'. Defaults to 'minimal'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Tuple[Dict[Hashable, Variable], Dict[Hashable, pd.Index]] "A tuple of merged variables by name and merged indexes by name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If prioritized is None, set prioritized to an empty dictionary. RESULT prioritized]
+            [COMMAND Validate the compat argument by calling _assert_compat_valid(compat). RESULT compat_validated]
+            [COMMAND Initialize merged_vars as an empty dictionary mapping names to Variable objects. RESULT merged_vars]
+            [COMMAND Initialize merged_indexes as an empty dictionary mapping names to pd.Index objects. RESULT merged_indexes]
+            [COMMAND For each name, elements_list in grouped.items(), select the merge branch based on whether name is in prioritized and, if not, whether any element has a non-None index. RESULT current_merge_branch]
+            [COMMAND Return the tuple (merged_vars, merged_indexes). RESULT merged_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over grouped.items(), when name is in prioritized.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack variable, index = prioritized[name]. RESULT variable, index]
+            [COMMAND Assign merged_vars[name] = variable. RESULT merged_vars]
+            [COMMAND If index is not None, assign merged_indexes[name] = index. RESULT merged_indexes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over grouped.items(), when name is not in prioritized and indexed_elements, defined as elements whose index is not None, is non-empty.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build indexed_elements = [(variable, index) for variable, index in elements_list if index is not None]. RESULT indexed_elements]
+            [COMMAND Set variable, index = indexed_elements[0]. RESULT variable, index]
+            [COMMAND For each subsequent element in indexed_elements[1:], verify that index.equals(other_index) is True; otherwise raise MergeError. RESULT index_conflict_checked]
+            [COMMAND If compat is 'identical', for each subsequent variable other_variable in indexed_elements[1:], verify that dict_equiv(variable.attrs, other_variable.attrs) is True; otherwise raise MergeError. RESULT attribute_conflict_checked]
+            [COMMAND Assign merged_vars[name] = variable and merged_indexes[name] = index. RESULT merged_vars, merged_indexes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over grouped.items(), when name is not in prioritized and indexed_elements is empty.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build variables = [variable for variable, _ in elements_list]. RESULT variables]
+            [COMMAND Attempt to assign merged_vars[name] = unique_variable(name, variables, compat). RESULT merged_vars]
+            [COMMAND If unique_variable raises MergeError and compat is 'minimal', suppress the error, leave merged_vars without an entry for name, and continue to the next grouped item. RESULT suppressed_conflict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within the indexed branch, for some subsequent index other_index, index.equals(other_index) is False.]
+        [LOG "Conflicting values for index {name} on objects to be combined: first value: {index}, second value: {other_index}."]
+        [THROW MergeError "Raised when a name has indexed elements with inconsistent index values."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the indexed branch, when compat is 'identical', for some subsequent variable other_variable, dict_equiv(variable.attrs, other_variable.attrs) is False.]
+        [LOG "Conflicting attribute values on combined variable {name}: first value: {variable.attrs}, second value: {other_variable.attrs}."]
+        [THROW MergeError "Raised when merging with identical compatibility and variable attribute dictionaries differ."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the unindexed branch, unique_variable(name, variables, compat) raises MergeError and compat is not 'minimal'.]
+        [LOG "A MergeError raised by unique_variable is re-raised because compatibility mode is stricter than minimal."]
+        [THROW MergeError "Raised when unindexed variables for a name cannot be uniquely combined under the requested compatibility mode."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects variables and their optional index objects from a list of Dataset-like mappings, extracting DataArray coordinates and converting self-named one-dimensional variables into index variables, and returns all pairs grouped by variable name." collect_variables_and_indexes]
+    [INPUTS]
+        <REF> list_of_mappings </REF>: List[DatasetLike] "Each mapping is either an xarray Dataset or a mapping of variable names to values that can be converted by as_variable: an xarray Variable, a tuple (dims, data[, attrs[, encoding]]), or an xarray DataArray."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> grouped </REF>: Dict[Hashable, List[MergeElement]] "Dictionary mapping each collected variable name to a list of (variable, index) tuples collected from the input mappings; index is None when no index is associated with the variable."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import DataArray from .dataarray and Dataset from .dataset for the isinstance checks. RESULT _]
+            [COMMAND Initialize grouped as an empty dict that will map names to lists of (variable, index) tuples. RESULT grouped]
+            [COMMAND Define helper append(name, variable, index): use grouped.setdefault(name, []) to get or create the list for name, append the tuple (variable, index) to that list, and return None. RESULT _]
+            [COMMAND Define helper append_all(variables, indexes): for each name, variable in variables.items(), call append(name, variable, indexes.get(name)); a missing index becomes None; return None. RESULT _]
+            [COMMAND In the outer loop over list_of_mappings, for each mapping: RESULT _]
+            [COMMAND If mapping is a Dataset, call append_all(mapping.variables, mapping.indexes) and continue to the next mapping. RESULT _]
+            [COMMAND Otherwise, for each name, variable in mapping.items(): RESULT _]
+            [COMMAND Within the inner loop over mapping items, if variable is a DataArray, copy variable._coords via copy() and variable.indexes via dict(variable.indexes), remove the current name from both copies with pop(name, None) so the explicitly supplied variable takes precedence, call append_all(coords, indexes), and then proceed with the original variable in the following conversion steps. RESULT _]
+            [COMMAND Within the inner loop over mapping items, set variable to as_variable(variable, name=name). RESULT variable]
+            [COMMAND Within the inner loop over mapping items, if variable.dims equals the one-element tuple (name,), set variable to variable.to_index_variable(). RESULT variable]
+            [COMMAND Within the inner loop over mapping items, if the preceding dims check was true, set index to variable.to_index(); otherwise set index to None. RESULT index]
+            [COMMAND Within the inner loop over mapping items, call append(name, variable, index). RESULT _]
+            [COMMAND After all mappings have been processed, return grouped. RESULT grouped]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects variables and their corresponding indexes from a list of Coordinate objects into a dictionary grouped by variable name." collect_from_coordinates]
+    [INPUTS]
+        <REF> list_of_coords </REF>: List[Coordinates] "A list of Coordinate objects, each providing variables and indexes attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> grouped </REF>: Dict[Hashable, List[MergeElement]] "A dictionary mapping each variable name to a list of (variable, index-or-None) tuples in encounter order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary named grouped to accumulate lists of (variable, index) tuples keyed by variable name. RESULT grouped]
+            [COMMAND For each coords in list_of_coords, load coords.variables as variables and coords.indexes as indexes. RESULT variables and indexes]
+            [COMMAND Within the outer loop over coords, for each name and variable in variables.items(), obtain value via grouped.setdefault(name, []), creating an empty list under name if absent. RESULT value]
+            [COMMAND Within the inner loop over variables.items(), append the tuple (variable, indexes.get(name)) to value, with indexes.get(name) returning None if name is not present in indexes. RESULT grouped]
+            [COMMAND After all coordinate objects are processed, return grouped. RESULT grouped]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges variables and indexes from coordinate objects without automatic alignment, optionally dropping merge elements whose variable dimensions intersect exclude_dims." merge_coordinates_without_align]
+    [INPUTS]
+        <REF> objects </REF>: List[Coordinates] "List of coordinate objects whose variables and indexes are collected for merging."
+        <REF> prioritized </REF>: Mapping[Hashable, MergeElement] "Optional mapping of prioritized merge elements used during final merging. Defaults to None."
+        <REF> exclude_dims </REF>: AbstractSet "Set of dimensions to exclude from merged coordinate elements. Defaults to an empty frozenset."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Tuple[Dict[Hashable, Variable], Dict[Hashable, pd.Index]] "A tuple containing the merged variables dictionary and the merged pandas indexes dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Collect merge variables and indexes from objects by calling collect_from_coordinates(objects). RESULT collected]
+            [COMMAND Determine filtered based on exclude_dims: if exclude_dims is truthy, build filtered by filtering collected; otherwise assign filtered = collected. RESULT filtered]
+            [COMMAND Return merge_collected(filtered, prioritized). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: exclude_dims is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize filtered as an empty dictionary of type Dict[Hashable, List[MergeElement]]. RESULT filtered]
+            [COMMAND For each name and elements in collected.items(), build new_elements by keeping only (variable, index) tuples where exclude_dims.isdisjoint(variable.dims) is true. RESULT new_elements]
+            [COMMAND If new_elements is non-empty, store filtered[name] = new_elements; if new_elements is empty, omit name from filtered. RESULT filtered]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: exclude_dims is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign filtered = collected without making a copy. RESULT filtered]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Scans a list of dataset-like mappings and accumulates coordinate names and non-coordinate variable names from xarray Dataset and DataArray values." determine_coords]
+    [INPUTS]
+        <REF> list_of_mappings </REF>: Iterable[DatasetLike] "A list or iterable of objects that are either xarray Dataset instances or dictionary-like mappings whose values may include xarray DataArray objects."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Tuple[Set[Hashable], Set[Hashable]] "A tuple (coord_names, noncoord_names), where coord_names is the set of coordinate names and noncoord_names is the set of non-coordinate data variable names found in the input mappings."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import DataArray from .dataarray and Dataset from .dataset. RESULT _imports]
+            [COMMAND Initialize coord_names as an empty set. RESULT coord_names]
+            [COMMAND Initialize noncoord_names as an empty set. RESULT noncoord_names]
+            [COMMAND For each mapping in list_of_mappings, set current_mapping to mapping and determine whether isinstance(current_mapping, Dataset) is true. RESULT current_mapping]
+            [COMMAND If current_mapping is a Dataset, update coord_names with current_mapping.coords and noncoord_names with current_mapping.data_vars; otherwise follow the matching alternative_flow for non-Dataset mappings. RESULT dataset_branch_result]
+            [COMMAND After the loop over list_of_mappings has finished, return the tuple (coord_names, noncoord_names). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the outer loop over list_of_mappings, the current mapping is not a Dataset (isinstance(current_mapping, Dataset) is false).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each name, var in current_mapping.items(), set current_name_var to the current item and inspect it. RESULT current_name_var]
+            [COMMAND If isinstance(var, DataArray) is true, build a local set coords from var._coords, discard name from coords so explicitly overwritten variables take precedence, update coord_names with the remaining coords, and leave noncoord_names unchanged. RESULT coord_names]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes each input Dataset or mapping so that pandas-like values become xarray.DataArray objects and Dataset inputs are preserved, returning a list of DatasetLike variable collections." coerce_pandas_values]
+    [INPUTS]
+        <REF> objects </REF>: Iterable[CoercibleMapping] "An iterable of Dataset or mapping-like objects whose keys are coercible to xarray Variable names and whose values may include pandas objects."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> out </REF>: List[DatasetLike] "A list of Dataset or dictionary objects; pandas-like values in non-Dataset inputs are converted to native xarray.DataArray objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import DataArray from .dataarray and Dataset from .dataset for local use. RESULT local_imports]
+            [COMMAND Initialize out as an empty list. RESULT out]
+            [COMMAND For each object obj in objects, process obj using the matching branch for either a Dataset or a non-Dataset, then append the resulting variables to out. RESULT out]
+            [COMMAND After processing all objects in objects, return out. RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj is an instance of Dataset or a subclass of Dataset]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set variables directly to obj; no per-key conversion is performed. RESULT variables]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj is not an instance of Dataset]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize variables as an empty dictionary. RESULT variables]
+            [COMMAND If obj is an instance of any type in PANDAS_TYPES, replace obj with a plain dictionary created by dict(obj.iteritems()). RESULT obj]
+            [COMMAND For each key k and value v in obj.items(), evaluate whether v is an instance of any type in PANDAS_TYPES. RESULT v]
+            [COMMAND If v is an instance of any type in PANDAS_TYPES, convert v to an xarray.DataArray by calling DataArray(v). RESULT v]
+            [COMMAND Store the converted or original value in variables under key k. RESULT variables]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Extracts priority variables and their associated indexes from a selected object in a list of mappings, merges them under a compatibility rule, and returns a grouped dictionary of priority merge elements." _get_priority_vars_and_indexes]
+    [INPUTS]
+        <REF> objects </REF>: List[DatasetLike] "List of dict-like mappings of Variable objects in which to find the priority variables."
+        <REF> priority_arg </REF>: Optional[int] "Integer index of the object whose variables should take priority; if None, no priority variables are returned."
+        <REF> compat </REF>: str "Compatibility check to use when merging variables: 'identical', 'equals', 'broadcast_equals', or 'no_conflicts'; defaults to 'equals'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Dict[Hashable, MergeElement] "Dictionary mapping variable names to (variable, associated index) pairs for the priority object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND On the non-None priority_arg path, select the priority object from objects using priority_arg as the index and wrap it in a one-element list. RESULT priority_object_list]
+            [COMMAND Call collect_variables_and_indexes on priority_object_list to collect the variables and indexes from the priority object. RESULT collected]
+            [COMMAND Call merge_collected with collected and compat as the compatibility check to merge the collected variables and indexes. RESULT variables_and_indexes]
+            [COMMAND Unpack variables_and_indexes into variables and indexes. RESULT variables, indexes]
+            [COMMAND Initialize an empty grouped dictionary to store each merge result. RESULT grouped]
+            [COMMAND For each name and variable in variables.items(), store a tuple pairing the variable with indexes.get(name) under that name in grouped. RESULT grouped]
+            [COMMAND Return grouped as the final dictionary of priority variables and associated indexes. RESULT grouped]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If priority_arg is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty dictionary to indicate that no priority variables or indexes should be used. RESULT empty_dictionary]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges coordinate variables from multiple coercible mappings by validating compatibility, coercing and aligning inputs, collecting and prioritizing variables, merging them, asserting unique MultiIndex level names, and returning the merged variables with their output indexes." merge_coords]
+    [INPUTS]
+        <REF> objects </REF>: Iterable[CoercibleMapping] "Input mappings whose coordinate variables and indexes are to be merged."
+        <REF> compat </REF>: str "Compatibility mode for merging variables; must be a recognized value such as 'minimal'."
+        <REF> join </REF>: str "Join method used when aligning indexes; expected to be a recognized alignment method such as 'outer'."
+        <REF> priority_arg </REF>: Optional[int] "Index of the input object whose variables and indexes are given priority during merging; None means no prioritized object."
+        <REF> indexes </REF>: Optional[Mapping[Hashable, pd.Index]] "Optional mapping of coordinate names to pandas Index objects that override or constrain the aligned output indexes."
+        <REF> fill_value </REF>: object "Fill value used for missing values encountered during alignment; defaults to dtypes.NA."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Tuple[Dict[Hashable, Variable], Dict[Hashable, pd.Index]] "A tuple whose first element is the merged coordinate variables dictionary and whose second element is the output indexes dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate the compatibility mode by calling _assert_compat_valid(compat). RESULT compat]
+            [COMMAND Coerce all input objects to pandas values using coerce_pandas_values(objects). RESULT coerced]
+            [COMMAND Deeply align the coerced objects with deep_align(coerced, join=join, copy=False, indexes=indexes, fill_value=fill_value). RESULT aligned]
+            [COMMAND Collect variables and indexes from the aligned data with collect_variables_and_indexes(aligned). RESULT collected]
+            [COMMAND Determine priority variables and indexes using _get_priority_vars_and_indexes(aligned, priority_arg, compat=compat). RESULT prioritized]
+            [COMMAND Merge the collected and prioritized variables and indexes with merge_collected(collected, prioritized, compat=compat). RESULT variables, out_indexes]
+            [COMMAND Assert that the merged variables contain unique MultiIndex level names by calling assert_unique_multiindex_level_names(variables). RESULT variables]
+            [COMMAND Return the merged variables and output indexes as a tuple. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: compat is not a recognized compatibility mode]
+        [LOG "Invalid compat value passed to _assert_compat_valid."]
+        [THROW ValueError "Raised by _assert_compat_valid when the compatibility mode is not supported."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: assert_unique_multiindex_level_names detects non-unique MultiIndex level names in the merged variables]
+        [LOG "Merged variables contain duplicate MultiIndex level names."]
+        [THROW ValueError "Raised by assert_unique_multiindex_level_names when the merged variables include non-unique MultiIndex level names."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines data and coordinate objects into a single merged result by building an objects list, collecting explicit coordinate keys, extracting indexes, and delegating to merge_core." merge_data_and_coords]
+    [INPUTS]
+        <REF> data </REF>: object "Pre-existing data variables or data object to be merged."
+        <REF> coords </REF>: Mapping "Mapping-like coordinate object that supports .keys() and can be passed to _extract_indexes_from_coords."
+        <REF> compat </REF>: str "Compatibility mode passed through to merge_core; defaults to 'broadcast_equals'."
+        <REF> join </REF>: str "Join method passed through to merge_core; defaults to 'outer'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "Return value of merge_core, combining the provided data and coords with the specified compatibility and join settings."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a list named objects containing the current references to data as the first element and coords as the second element, without copying either object. RESULT objects]
+            [COMMAND Call coords.keys() and store the resulting keys view as explicit_coords, preserving the view semantics rather than converting it to a separate list. RESULT explicit_coords]
+            [COMMAND Call _extract_indexes_from_coords(coords), then pass the returned iterable or mapping into dict() to create a new dictionary named indexes. RESULT indexes]
+            [COMMAND Return the result of merge_core(objects, compat, join, explicit_coords=explicit_coords, indexes=indexes), passing objects, compat, and join positionally and explicit_coords and indexes as keyword arguments. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Yields the name and index representation of each coordinate variable in a mapping whose dimensions consist solely of a dimension with the same name as the coordinate itself." _extract_indexes_from_coords]
+    [INPUTS]
+        <REF> coords </REF>: mapping of coordinate names to variable-like values "Mapping whose items are coordinate names and associated values to be inspected for valid dimension or index coordinates."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: generator of (str, Index) tuples "Yields tuples containing the coordinate name and the converted index representation for each coordinate variable that has exactly one dimension named the same as its coordinate name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each name, variable in coords.items(), iterate through all entries in the coords mapping. RESULT name_variable_pair]
+            [COMMAND Within the loop over coords.items(), reassign variable to the result of as_variable(variable, name=name), normalizing the associated value to a Variable-like object. RESULT normalized_variable]
+            [COMMAND Within the loop over coords.items(), check whether normalized_variable.dims == (name,). RESULT is_valid_index_coordinate]
+            [COMMAND Within the loop over coords.items(), if the dimension condition is true, yield (name, normalized_variable.to_index()). RESULT yielded_index_coordinate]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over coords.items(), if normalized_variable.dims is not equal to (name,), skip this coordinate and continue to the next entry in coords.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the loop over coords.items(), continue to the next name, variable pair without yielding anything for the current coordinate. RESULT next_iteration]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that each explicit coordinate sharing a name with a dataset dimension is a one-dimensional variable along that same dimension, raising MergeError otherwise." assert_valid_explicit_coords]
+    [INPUTS]
+        <REF> variables </REF>: mapping of variable names to variable objects "Mapping of variable names to variable objects, each exposing a dims attribute."
+        <REF> dims </REF>: collection of dimension names "Dataset dimension names used to detect explicit coords that share a name with a dimension."
+        <REF> explicit_coords </REF>: iterable of coordinate names "Explicit coordinate names to validate against the dataset dimensions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each coord_name in explicit_coords in the order given. RESULT coord_name]
+            [COMMAND Within the for loop over coord_name, check whether coord_name is in dims; only if it is present, also check whether the variable associated with coord_name has a dims attribute that is not the one-element tuple (coord_name,). RESULT condition_met]
+            [COMMAND Within the for loop over coord_name, if condition_met is false continue to the next coord_name; if it is true, use the MergeError exception flow. RESULT loop_continues]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Within the for loop over coord_name, coord_name is in dims and the variable associated with coord_name has dims not equal to the one-element tuple (coord_name,).]
+        [LOG "Logs that the offending coordinate shares a name with a dataset dimension but is not a 1D variable along that dimension; this is disallowed by the xarray data model."]
+        [THROW MergeError "Raised when an explicit coordinate shares a name with a dataset dimension but is not a 1D variable along that same dimension."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges multiple coerced and aligned labeled objects by reconciling variables and indexes under a compatibility rule, determining unambiguous coordinate names, and combining attributes into a _MergeResult." merge_core]
+    [INPUTS]
+        <REF> objects </REF>: Iterable["CoercibleMapping"] "Iterable of mappings that can be coerced to labeled arrays."
+        <REF> compat </REF>: str "Compatibility check mode used when merging variables: identical, equals, broadcast_equals, no_conflicts, or override."
+        <REF> join </REF>: str "Join method used to combine objects with different indexes: outer, inner, left, or right."
+        <REF> combine_attrs </REF>: Optional[str] "Attribute combination mode: drop, identical, no_conflicts, or override."
+        <REF> priority_arg </REF>: Optional[int] "Optional index into objects whose variables and indexes take precedence during the merge."
+        <REF> explicit_coords </REF>: Optional[Sequence] "Optional sequence of variable names to treat as coordinates in the merged result."
+        <REF> indexes </REF>: Optional[Mapping[Hashable, pd.Index]] "Optional mapping from dimension names to pandas Index objects used during alignment."
+        <REF> fill_value </REF>: object "Scalar value used to fill newly missing values after alignment."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: _MergeResult "Merge result containing variables, coord_names, dims, out_indexes, and attrs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import DataArray from .dataarray, and Dataset and calculate_dimensions from .dataset, for use in attribute collection and dimension calculation. RESULT none]
+            [COMMAND Validate that the compat argument is one of the permitted compatibility modes by calling _assert_compat_valid(compat). RESULT none]
+            [COMMAND Coerce all input objects into pandas-compatible values by calling coerce_pandas_values(objects). RESULT coerced]
+            [COMMAND Deeply align the coerced objects with join strategy join, copy=False, the provided indexes, and fill_value by calling deep_align(coerced, join=join, copy=False, indexes=indexes, fill_value=fill_value). RESULT aligned]
+            [COMMAND Collect all variables and indexes from the aligned objects by calling collect_variables_and_indexes(aligned). RESULT collected]
+            [COMMAND Determine the priority variables and indexes from aligned by calling _get_priority_vars_and_indexes(aligned, priority_arg, compat=compat). RESULT prioritized]
+            [COMMAND Merge the collected variables and indexes with the prioritized ones under the compat rule by calling merge_collected(collected, prioritized, compat=compat). RESULT variables, out_indexes]
+            [COMMAND Assert that no multi-index level names are duplicated in variables by calling assert_unique_multiindex_level_names(variables). RESULT none]
+            [COMMAND Calculate the dimension sizes from variables by calling calculate_dimensions(variables). RESULT dims]
+            [COMMAND Determine the coordinate names and non-coordinate names from the coerced objects by calling determine_coords(coerced). RESULT coord_names, noncoord_names]
+            [COMMAND If explicit_coords is not None, validate them against variables and dims with assert_valid_explicit_coords(variables, dims, explicit_coords), then update coord_names with explicit_coords. RESULT coord_names]
+            [COMMAND For each dim, size in dims.items(), if dim is in variables, add dim to coord_names. RESULT coord_names]
+            [COMMAND Compute ambiguous_coords as the intersection of coord_names and noncoord_names. RESULT ambiguous_coords]
+            [COMMAND If ambiguous_coords is truthy, trigger the MergeError exception flow with the ambiguous coordinates. RESULT none]
+            [COMMAND Collect var.attrs for each var in coerced where isinstance(var, Dataset) or isinstance(var, DataArray), then call merge_attrs(attrs_list, combine_attrs) to produce attrs. RESULT attrs]
+            [COMMAND Return a new _MergeResult containing variables, coord_names, dims, out_indexes, and attrs. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: ambiguous_coords is truthy]
+        [LOG "unable to determine if these variables should be coordinates or not in the merged result: %s"]
+        [THROW MergeError "Raised when a variable appears in both coord_names and noncoord_names, so the merge cannot determine whether it should be a coordinate."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates and normalizes an iterable of Dataset, DataArray, or dict-like inputs, then merges all variables into a single Dataset using compatibility, join, fill, and attribute-combination rules." merge]
+    [INPUTS]
+        <REF> objects </REF>: Iterable[Union[DataArray, CoercibleMapping]] "Iterable of Dataset, DataArray, or dict-like objects to merge; DataArray inputs must have a name."
+        <REF> compat </REF>: str "Compatibility mode for same-named variables: identical, equals, broadcast_equals, no_conflicts, or override. Defaults to no_conflicts."
+        <REF> join </REF>: str "Join mode for combining indexes: outer, inner, left, right, exact, or override. Defaults to outer."
+        <REF> fill_value </REF>: object "Scalar or dict-like value used to fill newly missing values; defaults to dtypes.NA."
+        <REF> combine_attrs </REF>: str "Attribute combination mode: drop, identical, no_conflicts, or override. Defaults to drop."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> merged </REF>: Dataset "Dataset containing the combined variables from all normalized input objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import DataArray from .dataarray for type checking. RESULT DataArray]
+            [COMMAND Import Dataset from .dataset for type checking and final Dataset construction. RESULT Dataset]
+            [COMMAND Initialize dict_like_objects as an empty list to accumulate normalized input objects. RESULT dict_like_objects]
+            [COMMAND Within the for loop over each obj in objects, validate that obj is an instance of DataArray, Dataset, or dict; if it is a DataArray, convert it using obj.to_dataset(promote_attrs=True); then append the resulting object to dict_like_objects. RESULT dict_like_objects]
+            [COMMAND Call merge_core with dict_like_objects, compat, join, combine_attrs=combine_attrs, and fill_value=fill_value to compute the merge result. RESULT merge_result]
+            [COMMAND Convert merge_result to keyword arguments with _asdict() and call Dataset._construct_direct(**kwargs) to construct the merged Dataset. RESULT merged]
+            [COMMAND Return the merged Dataset. RESULT merged]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over objects, when obj is a DataArray]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert obj to a Dataset by calling obj.to_dataset(promote_attrs=True). RESULT obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within the for loop over objects, when obj is not an instance of DataArray, Dataset, or dict]
+        [LOG "TypeError: objects must be an iterable containing only Dataset(s), DataArray(s), and dictionaries."]
+        [THROW TypeError "Raised when an input object is not a DataArray, Dataset, or dictionary."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes overwrite_vars into a set and calls merge_core, choosing an overwrite priority and optionally splitting other so only selected keys overwrite the dataset." dataset_merge_method]
+    [INPUTS]
+        <REF> dataset </REF>: Dataset "The dataset being merged into."
+        <REF> other </REF>: CoercibleMapping "The mapping whose values are merged into dataset; keys may be split into overwrite and non-overwrite groups."
+        <REF> overwrite_vars </REF>: Union[Hashable, Iterable[Hashable]] "Hashable or iterable of hashables; strings are treated as a single key, not as an iterable of characters."
+        <REF> compat </REF>: str "Compatibility mode string passed through to merge_core."
+        <REF> join </REF>: str "Join mode string passed through to merge_core."
+        <REF> fill_value </REF>: Any "Value used to fill missing entries during merging; passed through to merge_core."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> merge_result </REF>: _MergeResult "The result returned by merge_core."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND At the top level, normalize overwrite_vars into a set: if overwrite_vars is an iterable but not a string, convert it to a set of its elements; otherwise wrap overwrite_vars itself in a single-element set. RESULT overwrite_vars]
+            [COMMAND Select the overwrite mode based on the normalized overwrite_vars and assign objs and priority_arg according to the matching branch. RESULT objs_and_priority_arg]
+            [COMMAND Call merge_core with the branch-assigned objs value, compat, join, priority_arg=priority_arg, and fill_value=fill_value, and return the merge result. RESULT merge_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: overwrite_vars is empty after normalization.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set objs to a list containing dataset and other, in that order, and set priority_arg to None. RESULT objs_and_priority_arg]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: overwrite_vars is non-empty and equals the set of keys in other.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set objs to a list containing dataset and other, in that order, and set priority_arg to 1. RESULT objs_and_priority_arg]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: overwrite_vars is non-empty and is not equal to the set of keys in other.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize other_overwrite and other_no_overwrite as empty dictionaries. RESULT other_overwrite_and_other_no_overwrite]
+            [COMMAND Within this else branch, for each key k and value v in other.items(), if k is in overwrite_vars then place v under k in other_overwrite; otherwise place v under k in other_no_overwrite, preserving insertion order. RESULT other_overwrite_and_other_no_overwrite]
+            [COMMAND Set objs to a list containing dataset, other_no_overwrite, and other_overwrite, in that order, and set priority_arg to 2. RESULT objs_and_priority_arg]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a non-Dataset update mapping by removing conflicting non-dimension coordinates from DataArray values, then merges the original dataset with the normalized other using override combine attributes." dataset_update_method]
+    [INPUTS]
+        <REF> dataset </REF>: Dataset "Target dataset whose coordinates are used to detect conflicting coordinates and whose indexes are passed to merge_core."
+        <REF> other </REF>: CoercibleMapping "Mapping or Dataset containing values to update; DataArray values may be sanitized if other is not a Dataset."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: _MergeResult "Result of merging dataset and sanitized other with priority_arg=1, indexes=dataset.indexes, and combine_attrs='override'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import DataArray from .dataarray and Dataset from .dataset for local use. RESULT local_imports]
+            [COMMAND Check whether other is an instance of Dataset; this determines whether the sanitization alternative is skipped or executed. RESULT is_dataset_check]
+            [COMMAND If other is a Dataset, keep other as other_sanitized unchanged; if other is not a Dataset, execute the sanitization alternative and store its resulting dict as other_sanitized. RESULT other_sanitized]
+            [COMMAND Return merge_core([dataset, other_sanitized], priority_arg=1, indexes=dataset.indexes, combine_attrs='override'). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: other is not an instance of Dataset]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the 'other is not a Dataset' branch, convert other to a dictionary using dict(other). RESULT other_dict]
+            [COMMAND For each key, value pair in other_dict, if value is a DataArray, compute coord_names as the list of coordinates c in value.coords such that c is not in value.dims and c is in dataset.coords. RESULT coord_names]
+            [COMMAND Within that DataArray branch, if coord_names is non-empty, replace other_dict[key] with value.drop_vars(coord_names). RESULT other_dict]
+            [COMMAND Assign the completed other_dict to other_sanitized so the sanitized mapping is used by the merge step. RESULT other_sanitized]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

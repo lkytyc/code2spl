@@ -1,0 +1,100 @@
+import numpy as np
+
+class VectorUtil:
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def compute_idf_weight_dict(total_num, number_dict):
+        index_2_key_map = {}
+        index = 0
+        count_list = []
+        for key, count in number_dict.items():
+            index_2_key_map[index] = key
+            count_list.append(count)
+            index += 1
+        a = np.array(count_list)
+        a = np.log((total_num + 1) / (a + 1))
+        result = {}
+        for index, w in enumerate(a):
+            key = index_2_key_map[index]
+            result[key] = w
+        return result
+
+    @staticmethod
+    def cosine_similarities(vector_1, vectors_all):
+        norm = np.linalg.norm(vector_1)
+        all_norms = np.linalg.norm(vectors_all, axis=1)
+        dot_products = np.dot(vectors_all, vector_1)
+        similarities = dot_products / (norm * all_norms)
+        return similarities
+
+    @staticmethod
+    def n_similarity(vector_list_1, vector_list_2):
+        array_1 = np.array(vector_list_1)
+        centroid_1 = np.mean(array_1, axis=0)
+        unit_vector_1 = VectorUtil._unitvec(centroid_1)
+        array_2 = np.array(vector_list_2)
+        centroid_2 = np.mean(array_2, axis=0)
+        unit_vector_2 = VectorUtil._unitvec(centroid_2)
+        similarity_score = np.dot(unit_vector_1, unit_vector_2)
+        return similarity_score
+
+    @staticmethod
+    def similarity(vector_1, vector_2):
+        unit_vector_1 = VectorUtil._unitvec(vector_1)
+        unit_vector_2 = VectorUtil._unitvec(vector_2)
+        similarity_score = np.dot(unit_vector_1, unit_vector_2)
+        return similarity_score
+
+    @staticmethod
+    def _unitvec(vector):
+        norm = np.linalg.norm(vector)
+        if norm == 0:
+            raise ZeroDivisionError("Raised to prevent division by zero when an input list has no elements.")
+        return vector / norm
+
+import unittest
+
+class VectorUtilTestNSimilarity(unittest.TestCase):
+    def test_n_similarity_1(self):
+        vector_list1 = [np.array([1, 0]), np.array([0, 1])]
+        vector_list2 = [np.array([0, 0]), np.array([1, 1])]
+        similarity = VectorUtil.n_similarity(vector_list1, vector_list2)
+        self.assertAlmostEqual(similarity, 1.0)
+
+    def test_n_similarity_2(self):
+        vector_list1 = [np.array([1, 1]), np.array([0, 1])]
+        vector_list2 = [np.array([0, 0]), np.array([1, 1])]
+        similarity = VectorUtil.n_similarity(vector_list1, vector_list2)
+        self.assertAlmostEqual(similarity, 0.9486832980505137)
+
+    def test_n_similarity_3(self):
+        vector_list1 = [np.array([1, 0]), np.array([1, 1])]
+        vector_list2 = [np.array([0, 0]), np.array([1, 1])]
+        similarity = VectorUtil.n_similarity(vector_list1, vector_list2)
+        self.assertAlmostEqual(similarity, 0.9486832980505137)
+
+    def test_n_similarity_4(self):
+        vector_list1 = [np.array([1, 0]), np.array([0, 1])]
+        vector_list2 = [np.array([1, 0]), np.array([1, 1])]
+        similarity = VectorUtil.n_similarity(vector_list1, vector_list2)
+        self.assertAlmostEqual(similarity, 0.9486832980505137)
+
+    def test_n_similarity_5(self):
+        vector_list1 = [np.array([1, 0]), np.array([0, 1])]
+        vector_list2 = [np.array([0, 1]), np.array([1, 1])]
+        similarity = VectorUtil.n_similarity(vector_list1, vector_list2)
+        self.assertAlmostEqual(similarity, 0.9486832980505137)
+
+    def test_n_similarity_6(self):
+        try:
+            vector_list1 = []
+            vector_list2 = []
+            similarity = VectorUtil.n_similarity(vector_list1, vector_list2)
+        except:
+            pass
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

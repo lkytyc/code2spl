@@ -1,0 +1,247 @@
+# FILE: src/_pytest/skipping.py
+# CLASS Skip
+
+# CLASS Xfail
+
+[DEFINE_WORKER: "Registers the --runxfail command-line option in the general parser group and the xfail_strict ini option on the pytest parser." pytest_addoption]
+    [INPUTS]
+        <REF> parser </REF>: Parser "The pytest parser object used to register command-line options and ini-file options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the option group named 'general' from parser and assign it to group. RESULT group]
+            [COMMAND On group, add the command-line option '--runxfail' with action 'store_true', dest 'runxfail', default False, and help 'report the results of xfail tests as if they were not marked'. RESULT none]
+            [COMMAND On parser, add the ini option 'xfail_strict' with help 'default for the strict parameter of xfail markers when not given explicitly (default: False)', default False, and type 'bool'. RESULT none]
+            [COMMAND Return None. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Evaluates a single skipif/xfail condition by eval'ing old-style string expressions or bool()ing other values, and returns the result with a reason, failing with a formatted diagnostic when evaluation or reason handling fails." evaluate_condition]
+    [INPUTS]
+        <REF> item </REF>: Item "Pytest item whose config is placed in the evaluation namespace and whose optional obj attribute contributes module globals for string conditions."
+        <REF> mark </REF>: Mark "Mark object providing mark.name for diagnostics and mark.kwargs for the optional reason."
+        <REF> condition </REF>: object "Condition to evaluate; strings are compiled and eval'd, while all other values are converted with bool()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "The evaluated truth value of the condition; a True result indicates the item should be skipped or xfailed."
+        <REF> reason </REF>: str "The reason for the skip/xfail, only relevant when result is True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND At the outer if/else, if condition is a string, build the evaluation namespace globals_ with os, sys, platform, and item.config; if item has an obj attribute, update globals_ with item.obj.__globals__, with colliding keys overriding the initial entries. RESULT globals_]
+            [COMMAND Within the outer string-condition branch, compile condition using _pytest._code.compile(condition, mode="eval"), evaluate the compiled code with eval(condition_code, globals_), and assign the result to result. RESULT result]
+            [COMMAND Within the outer string-condition branch, if compiling or evaluating raises SyntaxError, construct msglines containing 'Error evaluating %r condition' formatted with mark.name, the condition prefixed by four spaces, a caret line with four spaces followed by (exc.offset or 0) spaces and '^', and 'SyntaxError: invalid syntax', then call fail("\n".join(msglines), pytrace=False). RESULT no_result]
+            [COMMAND Within the outer string-condition branch, if compiling or evaluating raises any Exception other than SyntaxError, construct msglines containing 'Error evaluating %r condition' formatted with mark.name, the condition prefixed by four spaces, and the lines from traceback.format_exception_only(type(exc), exc), then call fail("\n".join(msglines), pytrace=False). RESULT no_result]
+            [COMMAND In the non-string else branch, convert condition to boolean with bool(condition) and assign the boolean to result. RESULT result]
+            [COMMAND Within the non-string else branch, if bool(condition) raises any Exception, construct msglines containing 'Error evaluating %r condition as a boolean' formatted with mark.name and the lines from traceback.format_exception_only(type(exc), exc), then call fail("\n".join(msglines), pytrace=False). RESULT no_result]
+            [COMMAND After the outer if/else, set reason to mark.kwargs.get("reason", None), which yields None when the key is absent or its value is None. RESULT reason]
+            [COMMAND If reason is None and condition is a string, set reason to the concatenation of 'condition: ' and condition. RESULT reason]
+            [COMMAND If reason is None and condition is not a string, construct msg by formatting 'Error evaluating %r: ' with mark.name and appending 'you need to specify reason=STRING when using booleans as conditions.', then call fail(msg, pytrace=False). RESULT no_result]
+            [COMMAND Return result and reason. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Inspect skip and skipif markers on an item and return the first applicable Skip reason, or None when no skip is triggered." evaluate_skip_marks]
+    [INPUTS]
+        <REF> item </REF>: Item "The test item whose skip and skipif markers are evaluated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Optional[Skip] "A Skip object with the first applicable reason, or None if no marker triggers a skip."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Outer loop: for each mark in item.iter_markers(name='skipif'). RESULT mark]
+            [COMMAND Within the skipif marker loop, if 'condition' is not in mark.kwargs, set conditions = mark.args; otherwise set conditions = (mark.kwargs['condition'],). RESULT conditions]
+            [COMMAND Within the skipif marker loop, if conditions is empty, set reason = mark.kwargs.get('reason', '') and immediately return Skip(reason), short-circuiting all remaining markers. RESULT unconditional_skip_result]
+            [COMMAND Within the skipif marker loop, if conditions is not empty, enter an inner loop iterating over each condition in conditions. RESULT condition]
+            [COMMAND Within the inner condition loop for the current skipif marker, call evaluate_condition(item, mark, condition). RESULT evaluation]
+            [COMMAND Within the inner condition loop, unpack evaluation into result and reason; if result is true, immediately return Skip(reason), stopping evaluation of remaining conditions and markers. RESULT conditional_skip_result]
+            [COMMAND Within the skipif marker loop, after the inner condition loop finishes with no true condition, continue to the next skipif marker. RESULT continue_flow]
+            [COMMAND After the skipif marker loop, for each mark in item.iter_markers(name='skip'). RESULT mark]
+            [COMMAND Within the skip marker loop, determine reason: if 'reason' is in mark.kwargs, set reason = mark.kwargs['reason']; elif mark.args is truthy, set reason = mark.args[0]; otherwise set reason = 'unconditional skip'. RESULT reason]
+            [COMMAND Within the skip marker loop, immediately return Skip(reason) on the first skip marker; later skip markers are not processed. RESULT skip_marker_result]
+            [COMMAND If no skipif marker triggered a skip and no skip markers exist, return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Evaluates the xfail markers on an item and returns the first applicable Xfail, or None if no xfail marker is triggered." evaluate_xfail_marks]
+    [INPUTS]
+        <REF> item </REF>: Item "The item whose xfail markers are evaluated, and the context passed to evaluate_condition."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Optional[Xfail] "The first Xfail configuration matched by an xfail marker, or None if no marker is triggered."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each mark returned by item.iter_markers(name="xfail"), process it as the current mark in iteration order. RESULT current_mark]
+            [COMMAND While processing current_mark in the outer loop, assign run = current_mark.kwargs.get("run", True). RESULT run]
+            [COMMAND While processing current_mark in the outer loop, assign strict = current_mark.kwargs.get("strict", item.config.getini("xfail_strict")). RESULT strict]
+            [COMMAND While processing current_mark in the outer loop, assign raises = current_mark.kwargs.get("raises", None). RESULT raises]
+            [COMMAND While processing current_mark in the outer loop, if "condition" is not in current_mark.kwargs, set conditions = current_mark.args; otherwise set conditions = (current_mark.kwargs["condition"],). RESULT conditions]
+            [COMMAND While processing current_mark in the outer loop, if conditions is empty, assign reason = current_mark.kwargs.get("reason", "") and immediately return Xfail(reason, run, strict, raises), stopping all further processing. RESULT unconditional_xfail]
+            [COMMAND While processing current_mark in the outer loop and conditions is not empty, for each condition in conditions, call evaluate_condition(item, current_mark, condition) and store the returned pair as condition_evaluation. RESULT condition_evaluation]
+            [COMMAND Within the inner loop over conditions from the current mark, destructure condition_evaluation into condition_result and condition_reason. RESULT condition_result]
+            [COMMAND Within the inner loop over conditions from the current mark, if condition_result is truthy, immediately return Xfail(condition_reason, run, strict, raises), stopping all further processing; if it is not truthy, continue with the next condition in the inner loop. RESULT triggered_xfail]
+            [COMMAND After the inner loop over conditions for the current mark completes without returning, proceed to the next xfail marker in the outer loop. RESULT next_mark]
+            [COMMAND After the outer loop over xfail markers completes without returning, return None. RESULT no_xfail]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Records skip and xfail markers on a pytest item during setup, invoking skip() when the item is marked skipped and xfail() when a non-running xfail mark is present and runxfail is disabled." pytest_runtest_setup]
+    [INPUTS]
+        <REF> item </REF>: Item "The pytest item being set up; its _store and config options are read and modified."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set item._store[skipped_by_mark_key] to False. RESULT item._store[skipped_by_mark_key]]
+            [COMMAND Call evaluate_skip_marks(item) and assign the returned value to skipped. RESULT skipped]
+            [COMMAND If skipped is truthy, set item._store[skipped_by_mark_key] to True and call skip(skipped.reason), which aborts the remaining setup. RESULT None]
+            [COMMAND If item.config.option.runxfail is falsy, call evaluate_xfail_marks(item), store the result in item._store[xfailed_key], and assign the same result to xfailed. RESULT xfailed]
+            [COMMAND Within the 'if not item.config.option.runxfail' block, if xfailed is truthy and xfailed.run is falsy, call xfail("[NOTRUN] " + xfailed.reason), which aborts the remaining setup. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves or evaluates the xfail mark for a test item, emits an xfail notification with reason if runxfail is disabled and the mark is marked not run, then yields control." pytest_runtest_call]
+    [INPUTS]
+        <REF> item </REF>: Item "The pytest test item whose xfail status is being processed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Generator[None, None, None] "A generator that yields None once after possible xfail handling."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read xfailed from item._store using xfailed_key, defaulting to None if the key is absent. RESULT xfailed]
+            [COMMAND If xfailed is None, call evaluate_xfail_marks(item), assign the result to xfailed, and store it in item._store[xfailed_key]; otherwise keep the existing xfailed value. RESULT xfailed]
+            [COMMAND If item.config.option.runxfail is falsy, enter the outer conditional block; otherwise skip the xfail handling block. RESULT None]
+            [COMMAND Within the outer conditional block, if xfailed is truthy and, with short-circuit evaluation, not xfailed.run is true, enter the inner conditional block. RESULT None]
+            [COMMAND Within the inner conditional block, call xfail with the string '[NOTRUN] ' concatenated with xfailed.reason. RESULT None]
+            [COMMAND Yield None from the generator. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adjusts a pytest test report's outcome, longrepr, and wasxfail values for unexpected successes, xfail exceptions, xfail markers, and skipif skip locations." pytest_runtest_makereport]
+    [INPUTS]
+        <REF> item </REF>: pytest.Item "The test item being reported."
+        <REF> call </REF>: CallInfo[None] "The call phase information including exception info and phase name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rep </REF>: TestReport "The report object mutated in place with corrected outcome, longrepr, and wasxfail values; the function itself does not return a meaningful value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Suspend at the yield expression and assign the value sent by the generator caller to outcome. If resumed with next(), outcome is None. RESULT outcome]
+            [COMMAND Call get_result() on outcome and assign the returned report to rep. RESULT rep]
+            [COMMAND Read item._store.get(xfailed_key, None) and assign the result to xfailed. RESULT xfailed]
+            [COMMAND Evaluate the top-level if/elif chain in order and execute only the first branch whose condition is true; all branch details are listed in alternative_flows. RESULT rep]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: unexpectedsuccess_key is in item._store and rep.when equals "call"]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read item._store[unexpectedsuccess_key] and assign it to reason. RESULT reason]
+            [COMMAND If reason is truthy, set rep.longrepr to 'Unexpected success: {reason}' using format(reason). RESULT rep.longrepr]
+            [COMMAND If reason is falsy, set rep.longrepr to 'Unexpected success'. RESULT rep.longrepr]
+            [COMMAND Set rep.outcome to 'failed'. RESULT rep.outcome]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: item.config.option.runxfail is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do nothing because runxfail is enabled; intentionally do not interfere with xfail handling. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: call.excinfo is truthy and isinstance(call.excinfo.value, xfail.Exception)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that call.excinfo.value.msg is not None; if it is None, raise AssertionError. RESULT assertion]
+            [COMMAND Set rep.wasxfail to 'reason: ' + call.excinfo.value.msg. RESULT rep.wasxfail]
+            [COMMAND Set rep.outcome to 'skipped'. RESULT rep.outcome]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: rep.skipped is falsy and xfailed is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the not-rep.skipped-and-xfailed branch, if call.excinfo is truthy, assign xfailed.raises to raises. RESULT raises]
+            [COMMAND Within the call.excinfo sub-branch, if raises is not None and call.excinfo.value is not an instance of raises, set rep.outcome to 'failed'. RESULT rep.outcome]
+            [COMMAND Within the call.excinfo sub-branch, if raises is None or call.excinfo.value is an instance of raises, set rep.outcome to 'skipped' and rep.wasxfail to xfailed.reason. RESULT rep]
+            [COMMAND Within the not-rep.skipped-and-xfailed branch, if call.excinfo is falsy and call.when equals 'call' and xfailed.strict is truthy, set rep.outcome to 'failed'. RESULT rep.outcome]
+            [COMMAND Within the same call.when-equals-call sub-branch, if xfailed.strict is truthy, set rep.longrepr to '[XPASS(strict)] ' + xfailed.reason. RESULT rep.longrepr]
+            [COMMAND Within the call.when-equals-call sub-branch, if xfailed.strict is falsy, set rep.outcome to 'passed'. RESULT rep.outcome]
+            [COMMAND Within the same call.when-equals-call sub-branch, if xfailed.strict is falsy, set rep.wasxfail to xfailed.reason. RESULT rep.wasxfail]
+            [COMMAND Within the not-rep.skipped-and-xfailed branch, if call.excinfo is falsy and call.when is not 'call', do nothing and leave rep unchanged. RESULT rep]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: item._store.get(skipped_by_mark_key, True) is truthy and rep.skipped is true and type(rep.longrepr) is tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack rep.longrepr into three items, assigning only the third item to reason. RESULT reason]
+            [COMMAND Assign the first two items of item.reportinfo() to filename and line. RESULT filename, line]
+            [COMMAND Assert that line is not None; if it is None, raise AssertionError. RESULT assertion]
+            [COMMAND Set rep.longrepr to (str(filename), line + 1, reason). RESULT rep.longrepr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Inside the branch where call.excinfo is truthy and isinstance(call.excinfo.value, xfail.Exception), the assertion fails because call.excinfo.value.msg is None.]
+        [LOG "Assertion failed: call.excinfo.value.msg is None."]
+        [THROW AssertionError "The xfail exception message must not be None."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Inside the branch where item._store.get(skipped_by_mark_key, True) is truthy and rep.skipped is true and type(rep.longrepr) is tuple, the assertion fails because line is None.]
+        [LOG "Assertion failed: line is None from item.reportinfo()."]
+        [THROW AssertionError "The report line from item.reportinfo() must not be None."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns pytest status labels for an expected-failure report, producing an xfailed tuple when skipped and an xpassed tuple when passed, or None otherwise." pytest_report_teststatus]
+    [INPUTS]
+        <REF> report </REF>: BaseReport "The pytest report object whose wasxfail attribute and skipped/passed flags determine the result."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Optional[Tuple[str, str, str]] "Either ('xfailed', 'x', 'XFAIL'), ('xpassed', 'X', 'XPASS'), or None when the report is not an expected failure."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the report object has an attribute named wasxfail. RESULT has_wasxfail]
+            [COMMAND If has_wasxfail is false, skip the nested conditional block and go directly to the final return None step. RESULT no_wasxfail_path]
+            [COMMAND Within the outer if that checks hasattr(report, 'wasxfail'), check whether report.skipped is truthy. RESULT skipped]
+            [COMMAND Within the outer if that checks hasattr(report, 'wasxfail'), when report.skipped is truthy, return the tuple ('xfailed', 'x', 'XFAIL'). RESULT xfailed_result]
+            [COMMAND Within the outer if that checks hasattr(report, 'wasxfail'), because this is the elif branch and report.skipped was false, check whether report.passed is truthy. RESULT passed]
+            [COMMAND Within the outer if that checks hasattr(report, 'wasxfail'), when report.passed is truthy, return the tuple ('xpassed', 'X', 'XPASS'). RESULT xpassed_result]
+            [COMMAND If neither early return was taken, return None. RESULT result_none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

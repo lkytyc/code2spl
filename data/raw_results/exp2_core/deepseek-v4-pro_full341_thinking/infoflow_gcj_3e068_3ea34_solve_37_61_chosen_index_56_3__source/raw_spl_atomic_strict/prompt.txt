@@ -1,0 +1,514 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   import random
+2   import sys
+3   cur_line = ""
+4   def read_word():
+5       global cur_line
+6       i = cur_line.find(" ")
+7       if i == -1:
+8           ret = cur_line
+9           cur_line = ""
+10      else:
+11          ret = cur_line[:i]
+12          cur_line = cur_line[i+1:]
+13      return ret
+14  def read_int():
+15      return int(read_word())
+16  def read_float():
+17      return float(read_word())
+18  def read_bool(true_word="t", false_word="f"):
+19      c = read_word()
+20      if c == true_word:
+21          return True
+22      if c == false_word:
+23          return False
+24      raise Exception(repr(c) + " is neither " + repr(true_word) + " nor " + repr(false_word))
+25  def next_line():
+26      global cur_line
+27      try:
+28          cur_line = raw_input().strip()
+29      except EOFError:
+30          cur_line = ""
+31  def run_solver(solve_function, out_file=sys.stdout):
+32      while not cur_line:
+33          next_line()
+34      t = read_int()
+35      for case in xrange(1, t+1):
+36          solve_function(case)
+37  def solve(case_index):
+38      USED = 0xFFFFFFF
+39      next_line()
+40      n = read_int()
+41      counts = [0] * n
+42      for i in xrange(n):
+43          next_line()
+44          d = read_int()
+45          if d == 0:
+46              print "-1"
+47              continue
+48          cur = []
+49          for j in xrange(d):
+50              itemaa = read_int()
+51              cur.append(itemaa)
+52          random.shuffle(cur)
+53          for index in cur:
+54              if counts[index] != USED:
+55                  counts[index] += 1
+56          chosen_index = min(cur, key=lambda i: counts[i])
+57          if counts[chosen_index] == USED:
+58              print "-1"
+59          else:
+60              print chosen_index
+61              counts[chosen_index] = USED
+62  if __name__ == "__main__":
+63      if len(sys.argv) != 1:
+64          sys.stdin = open(sys.argv[1])
+65      run_solver(solve)
+```
+
+
+**Question**: Which variable instances have information flow over `(chosen_index,56)` in function `solve`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: solve
+Target source anchor: variable=chosen_index, line=56
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: solve
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Select chosen_index as the element of cur with the minimum counts value, using min(cur, key=lambda i: counts[i]); the prior shuffle randomizes the choice when counts tie. RESULT chosen_index]
+- [COMMAND After choosing chosen_index, evaluate counts[chosen_index] and execute the corresponding alternative flow. RESULT chosen_index]
+- [COMMAND For the current nonzero-d iteration, create an empty candidate list cur, then for j from 0 to d-1 read integer itemaa and append it to cur. RESULT cur]
+- [COMMAND Shuffle cur in place so tie-breaking among equal usage counts is randomized. RESULT cur]
+- [COMMAND For each outer iteration i from 0 to n-1, advance to the next input line and read integer d, the number of candidates in the current iteration. RESULT d]
+- [COMMAND Initialize counts as a zero-filled list of length n, where counts[index] tracks usage of each candidate index. RESULT counts]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 38: USED = 0xFFFFFFF
+- line 40: n = read_int()
+- line 41: counts = [0] * n
+- line 42: for i in xrange(n):
+- line 44: d = read_int()
+- line 45: if d == 0:
+- line 48: cur = []
+- line 49: for j in xrange(d):
+- line 50: itemaa = read_int()
+- line 53: for index in cur:
+- line 54: if counts[index] != USED:
+- line 55: counts[index] += 1
+- line 56: chosen_index = min(cur, key=lambda i: counts[i])
+- line 57: if counts[chosen_index] == USED:
+- line 59: else:
+- line 61: counts[chosen_index] = USED
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["USED", "xFFFFFFF"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 40, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["n", "read_int"]}
+- {"definitions": ["counts"], "disposition": "inspect_against_official_dependence_definition", "line": 41, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["counts"], "roles": ["definition"], "source_identifiers": ["counts", "n"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 42, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["for", "i", "in", "n", "xrange"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 44, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["d", "read_int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 45, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["d", "if"]}
+- {"definitions": ["cur"], "disposition": "inspect_against_official_dependence_definition", "line": 48, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["cur"], "roles": ["definition"], "source_identifiers": ["cur"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 49, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["d", "for", "in", "j", "xrange"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["itemaa", "read_int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 53, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["cur"], "roles": ["use", "control"], "source_identifiers": ["cur", "for", "in", "index"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["counts"], "roles": ["use", "control"], "source_identifiers": ["USED", "counts", "if", "index"]}
+- {"definitions": ["counts"], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["counts"], "roles": ["definition"], "source_identifiers": ["counts", "index"]}
+- {"definitions": ["chosen_index", "key"], "disposition": "inspect_against_official_dependence_definition", "line": 56, "position": "target", "reason": "target-chain seed", "relevant_identifiers": ["chosen_index", "cur", "key", "lambda", "i", "counts"], "roles": ["definition", "use"], "source_identifiers": ["chosen_index", "counts", "cur", "i", "key", "lambda", "min"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 57, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["chosen_index", "counts"], "roles": ["use", "control"], "source_identifiers": ["USED", "chosen_index", "counts", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 59, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": ["counts"], "disposition": "inspect_against_official_dependence_definition", "line": 61, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["chosen_index", "counts"], "roles": ["definition", "use"], "source_identifiers": ["USED", "chosen_index", "counts"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 37-61
+- source signature: `def solve(case_index):`
+- source content hash: `555b3e179530f30545b33d613bcf024b0eb96301f44130ee9c692dcc0fe8ae8c`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```python
+  37  def solve(case_index):
+  38      USED = 0xFFFFFFF
+  39      next_line()
+  40      n = read_int()
+  41      counts = [0] * n
+  42      for i in xrange(n):
+  43          next_line()
+  44          d = read_int()
+  45          if d == 0:
+  46              print "-1"
+  47              continue
+  48          cur = []
+  49          for j in xrange(d):
+  50              itemaa = read_int()
+  51              cur.append(itemaa)
+  52          random.shuffle(cur)
+  53          for index in cur:
+  54              if counts[index] != USED:
+  55                  counts[index] += 1
+  56          chosen_index = min(cur, key=lambda i: counts[i])
+  57          if counts[chosen_index] == USED:
+  58              print "-1"
+  59          else:
+  60              print chosen_index
+  61              counts[chosen_index] = USED
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Processes a sequence of candidate sets by shuffling each set, incrementing usage counts for non-used candidates, selecting the least-used candidate, and printing it or -1 when no candidate is available." solve]
+    [INPUTS]
+        <REF> case_index </REF>: integer "Unused per-case index parameter passed to solve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize the sentinel constant USED to 0xFFFFFFF (268435455). RESULT USED]
+            [COMMAND Advance to the next input line and read integer n, the number of outer iterations. RESULT n]
+            [COMMAND Initialize counts as a zero-filled list of length n, where counts[index] tracks usage of each candidate index. RESULT counts]
+            [COMMAND For each outer iteration i from 0 to n-1, advance to the next input line and read integer d, the number of candidates in the current iteration. RESULT d]
+            [COMMAND If d == 0, execute the d == 0 alternative flow; otherwise continue with candidate processing. RESULT d]
+            [COMMAND For the current nonzero-d iteration, create an empty candidate list cur, then for j from 0 to d-1 read integer itemaa and append it to cur. RESULT cur]
+            [COMMAND Shuffle cur in place so tie-breaking among equal usage counts is randomized. RESULT cur]
+            [COMMAND For each index in the shuffled cur, if counts[index] is not USED, increment counts[index] by 1. RESULT counts]
+            [COMMAND Select chosen_index as the element of cur with the minimum counts value, using min(cur, key=lambda i: counts[i]); the prior shuffle randomizes the choice when counts tie. RESULT chosen_index]
+            [COMMAND After choosing chosen_index, evaluate counts[chosen_index] and execute the corresponding alternative flow. RESULT chosen_index]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: In the current outer iteration, d == 0.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Print -1 to stdout. RESULT stdout]
+            [COMMAND Continue to the next outer iteration, skipping candidate reading and selection. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After selecting chosen_index, counts[chosen_index] == USED.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Print -1 to stdout. RESULT stdout]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After selecting chosen_index, counts[chosen_index] != USED.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Print chosen_index to stdout. RESULT stdout]
+            [COMMAND Set counts[chosen_index] to USED. RESULT counts]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

@@ -1,0 +1,562 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.IOException;
+2   import java.io.InputStream;
+3   import java.io.PrintWriter;
+4   import java.util.Arrays;
+5   import java.util.Collections;
+6   import java.util.InputMismatchException;
+7   import java.util.NoSuchElementException;
+8   import java.util.PriorityQueue;
+9   public class Main {
+10  	static PrintWriter out;
+11  	static InputReader ir;
+12  	static void solve() {
+13  		int Q = ir.nextInt();
+14  		PriorityQueue<Long> f = new PriorityQueue<>(Collections.reverseOrder());
+15  		PriorityQueue<Long> l = new PriorityQueue<>();
+16  		long fsum = 0, lsum = 0;
+17  		long B = 0;
+18  		while (Q-- > 0) {
+19  			int com = ir.nextInt();
+20  			if (com == 1) {
+21  				long a = ir.nextLong();
+22  				if (f.size() == l.size()) {
+23  					if (l.size() == 0) {
+24  						f.add(a);
+25  						fsum += a;
+26  					} else {
+27  						long x = l.peek();
+28  						if (x < a) {
+29  							lsum += a - x;
+30  							fsum += x;
+31  							l.poll();
+32  							l.add(a);
+33  							f.add(x);
+34  						} else {
+35  							fsum += a;
+36  							f.add(a);
+37  						}
+38  					}
+39  				} else {
+40  					long x = f.peek();
+41  					if (x <= a) {
+42  						lsum += a;
+43  						l.add(a);
+44  					} else {
+45  						lsum += x;
+46  						fsum += a - x;
+47  						f.poll();
+48  						f.add(a);
+49  						l.add(x);
+50  					}
+51  				}
+52  				B += ir.nextLong();
+53  			} else {
+54  				long x = f.peek();
+55  				if (f.size() == l.size()) {
+56  					out.println(x + " " + (lsum - fsum + B));
+57  				} else {
+58  					out.println(x + " " + (lsum - fsum + x + B));
+59  				}
+60  			}
+61  		}
+62  	}
+63  	public static void main(String[] args) {
+64  		ir = new InputReader(System.in);
+65  		out = new PrintWriter(System.out);
+66  		solve();
+67  		out.flush();
+68  	}
+69  	static class InputReader {
+70  		private InputStream in;
+71  		private byte[] buffer = new byte[1024];
+72  		private int curbuf;
+73  		private int lenbuf;
+74  		public InputReader(InputStream in) {
+75  			this.in = in;
+76  			this.curbuf = this.lenbuf = 0;
+77  		}
+78  		public boolean hasNextByte() {
+79  			if (curbuf >= lenbuf) {
+80  				curbuf = 0;
+81  				try {
+82  					lenbuf = in.read(buffer);
+83  				} catch (IOException e) {
+84  					throw new InputMismatchException();
+85  				}
+86  				if (lenbuf <= 0)
+87  					return false;
+88  			}
+89  			return true;
+90  		}
+91  		private int readByte() {
+92  			if (hasNextByte())
+93  				return buffer[curbuf++];
+94  			else
+95  				return -1;
+96  		}
+97  		private boolean isSpaceChar(int c) {
+98  			return !(c >= 33 && c <= 126);
+99  		}
+100  		private void skip() {
+101  			while (hasNextByte() && isSpaceChar(buffer[curbuf]))
+102  				curbuf++;
+103  		}
+104  		public boolean hasNext() {
+105  			skip();
+106  			return hasNextByte();
+107  		}
+108  		public String next() {
+109  			if (!hasNext())
+110  				throw new NoSuchElementException();
+111  			StringBuilder sb = new StringBuilder();
+112  			int b = readByte();
+113  			while (!isSpaceChar(b)) {
+114  				sb.appendCodePoint(b);
+115  				b = readByte();
+116  			}
+117  			return sb.toString();
+118  		}
+119  		public int nextInt() {
+120  			if (!hasNext())
+121  				throw new NoSuchElementException();
+122  			int c = readByte();
+123  			while (isSpaceChar(c))
+124  				c = readByte();
+125  			boolean minus = false;
+126  			if (c == '-') {
+127  				minus = true;
+128  				c = readByte();
+129  			}
+130  			int res = 0;
+131  			do {
+132  				if (c < '0' || c > '9')
+133  					throw new InputMismatchException();
+134  				res = res * 10 + c - '0';
+135  				c = readByte();
+136  			} while (!isSpaceChar(c));
+137  			return (minus) ? -res : res;
+138  		}
+139  		public long nextLong() {
+140  			if (!hasNext())
+141  				throw new NoSuchElementException();
+142  			int c = readByte();
+143  			while (isSpaceChar(c))
+144  				c = readByte();
+145  			boolean minus = false;
+146  			if (c == '-') {
+147  				minus = true;
+148  				c = readByte();
+149  			}
+150  			long res = 0;
+151  			do {
+152  				if (c < '0' || c > '9')
+153  					throw new InputMismatchException();
+154  				res = res * 10 + c - '0';
+155  				c = readByte();
+156  			} while (!isSpaceChar(c));
+157  			return (minus) ? -res : res;
+158  		}
+159  		public double nextDouble() {
+160  			return Double.parseDouble(next());
+161  		}
+162  		public int[] nextIntArray(int n) {
+163  			int[] a = new int[n];
+164  			for (int i = 0; i < n; i++)
+165  				a[i] = nextInt();
+166  			return a;
+167  		}
+168  		public long[] nextLongArray(int n) {
+169  			long[] a = new long[n];
+170  			for (int i = 0; i < n; i++)
+171  				a[i] = nextLong();
+172  			return a;
+173  		}
+174  		public char[][] nextCharMap(int n, int m) {
+175  			char[][] map = new char[n][m];
+176  			for (int i = 0; i < n; i++)
+177  				map[i] = next().toCharArray();
+178  			return map;
+179  		}
+180  	}
+181  	static void tr(Object... o) {
+182  		out.println(Arrays.deepToString(o));
+183  		out.flush();
+184  	}
+185  }
+```
+
+
+**Question**: Does `(f,14)` have data dependence over `(Q,18)` in function `solve`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: solve
+Target source anchor: variable=Q, line=18
+Trace source anchor: variable=f, line=14
+Attached SPL owners: solve
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source.
+- A declaration or allocation IS a source when the value it writes flows to the target: for 'int[] as = new int[n]', the allocation line is a source (the array object originates there) just like later element writes. A function parameter is a source whenever its value is read to compute the target. Do NOT drop a declaration/allocation/parameter line merely because it is a declaration.
+- For an array read such as a[i], report BOTH the last write at that index AND the array's declaration/allocation line (the array object and its initial content originate there).
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Read integer Q from ir as the number of commands. RESULT Q]
+- [COMMAND Start while loop with condition Q-- > 0; the body executes while the value of Q before decrement is greater than 0, and Q is decremented by 1 after each condition check. RESULT loop_control]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 13: int Q = ir.nextInt();
+- line 18: while (Q-- > 0) {
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["Q"], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "before_target", "reason": "Q", "relevant_identifiers": ["Q"], "roles": ["definition"], "source_identifiers": ["Q", "int", "ir", "nextInt"]}
+- {"definitions": ["Q"], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "target", "reason": "Q", "relevant_identifiers": ["Q"], "roles": ["definition", "control"], "source_identifiers": ["Q", "while"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 12-62
+- source signature: `static void solve() {`
+- source content hash: `4dc7eba3bb769917bc594b7db5f581ef4228b3235dea870ce7ef147541436ab9`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```java
+  12   static void solve() {
+  13    int Q = ir.nextInt();
+  14    PriorityQueue<Long> f = new PriorityQueue<>(Collections.reverseOrder());
+  15    PriorityQueue<Long> l = new PriorityQueue<>();
+  16    long fsum = 0, lsum = 0;
+  17    long B = 0;
+  18    while (Q-- > 0) {
+  19     int com = ir.nextInt();
+  20     if (com == 1) {
+  21      long a = ir.nextLong();
+  22      if (f.size() == l.size()) {
+  23       if (l.size() == 0) {
+  24        f.add(a);
+  25        fsum += a;
+  26       } else {
+  27        long x = l.peek();
+  28        if (x < a) {
+  29         lsum += a - x;
+  30         fsum += x;
+  31         l.poll();
+  32         l.add(a);
+  33         f.add(x);
+  34        } else {
+  35         fsum += a;
+  36         f.add(a);
+  37        }
+  38       }
+  39      } else {
+  40       long x = f.peek();
+  41       if (x <= a) {
+  42        lsum += a;
+  43        l.add(a);
+  44       } else {
+  45        lsum += x;
+  46        fsum += a - x;
+  47        f.poll();
+  48        f.add(a);
+  49        l.add(x);
+  50       }
+  51      }
+  52      B += ir.nextLong();
+  53     } else {
+  54      long x = f.peek();
+  55      if (f.size() == l.size()) {
+  56       out.println(x + " " + (lsum - fsum + B));
+  57      } else {
+  58       out.println(x + " " + (lsum - fsum + x + B));
+  59      }
+  60     }
+  61    }
+  62   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Processes a sequence of commands using two heaps to maintain the lower and upper halves of inserted values, and for each query prints the current median candidate x with a cumulative B-adjusted sum." solve]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read integer Q from ir as the number of commands. RESULT Q]
+            [COMMAND Initialize max-heap f using new PriorityQueue<Long>(Collections.reverseOrder()), min-heap l using new PriorityQueue<Long>(), long fsum = 0, long lsum = 0, and long B = 0. RESULT f, l, fsum, lsum, B]
+            [COMMAND Start while loop with condition Q-- > 0; the body executes while the value of Q before decrement is greater than 0, and Q is decremented by 1 after each condition check. RESULT loop_control]
+            [COMMAND Inside the while loop, read integer com from ir. RESULT com]
+            [COMMAND If com == 1, read long a from ir. RESULT a]
+            [COMMAND If com == 1 and f.size() == l.size() and l.size() == 0, add a to f and add a to fsum. RESULT f, fsum]
+            [COMMAND If com == 1 and f.size() == l.size() and l.size() != 0, set x = l.peek(). RESULT x]
+            [COMMAND If com == 1 and f.size() == l.size() and l.size() != 0 and x < a, update lsum += a - x, fsum += x, poll x from l, add a to l, and add x to f. RESULT f, l, fsum, lsum]
+            [COMMAND If com == 1 and f.size() == l.size() and l.size() != 0 and x >= a, add a to f and add a to fsum. RESULT f, fsum]
+            [COMMAND If com == 1 and f.size() != l.size(), set x = f.peek(). RESULT x]
+            [COMMAND If com == 1 and f.size() != l.size() and x <= a, add a to l and add a to lsum. RESULT l, lsum]
+            [COMMAND If com == 1 and f.size() != l.size() and x > a, update lsum += x, fsum += a - x, poll x from f, add a to f, and add x to l. RESULT f, l, fsum, lsum]
+            [COMMAND If com == 1, read the next long from ir and add it to B. RESULT B]
+            [COMMAND If com != 1, set x = f.peek(). RESULT x]
+            [COMMAND If com != 1 and f.size() == l.size(), print x and the expression lsum - fsum + B. RESULT printed_output]
+            [COMMAND If com != 1 and f.size() != l.size(), print x and the expression lsum - fsum + x + B. RESULT printed_output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

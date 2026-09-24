@@ -1,0 +1,299 @@
+# FILE: sklearn/metrics/cluster/supervised.py
+[DEFINE_WORKER: "Returns the exact binomial coefficient C(n, 2) for a given n by calling comb with k=2 and exact=1, avoiding the approximate float variant." comb2]
+    [INPUTS]
+        <REF> n </REF>: integer "The total number of items; must be defined and non-negative for exact comb() mode."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: integer "The exact binomial coefficient C(n, 2), equal to n * (n - 1) // 2."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of calling comb(n, 2, exact=1), which computes the exact binomial coefficient C(n, 2) as n*(n-1)//2. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a contingency matrix counting co-occurrences of true class labels and predicted cluster labels, with optional sparse CSR output and optional epsilon smoothing." contingency_matrix]
+    [INPUTS]
+        <REF> labels_true </REF>: int array, shape [n_samples] "Ground truth class labels used as the reference."
+        <REF> labels_pred </REF>: array, shape [n_samples] "Predicted cluster labels to evaluate."
+        <REF> eps </REF>: None or float "Optional value added to all contingency matrix entries to prevent NaN propagation. Must be None if sparse is True."
+        <REF> sparse </REF>: boolean "If True, return a scipy.sparse.csr_matrix instead of a dense array; cannot be True when eps is not None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> contingency </REF>: array-like or scipy.sparse.csr_matrix "Contingency matrix C where C[i, j] is the number of samples in true class i and predicted cluster j. Integer dtype if eps is None, float dtype if eps is provided, and csr_matrix if sparse is True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether eps is not None and sparse is True; if so, trigger the ValueError exception flow. Otherwise continue building the contingency matrix. RESULT guard_condition]
+            [COMMAND Compute sorted unique classes and inverse indices from labels_true using np.unique(labels_true, return_inverse=True), storing them as classes and class_idx. RESULT classes, class_idx]
+            [COMMAND Compute sorted unique clusters and inverse indices from labels_pred using np.unique(labels_pred, return_inverse=True), storing them as clusters and cluster_idx. RESULT clusters, cluster_idx]
+            [COMMAND Set n_classes to classes.shape[0] and n_clusters to clusters.shape[0]. RESULT n_classes, n_clusters]
+            [COMMAND Create a sparse COO matrix with data np.ones(class_idx.shape[0]), row indices class_idx, column indices cluster_idx, shape (n_classes, n_clusters), and dtype np.int; store it as contingency. RESULT contingency]
+            [COMMAND If sparse is False, in the else branch, convert contingency to a dense NumPy array using toarray(). RESULT contingency]
+            [COMMAND If sparse is False and eps is not None, in the nested else branch, replace contingency with contingency + eps to add epsilon to every entry. RESULT contingency]
+            [COMMAND Return contingency as the result. RESULT contingency]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: sparse is True and eps is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert contingency to a CSR sparse matrix using tocsr(). RESULT contingency]
+            [COMMAND Call sum_duplicates() on the CSR contingency matrix to merge duplicate entries. RESULT contingency]
+            [COMMAND Return contingency as the result. RESULT contingency]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: eps is not None and sparse is True]
+        [LOG "Cannot set 'eps' when sparse=True"]
+        [THROW ValueError "Raised because epsilon adjustment cannot be applied when sparse output is requested."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the adjusted Rand index between two clusterings by validating labels, handling degenerate cases, and normalizing the contingency-based pair agreement by chance." adjusted_rand_score]
+    [INPUTS]
+        <REF> labels_true </REF>: int array "Ground truth class labels for each sample."
+        <REF> labels_pred </REF>: array "Predicted cluster labels for each sample."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ari </REF>: float "Adjusted Rand index score between -1.0 and 1.0; 1.0 for perfect match, near 0.0 for random labeling."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate the input label arrays with check_clusterings(labels_true, labels_pred) and assign the returned validated arrays back to labels_true and labels_pred. RESULT labels_true, labels_pred]
+            [COMMAND Set n_samples to the number of rows in validated labels_true. RESULT n_samples]
+            [COMMAND Set n_classes to the number of unique values in labels_true. RESULT n_classes]
+            [COMMAND Set n_clusters to the number of unique values in labels_pred. RESULT n_clusters]
+            [COMMAND Build the sparse contingency matrix from labels_true and labels_pred using contingency_matrix(..., sparse=True). RESULT contingency]
+            [COMMAND Compute sum_comb_c as the sum of comb2(n_c) over each row total n_c of the contingency matrix. RESULT sum_comb_c]
+            [COMMAND Compute sum_comb_k as the sum of comb2(n_k) over each column total n_k of the contingency matrix. RESULT sum_comb_k]
+            [COMMAND Compute sum_comb as the sum of comb2(n_ij) over each nonzero cell count n_ij in the contingency matrix. RESULT sum_comb]
+            [COMMAND Compute prod_comb as (sum_comb_c * sum_comb_k) / comb2(n_samples). RESULT prod_comb]
+            [COMMAND Compute mean_comb as (sum_comb_k + sum_comb_c) / 2. RESULT mean_comb]
+            [COMMAND Compute and return (sum_comb - prod_comb) / (mean_comb - prod_comb) as the final ARI score. RESULT ari]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After computing n_samples, n_classes, and n_clusters, if n_classes equals n_clusters and that shared value is 1, 0, or n_samples, before building the contingency matrix.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return 1.0 immediately as a special limit case. RESULT 1.0]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes homogeneity, completeness, and V-measure clustering evaluation scores from ground truth and predicted labels, including empty-input and zero-entropy edge cases." homogeneity_completeness_v_measure]
+    [INPUTS]
+        <REF> labels_true </REF>: int array, shape = [n_samples] "ground truth class labels to be used as a reference"
+        <REF> labels_pred </REF>: array, shape = [n_samples] "cluster labels to evaluate"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> homogeneity </REF>: float "score between 0.0 and 1.0; 1.0 stands for perfectly homogeneous labeling"
+        <REF> completeness </REF>: float "score between 0.0 and 1.0; 1.0 stands for perfectly complete labeling"
+        <REF> v_measure </REF>: float "harmonic mean of the first two scores"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate and normalize labels_true and labels_pred by calling check_clusterings(labels_true, labels_pred), and assign the returned validated arrays back to labels_true and labels_pred. RESULT labels_true, labels_pred]
+            [COMMAND If len(labels_true) == 0, return the tuple (1.0, 1.0, 1.0) immediately. RESULT homogeneity, completeness, v_measure]
+            [COMMAND Compute entropy_C = entropy(labels_true). RESULT entropy_C]
+            [COMMAND Compute entropy_K = entropy(labels_pred). RESULT entropy_K]
+            [COMMAND Compute contingency = contingency_matrix(labels_true, labels_pred, sparse=True). RESULT contingency]
+            [COMMAND Compute MI = mutual_info_score(None, None, contingency=contingency). RESULT MI]
+            [COMMAND Set homogeneity = MI / entropy_C if entropy_C is nonzero, otherwise set homogeneity = 1.0. RESULT homogeneity]
+            [COMMAND Set completeness = MI / entropy_K if entropy_K is nonzero, otherwise set completeness = 1.0. RESULT completeness]
+            [COMMAND If homogeneity + completeness == 0.0, set v_measure_score = 0.0; otherwise compute v_measure_score = (2.0 * homogeneity * completeness) / (homogeneity + completeness). RESULT v_measure_score]
+            [COMMAND Return the tuple (homogeneity, completeness, v_measure_score). RESULT homogeneity, completeness, v_measure_score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the homogeneity score for a cluster labeling by calling homogeneity_completeness_v_measure and returning the first element of its result tuple." homogeneity_score]
+    [INPUTS]
+        <REF> labels_true </REF>: array of int, shape = [n_samples] "Ground truth class labels to be used as a reference."
+        <REF> labels_pred </REF>: array, shape = [n_samples] "Cluster labels to evaluate."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> homogeneity </REF>: float "Homogeneity score between 0.0 and 1.0; 1.0 stands for perfectly homogeneous labeling."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call homogeneity_completeness_v_measure with labels_true and labels_pred to obtain the metric tuple. RESULT metrics_tuple]
+            [COMMAND Extract element at index 0 of metrics_tuple and store it as homogeneity. RESULT homogeneity]
+            [COMMAND Return homogeneity as the method result. RESULT homogeneity]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the completeness score of a clustering result by calling homogeneity_completeness_v_measure and returning its second component." completeness_score]
+    [INPUTS]
+        <REF> labels_true </REF>: int array, shape = [n_samples] "Ground truth class labels to be used as a reference."
+        <REF> labels_pred </REF>: array, shape = [n_samples] "Cluster labels to evaluate."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> completeness </REF>: float "Completeness score between 0.0 and 1.0, where 1.0 stands for perfectly complete labeling."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call homogeneity_completeness_v_measure with labels_true and labels_pred to obtain the tuple (homogeneity, completeness, v_measure). RESULT measure_tuple]
+            [COMMAND Extract the element at index 1 of measure_tuple as the completeness score. RESULT completeness]
+            [COMMAND Return completeness as the function result. RESULT completeness]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the V-measure cluster labeling score by delegating to homogeneity_completeness_v_measure and returning its third tuple element, where the score is 0.0 when the homogeneity and completeness sum to zero and otherwise equals their harmonic mean." v_measure_score]
+    [INPUTS]
+        <REF> labels_true </REF>: int array, shape = [n_samples] "Ground truth class labels to be used as a reference."
+        <REF> labels_pred </REF>: array, shape = [n_samples] "Cluster labels to evaluate."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> v_measure </REF>: float "Score between 0.0 and 1.0. 1.0 stands for perfectly complete labeling."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call homogeneity_completeness_v_measure with labels_true and labels_pred to obtain the tuple containing homogeneity, completeness, and v_measure. RESULT homogeneity_completeness_v_measure_result]
+            [COMMAND Return the third element (index 2) of the tuple as the v_measure score, which is 0.0 when the homogeneity and completeness sum to zero and otherwise equals 2 * (homogeneity * completeness) / (homogeneity + completeness). RESULT v_measure]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Adjusted Mutual Information score between two cluster labelings by correcting the observed mutual information for chance and normalizing by the maximum entropy of the two labelings." adjusted_mutual_info_score]
+    [INPUTS]
+        <REF> labels_true </REF>: array-like, shape [n_samples] "Ground truth class labels, representing a clustering of the data into disjoint subsets."
+        <REF> labels_pred </REF>: array-like, shape [n_samples] "Predicted cluster labels, representing a clustering of the data into disjoint subsets."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ami </REF>: float "Adjusted Mutual Information score, upper-limited by 1.0. It is 1.0 for identical partitions and approximately 0 for independent random partitions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call check_clusterings with labels_true and labels_pred, and reassign the two returned normalized label arrays back to labels_true and labels_pred. RESULT labels_true, labels_pred]
+            [COMMAND Compute n_samples as the first dimension size of labels_true. RESULT n_samples]
+            [COMMAND Compute classes as the unique values of labels_true. RESULT classes]
+            [COMMAND Compute clusters as the unique values of labels_pred. RESULT clusters]
+            [COMMAND Check the degenerate early-return condition: if classes and clusters both have exactly 0 unique entries or both have exactly 1 unique entry, return 1.0 immediately and skip all remaining computation. RESULT return_value]
+            [COMMAND When the degenerate condition is false, compute a sparse contingency matrix from labels_true and labels_pred using contingency_matrix with sparse=True. RESULT contingency]
+            [COMMAND Cast contingency to float64. RESULT contingency]
+            [COMMAND Compute the observed mutual information mi by calling mutual_info_score with labels_true, labels_pred, and contingency=contingency. RESULT mi]
+            [COMMAND Compute the expected mutual information emi by calling expected_mutual_information with contingency and n_samples. RESULT emi]
+            [COMMAND Compute h_true as the entropy of labels_true. RESULT h_true]
+            [COMMAND Compute h_pred as the entropy of labels_pred. RESULT h_pred]
+            [COMMAND Compute ami as (mi - emi) / (max(h_true, h_pred) - emi). RESULT ami]
+            [COMMAND Return ami as the final adjusted mutual information score. RESULT ami]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the normalized mutual information between two clusterings, returning a score between 0.0 and 1.0, with a degenerate-case shortcut returning 1.0." normalized_mutual_info_score]
+    [INPUTS]
+        <REF> labels_true </REF>: int array, shape = [n_samples] "Ground truth class labels, representing a clustering of the data into disjoint subsets."
+        <REF> labels_pred </REF>: array, shape = [n_samples] "Cluster labels, representing a clustering of the data into disjoint subsets to compare against labels_true."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> nmi </REF>: float "Normalized mutual information score between 0.0 and 1.0; 1.0 stands for perfectly complete labeling."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call check_clusterings on labels_true and labels_pred to validate and normalize both label arrays, and assign the returned pair back to labels_true and labels_pred. RESULT labels_true, labels_pred]
+            [COMMAND Compute classes as the sorted unique values of labels_true using np.unique. RESULT classes]
+            [COMMAND Compute clusters as the sorted unique values of labels_pred using np.unique. RESULT clusters]
+            [COMMAND Assume the degenerate guard does not apply, and compute a sparse contingency matrix from labels_true and labels_pred using contingency_matrix with sparse=True. RESULT contingency]
+            [COMMAND Convert contingency to float64 using astype(np.float64). RESULT contingency]
+            [COMMAND Compute mi = mutual_info_score(labels_true, labels_pred, contingency=contingency). RESULT mi]
+            [COMMAND Compute h_true = entropy(labels_true) and h_pred = entropy(labels_pred). RESULT h_true, h_pred]
+            [COMMAND Compute nmi = mi / max(sqrt(h_true * h_pred), 1e-10). RESULT nmi]
+            [COMMAND Return nmi. RESULT nmi]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When both classes and clusters have the same number of unique labels and that number is either 1 or 0.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return 1.0 immediately as a perfect match for the degenerate no-split or single-split case. RESULT 1.0]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Fowlkes-Mallows index between two clusterings as the geometric mean of precision and recall, using pair-count statistics derived from a sparse contingency matrix." fowlkes_mallows_score]
+    [INPUTS]
+        <REF> labels_true </REF>: int array, shape (n_samples,) "Ground-truth cluster labels for the samples; must be a one-dimensional array."
+        <REF> labels_pred </REF>: array, shape (n_samples,) "Predicted cluster labels for the samples; must be a one-dimensional array with the same length as labels_true."
+        <REF> sparse </REF>: bool "Compatibility parameter accepted by the public API; the implementation always calls contingency_matrix with sparse=True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> score </REF>: float "The computed Fowlkes-Mallows index, normally in the range 0.0 to 1.0."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate labels_true and labels_pred by calling check_clusterings, then reassign both variables to the validated arrays. RESULT labels_true, labels_pred]
+            [COMMAND Unpack labels_true.shape into n_samples, requiring the array to have exactly one dimension. RESULT n_samples]
+            [COMMAND Compute c as the sparse contingency matrix of labels_true and labels_pred using contingency_matrix with sparse=True. RESULT c]
+            [COMMAND Compute tk as the dot product of c.data with itself minus n_samples. RESULT tk]
+            [COMMAND Compute pk as the sum of the squared column sums of c, after converting them to a dense flattened array, minus n_samples. RESULT pk]
+            [COMMAND Compute qk as the sum of the squared row sums of c, after converting them to a dense flattened array, minus n_samples. RESULT qk]
+            [COMMAND If tk is not equal to 0.0, compute and return score as tk divided by the square root of the product of pk and qk. RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: tk == 0.0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return 0.0 as the Fowlkes-Mallows score. RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Calculates the entropy of a labeling from its empirical class frequencies using natural logarithms, returning 1.0 for an empty input." entropy]
+    [INPUTS]
+        <REF> labels </REF>: array-like of discrete labels "The labels for which entropy is calculated; an empty input is allowed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> entropy </REF>: float "The entropy value in natural-log units, or 1.0 if labels is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute compact integer label codes from the unique sorted labels by taking the second output of np.unique(labels, return_inverse=True). RESULT label_idx]
+            [COMMAND Compute the frequency count of each label code using np.bincount and cast the counts to float64. RESULT pi]
+            [COMMAND Filter pi to keep only positive frequency counts. RESULT pi]
+            [COMMAND Compute pi_sum as the sum of the filtered pi counts. RESULT pi_sum]
+            [COMMAND Compute the entropy as the negative sum over positive-frequency bins of (pi / pi_sum) times the difference of the natural log of pi and the natural log of pi_sum, using the log difference to preserve precision. RESULT entropy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The number of labels is zero]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant entropy value 1.0 immediately. RESULT entropy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

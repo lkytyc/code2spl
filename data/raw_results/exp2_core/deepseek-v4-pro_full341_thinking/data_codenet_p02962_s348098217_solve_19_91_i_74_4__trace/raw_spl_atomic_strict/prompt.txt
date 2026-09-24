@@ -1,0 +1,585 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.OutputStream;
+2   import java.io.IOException;
+3   import java.io.InputStream;
+4   import java.io.PrintWriter;
+5   import java.util.InputMismatchException;
+6   import java.io.IOException;
+7   import java.io.InputStream;
+8   public class Main {
+9       public static void main(String[] args) {
+10          InputStream inputStream = System.in;
+11          OutputStream outputStream = System.out;
+12          FastScanner in = new FastScanner(inputStream);
+13          PrintWriter out = new PrintWriter(outputStream);
+14          FStringsOfEternity solver = new FStringsOfEternity();
+15          solver.solve(1, in, out);
+16          out.close();
+17      }
+18      static class FStringsOfEternity {
+19          public void solve(int testNumber, FastScanner br, PrintWriter pw) {
+20              String in1 = br.nextString();
+21              String in2 = br.nextString();
+22              char[] t = in1.toCharArray();
+23              char[] s = in2.toCharArray();
+24              if (t.length > s.length) {
+25                  int orig = 0;
+26                  boolean poss = true;
+27                  for (int i = 0; i < t.length - s.length; i += s.length) {
+28                      if (!in1.substring(i, i + s.length).equals(in2)) {
+29                          poss = false;
+30                      } else {
+31                          orig++;
+32                      }
+33                  }
+34                  if (poss) {
+35                      pw.println(-1);
+36                      pw.close();
+37                  }
+38                  int ans = 0;
+39                  for (int i = 0; i < t.length - s.length; i += s.length) {
+40                      if (in1.substring(i, i + s.length).equals(in2)) {
+41                          ans++;
+42                      } else {
+43                          break;
+44                      }
+45                  }
+46                  for (int i = t.length - s.length; i >= 0; i -= s.length) {
+47                      if (in1.substring(i, i + s.length).equals(in2)) {
+48                          ans++;
+49                      } else {
+50                          break;
+51                      }
+52                  }
+53                  pw.println(Math.max(orig, ans));
+54                  pw.close();
+55              } else if (s.length == t.length) {
+56                  if (s.equals(t)) {
+57                      pw.println(-1);
+58                  } else {
+59                      pw.println(0);
+60                  }
+61              } else {
+62                  int orig = 0;
+63                  boolean poss = true;
+64                  for (int i = 0; i < s.length - t.length; i += s.length) {
+65                      if (!in2.substring(i, i + t.length).equals(in1)) {
+66                          poss = false;
+67                      }
+68                  }
+69                  if (poss) {
+70                      pw.println(-1);
+71                      pw.close();
+72                  }
+73                  int ans = 0;
+74                  for (int i = 0; i < s.length - t.length; i += t.length) {
+75                      if (in2.substring(i, i + t.length).equals(in1)) {
+76                          ans++;
+77                      } else {
+78                          break;
+79                      }
+80                  }
+81                  for (int i = s.length - t.length; i >= 0; i -= t.length) {
+82                      if (in2.substring(i, i + t.length).equals(in1)) {
+83                          ans++;
+84                      } else {
+85                          break;
+86                      }
+87                  }
+88                  pw.println(Math.max(orig, ans));
+89                  pw.close();
+90              }
+91          }
+92      }
+93      static class FastScanner {
+94          private InputStream stream;
+95          private byte[] buf = new byte[1024];
+96          private int curChar;
+97          private int numChars;
+98          private FastScanner.SpaceCharFilter filter;
+99          public FastScanner(InputStream stream) {
+100              this.stream = stream;
+101          }
+102          public int read() {
+103              if (numChars == -1) {
+104                  throw new InputMismatchException();
+105              }
+106              if (curChar >= numChars) {
+107                  curChar = 0;
+108                  try {
+109                      numChars = stream.read(buf);
+110                  } catch (IOException e) {
+111                      throw new InputMismatchException();
+112                  }
+113                  if (numChars <= 0) {
+114                      return -1;
+115                  }
+116              }
+117              return buf[curChar++];
+118          }
+119          public String nextString() {
+120              int c = read();
+121              while (isSpaceChar(c)) {
+122                  c = read();
+123              }
+124              StringBuilder res = new StringBuilder();
+125              do {
+126                  if (Character.isValidCodePoint(c)) {
+127                      res.appendCodePoint(c);
+128                  }
+129                  c = read();
+130              } while (!isSpaceChar(c));
+131              return res.toString();
+132          }
+133          public boolean isSpaceChar(int c) {
+134              if (filter != null) {
+135                  return filter.isSpaceChar(c);
+136              }
+137              return isWhitespace(c);
+138          }
+139          public static boolean isWhitespace(int c) {
+140              return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == -1;
+141          }
+142          public interface SpaceCharFilter {
+143              public boolean isSpaceChar(int ch);
+144          }
+145      }
+146  }
+```
+
+
+**Question**: Does `(poss,26)` have data dependence over `(i,74)` in function `solve`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: solve
+Target source anchor: variable=i, line=74
+Trace source anchor: variable=poss, line=26
+Attached SPL owners: solve
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND For i = 0 while i < t.length - s.length, incrementing by s.length, compare in1.substring(i, i + s.length) with in2; if they are not equal set poss = false, otherwise increment orig; this loop scans the full range without breaking. RESULT orig_and_poss]
+- [COMMAND For i = 0 while i < t.length - s.length, incrementing by s.length, check whether in1.substring(i, i + s.length) equals in2; if so increment ans, otherwise break. RESULT ans]
+- [COMMAND Convert in2 to a char array named s using in2.toCharArray(). RESULT s]
+- [COMMAND Compare t.length with s.length to select the corresponding length-based branch. RESULT length_relation]
+- [COMMAND For i = t.length - s.length while i >= 0, decrementing by s.length, check whether in1.substring(i, i + s.length) equals in2; if so increment ans, otherwise break. RESULT ans]
+- [COMMAND For i = 0 while i < s.length - t.length, incrementing by s.length, compare in2.substring(i, i + t.length) with in1; if they are not equal set poss = false; matches do not increment orig in this loop. RESULT poss]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 20: String in1 = br.nextString();
+- line 21: String in2 = br.nextString();
+- line 22: char[] t = in1.toCharArray();
+- line 23: char[] s = in2.toCharArray();
+- line 27: for (int i = 0; i < t.length - s.length; i += s.length) {
+- line 39: for (int i = 0; i < t.length - s.length; i += s.length) {
+- line 46: for (int i = t.length - s.length; i >= 0; i -= s.length) {
+- line 64: for (int i = 0; i < s.length - t.length; i += s.length) {
+- line 74: for (int i = 0; i < s.length - t.length; i += t.length) {
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "before_target", "reason": "in1", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["String", "br", "in1", "nextString"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "in2", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["String", "br", "in2", "nextString"]}
+- {"definitions": ["t"], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "before_target", "reason": "t", "relevant_identifiers": ["t"], "roles": ["definition"], "source_identifiers": ["char", "in1", "t", "toCharArray"]}
+- {"definitions": ["s"], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "before_target", "reason": "s", "relevant_identifiers": ["s"], "roles": ["definition"], "source_identifiers": ["char", "in2", "s", "toCharArray"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 27, "position": "before_target", "reason": "i", "relevant_identifiers": ["i", "s", "length", "t"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "i", "int", "length", "s", "t"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 39, "position": "before_target", "reason": "i", "relevant_identifiers": ["i", "s", "length", "t"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "i", "int", "length", "s", "t"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 46, "position": "before_target", "reason": "i", "relevant_identifiers": ["i", "s", "length", "t"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "i", "int", "length", "s", "t"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 64, "position": "before_target", "reason": "i", "relevant_identifiers": ["i", "s", "length", "t"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "i", "int", "length", "s", "t"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 74, "position": "target", "reason": "i", "relevant_identifiers": ["i", "s", "length", "t"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "i", "int", "length", "s", "t"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 19-91
+- source signature: `public void solve(int testNumber, FastScanner br, PrintWriter pw) {`
+- source content hash: `759ed00bf7f07af4e802ec2d513f88e10b075a393e6e45aa15443f16fa25817f`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```java
+  19          public void solve(int testNumber, FastScanner br, PrintWriter pw) {
+  20              String in1 = br.nextString();
+  21              String in2 = br.nextString();
+  22              char[] t = in1.toCharArray();
+  23              char[] s = in2.toCharArray();
+  24              if (t.length > s.length) {
+  25                  int orig = 0;
+  26                  boolean poss = true;
+  27                  for (int i = 0; i < t.length - s.length; i += s.length) {
+  28                      if (!in1.substring(i, i + s.length).equals(in2)) {
+  29                          poss = false;
+  30                      } else {
+  31                          orig++;
+  32                      }
+  33                  }
+  34                  if (poss) {
+  35                      pw.println(-1);
+  36                      pw.close();
+  37                  }
+  38                  int ans = 0;
+  39                  for (int i = 0; i < t.length - s.length; i += s.length) {
+  40                      if (in1.substring(i, i + s.length).equals(in2)) {
+  41                          ans++;
+  42                      } else {
+  43                          break;
+  44                      }
+  45                  }
+  46                  for (int i = t.length - s.length; i >= 0; i -= s.length) {
+  47                      if (in1.substring(i, i + s.length).equals(in2)) {
+  48                          ans++;
+  49                      } else {
+  50                          break;
+  51                      }
+  52                  }
+  53                  pw.println(Math.max(orig, ans));
+  54                  pw.close();
+  55              } else if (s.length == t.length) {
+  56                  if (s.equals(t)) {
+  57                      pw.println(-1);
+  58                  } else {
+  59                      pw.println(0);
+  60                  }
+  61              } else {
+  62                  int orig = 0;
+  63                  boolean poss = true;
+  64                  for (int i = 0; i < s.length - t.length; i += s.length) {
+  65                      if (!in2.substring(i, i + t.length).equals(in1)) {
+  66                          poss = false;
+  67                      }
+  68                  }
+  69                  if (poss) {
+  70                      pw.println(-1);
+  71                      pw.close();
+  72                  }
+  73                  int ans = 0;
+  74                  for (int i = 0; i < s.length - t.length; i += t.length) {
+  75                      if (in2.substring(i, i + t.length).equals(in1)) {
+  76                          ans++;
+  77                      } else {
+  78                          break;
+  79                      }
+  80                  }
+  81                  for (int i = s.length - t.length; i >= 0; i -= t.length) {
+  82                      if (in2.substring(i, i + t.length).equals(in1)) {
+  83                          ans++;
+  84                      } else {
+  85                          break;
+  86                      }
+  87                  }
+  88                  pw.println(Math.max(orig, ans));
+  89                  pw.close();
+  90              }
+  91          }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads two strings, compares length-difference-aligned substring blocks, prints -1 if the first non-breaking scan finds all checked blocks equal, and otherwise prints the maximum of the original scan count and the prefix-plus-suffix consecutive match count; the equal-length branch uses char-array reference equality." solve]
+    [INPUTS]
+        <REF> testNumber </REF>: int "Test case number; not used in the method body."
+        <REF> br </REF>: FastScanner "Input scanner used to read the two strings."
+        <REF> pw </REF>: PrintWriter "Output writer used to print numeric results."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the first input string into in1 using br.nextString(). RESULT in1]
+            [COMMAND Read the second input string into in2 using br.nextString(). RESULT in2]
+            [COMMAND Convert in1 to a char array named t using in1.toCharArray(). RESULT t]
+            [COMMAND Convert in2 to a char array named s using in2.toCharArray(). RESULT s]
+            [COMMAND Compare t.length with s.length to select the corresponding length-based branch. RESULT length_relation]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: t.length > s.length]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize orig to 0. RESULT orig]
+            [COMMAND Initialize poss to true. RESULT poss]
+            [COMMAND For i = 0 while i < t.length - s.length, incrementing by s.length, compare in1.substring(i, i + s.length) with in2; if they are not equal set poss = false, otherwise increment orig; this loop scans the full range without breaking. RESULT orig_and_poss]
+            [COMMAND If poss is true, print -1 to pw and close pw; there is no return, so execution continues with the next steps. RESULT pw]
+            [COMMAND Initialize ans to 0. RESULT ans]
+            [COMMAND For i = 0 while i < t.length - s.length, incrementing by s.length, check whether in1.substring(i, i + s.length) equals in2; if so increment ans, otherwise break. RESULT ans]
+            [COMMAND For i = t.length - s.length while i >= 0, decrementing by s.length, check whether in1.substring(i, i + s.length) equals in2; if so increment ans, otherwise break. RESULT ans]
+            [COMMAND Print Math.max(orig, ans) to pw and close pw. RESULT pw]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: t.length == s.length]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If s.equals(t) evaluates to true using reference equality for these char arrays, print -1 to pw; otherwise print 0 to pw. RESULT pw]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: s.length > t.length]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize orig to 0. RESULT orig]
+            [COMMAND Initialize poss to true. RESULT poss]
+            [COMMAND For i = 0 while i < s.length - t.length, incrementing by s.length, compare in2.substring(i, i + t.length) with in1; if they are not equal set poss = false; matches do not increment orig in this loop. RESULT poss]
+            [COMMAND If poss is true, print -1 to pw and close pw; there is no return, so execution continues with the next steps. RESULT pw]
+            [COMMAND Initialize ans to 0. RESULT ans]
+            [COMMAND For i = 0 while i < s.length - t.length, incrementing by t.length, check whether in2.substring(i, i + t.length) equals in1; if so increment ans, otherwise break. RESULT ans]
+            [COMMAND For i = s.length - t.length while i >= 0, decrementing by t.length, check whether in2.substring(i, i + t.length) equals in1; if so increment ans, otherwise break. RESULT ans]
+            [COMMAND Print Math.max(orig, ans) to pw and close pw. RESULT pw]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

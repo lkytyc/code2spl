@@ -1,0 +1,174 @@
+# FILE: sympy/polys/matrices/normalforms.py
+[DEFINE_WORKER: "Computes the Smith Normal Form of a matrix m by constructing a diagonal DomainMatrix from its invariant factors using the same domain and shape as m." smith_normal_form]
+    [INPUTS]
+        <REF> m </REF>: DomainMatrix "The matrix over a principal ideal domain whose Smith Normal Form is to be computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> smf </REF>: DomainMatrix "A diagonal DomainMatrix whose diagonal entries are the invariant factors of m."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the invariant factors of m by calling invariant_factors(m). RESULT invs]
+            [COMMAND Construct a diagonal DomainMatrix from invs using m.domain and m.shape. RESULT smf]
+            [COMMAND Return smf. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "For each row of matrix m, replaces column i by a times the original column i plus b times column j, and replaces column j by c times the original column i plus d times column j, mutating m in place." add_columns]
+    [INPUTS]
+        <REF> m </REF>: list[list[number]] "Matrix represented as a list of rows; each row is a list of numeric values. Mutated in place."
+        <REF> i </REF>: int "Index of the first column to transform."
+        <REF> j </REF>: int "Index of the second column to transform."
+        <REF> a </REF>: number "Multiplier for the original column i in the first column update."
+        <REF> b </REF>: number "Multiplier for column j in the first column update."
+        <REF> c </REF>: number "Multiplier for the original column i in the second column update."
+        <REF> d </REF>: number "Multiplier for column j in the second column update."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each row index k from 0 to len(m)-1 inclusive, process the rows sequentially. RESULT k]
+            [COMMAND Within the loop for row k, store the original value of m[k][i] in e before updating the columns. RESULT e]
+            [COMMAND Within the loop for row k, set m[k][i] to a*e + b*m[k][j], using the saved original column i value e and the current (still original) value of m[k][j]. RESULT m]
+            [COMMAND Within the loop for row k, set m[k][j] to c*e + d*m[k][j], using the saved original column i value e and the current value of m[k][j]; if i equals j, this current value is the already-updated m[k][i]. RESULT m]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the extended integer GCD of a and b and normalizes the Bezout coefficients so that y is 0 and x is the sign of a when b is divisible by a." _gcdex]
+    [INPUTS]
+        <REF> a </REF>: int "First integer for the extended GCD computation."
+        <REF> b </REF>: int "Second integer for the extended GCD computation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Tuple[int, int, int] "The tuple (x, y, g) where g = gcd(a, b) and x*a + y*b = g. If a != 0 and b % a == 0, y is 0 and x is -1 when a < 0, otherwise x is 1."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute x, y, g = ZZ.gcdex(a, b), obtaining the integer gcd g and Bezout coefficients x and y satisfying x*a + y*b = g. RESULT x_y_g]
+            [COMMAND Evaluate the condition a != 0 and b % a == 0 with short-circuit semantics so that b % a is not evaluated when a is 0. RESULT a_divides_b]
+            [COMMAND If a_divides_b is true, set y to 0. RESULT y]
+            [COMMAND If a_divides_b is true, set x to -1 if a < 0, otherwise set x to 1. RESULT x]
+            [COMMAND Return the tuple (x, y, g). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Hermite Normal Form of a DomainMatrix over the integers by processing rows bottom-up, creating nonzero pivots, and reducing entries to the right of each pivot modulo the pivot." _hermite_normal_form]
+    [INPUTS]
+        <REF> A </REF>: DomainMatrix "Matrix over the integer domain ZZ to be reduced to Hermite Normal Form."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: DomainMatrix "The Hermite Normal Form of A, consisting of the columns of the transformed matrix from the final pivot column k onward."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Verify that A.domain.is_ZZ is true; this is the precondition for the ZZ Hermite normal form computation. RESULT domain_ok]
+            [COMMAND Read the shape of A: set m to the number of rows and n to the number of columns, then set rows = min(m, n). RESULT dims]
+            [COMMAND Replace A with A.to_dense().rep.copy() to obtain a mutable dense matrix list for in-place column operations. RESULT A]
+            [COMMAND Set k = n; k is the invariant pointer to the leftmost column in which a pivot has been placed so far, and n means no pivot has been placed yet. RESULT k]
+            [COMMAND For each i in range(m - 1, m - 1 - rows, -1), i.e. for exactly rows rows from bottom to top, decrement k by 1 to select the next candidate pivot column. RESULT outer_loop]
+            [COMMAND Within the outer loop over i, for each j from k - 1 down to 0 inclusive, if A[i][j] is nonzero, compute u, v, d = _gcdex(A[i][k], A[i][j]), r = A[i][k] // d, s = A[i][j] // d, and call add_columns(A, k, j, u, v, -s, r); this makes A[i][j] zero and A[i][k] equal to the gcd of the two original entries. RESULT left_cleared]
+            [COMMAND Within the outer loop over i, set b = A[i][k] as the current pivot value. RESULT b]
+            [COMMAND Within the outer loop over i, if b < 0, call add_columns(A, k, k, -1, 0, -1, 0) to negate column k, then set b = -b. RESULT b_nonnegative]
+            [COMMAND Within the outer loop over i, if b == 0, increment k by 1 to retry the same pivot column on the next row; otherwise, for each j from k + 1 to n - 1 inclusive, compute q = A[i][j] // b and call add_columns(A, j, k, 1, -q, 0, 1) to reduce A[i][j] modulo b. RESULT row_reduced]
+            [COMMAND Return DomainMatrix.from_rep(A)[:, k:], i.e. the submatrix consisting of the columns from the final pivot column k to the end of the transformed matrix. RESULT hnf]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: A.domain.is_ZZ is false]
+        [LOG "Matrix must be over domain ZZ."]
+        [THROW DMDomainError "Raised when the matrix is not over the integer domain ZZ."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Hermite Normal Form of an m x n integer matrix A modulo D through modular column transformations and pivot reduction, returning the result as a dense DomainMatrix." _hermite_normal_form_modulo_D]
+    [INPUTS]
+        <REF> A </REF>: DomainMatrix over ZZ "m x n matrix of rank m with at least as many columns as rows."
+        <REF> D </REF>: ZZ "Positive integer known to be a multiple of the determinant of the Hermite Normal Form of A."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: DomainMatrix "The m x m dense DomainMatrix over ZZ containing the Hermite Normal Form of A."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that A.domain is ZZ; if not, raise DMDomainError. RESULT _domain_check]
+            [COMMAND Validate that D is a positive element of ZZ: if ZZ.of_type(D) is false, or if ZZ.of_type(D) is true and D < 1, raise DMDomainError. RESULT _modulus_check]
+            [COMMAND Define the internal helper add_columns_mod_R(m, R, i, j, a, b, c, d) that, for each row k, stores e = m[k][i] and then updates both columns using the original row values: m[k][i] = symmetric_residue((a*e + b*m[k][j]) % R, R) and m[k][j] = symmetric_residue((c*e + d*m[k][j]) % R, R); mutates m in place. RESULT _helper_defined]
+            [COMMAND Initialize W as defaultdict(dict) and unpack A.shape into m and n. RESULT W_m_n]
+            [COMMAND If n < m, raise DMShapeError. RESULT _shape_check]
+            [COMMAND Replace A with A.to_dense().rep.copy(), set k = n, and set R = D. RESULT A_k_R]
+            [COMMAND For i from m-1 down to 0 inclusive: decrement k by 1; then for j from k-1 down to 0 inclusive, if A[i][j] != 0, compute u, v, d = _gcdex(A[i][k], A[i][j]), set r = A[i][k] // d and s = A[i][j] // d, and call add_columns_mod_R(A, R, k, j, u, v, -s, r). If A[i][j] == 0, skip this j. RESULT _column_reduction]
+            [COMMAND Within the same outer i iteration, after the inner j loop, set b = A[i][k]; if b == 0, set A[i][k] = b = R. RESULT b]
+            [COMMAND Within the same outer i iteration, compute u, v, d = _gcdex(b, R); for ii from 0 to m-1, set W[ii][i] = (u * A[ii][k]) % R. RESULT W_column_i]
+            [COMMAND Within the same outer i iteration, if W[i][i] == 0, set W[i][i] = R. RESULT W_diagonal]
+            [COMMAND Within the same outer i iteration, for j from i+1 to m-1, compute q = W[i][j] // W[i][i] and call add_columns(W, j, i, 1, -q, 0, 1). RESULT W_row_reduction]
+            [COMMAND Within the same outer i iteration, after the row-reduction loop, update R = R // d and continue to the next outer iteration. RESULT R_updated]
+            [COMMAND Return DomainMatrix(W, (m, m), ZZ).to_dense(). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: A.domain.is_ZZ is false]
+        [LOG "Matrix must be over domain ZZ."]
+        [THROW DMDomainError "Raised when the matrix is not over the integer domain ZZ."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: D is not in ZZ, or D is in ZZ and D < 1]
+        [LOG "Modulus D must be positive element of domain ZZ."]
+        [THROW DMDomainError "Raised when D is not a positive integer in ZZ."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: n < m, meaning the matrix has fewer columns than rows]
+        [LOG "Matrix must have at least as many columns as rows."]
+        [THROW DMShapeError "Raised when the matrix has more rows than columns."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Hermite Normal Form (HNF) of a DomainMatrix over ZZ, using a modular algorithm when a known determinant multiple D is supplied and either rank checking is disabled or full row rank is verified, otherwise falling back to the standard HNF computation." hermite_normal_form]
+    [INPUTS]
+        <REF> A </REF>: DomainMatrix "An m x n DomainMatrix over ZZ whose Hermite Normal Form is to be computed."
+        <REF> D </REF>: int, optional "A positive integer known in advance to be a multiple of det(W), where W is the HNF of A; enables the modular algorithm."
+        <REF> check_rank </REF>: bool, optional "If True, verifies that A has full row rank before using the modular D algorithm; if False, the rank check is skipped."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: DomainMatrix "The Hermite Normal Form of the input matrix A over ZZ."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that A.domain is ZZ; if it is not, raise DMDomainError and stop. RESULT A]
+            [COMMAND Evaluate the modular-path condition: D is not None and (not check_rank or A.convert_to(QQ).rank() == A.shape[0]). RESULT use_modular_HNF]
+            [COMMAND When use_modular_HNF is true, compute the Hermite Normal Form using the modular D algorithm by calling _hermite_normal_form_modulo_D(A, D), and return that result. RESULT modular_hnf_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: use_modular_HNF is false, meaning D is None, or check_rank is True and A.convert_to(QQ).rank() is not equal to A.shape[0]]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the ordinary Hermite Normal Form by calling _hermite_normal_form(A), and return that result. RESULT standard_hnf_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: A.domain is not ZZ]
+        [LOG "Raising DMDomainError because the matrix must be over domain ZZ."]
+        [THROW DMDomainError "Matrix must be over domain ZZ."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

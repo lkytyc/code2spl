@@ -1,0 +1,383 @@
+# FILE: sympy/physics/quantum/tensorproduct.py
+# CLASS TensorProduct
+
+[DEFINE_WORKER: "Flattens a sequence of multiplicative expressions into a combined list of commutative factors and a list of per-expression noncommutative Mul objects." flatten]
+    [INPUTS]
+        <REF> cls </REF>: class "The class on which flatten is invoked; not used in the method body."
+        <REF> args </REF>: iterable "Iterable of expressions to split into commutative and noncommutative parts."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> c_part </REF>: list "Flat list of commutative factors collected from all args."
+        <REF> nc_parts </REF>: list "List of Mul objects, one per arg, built from the noncommutative factors of that arg."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize c_part as an empty list and nc_parts as a separate empty list. RESULT c_part, nc_parts]
+            [COMMAND For each arg in args, iterate over the elements in order. RESULT arg]
+            [COMMAND Within the for loop over args, call arg.args_cnc() and unpack the result into cp and ncp. RESULT cp, ncp]
+            [COMMAND Within the for loop over args, extend c_part with list(cp) to append all commutative factors of arg. RESULT c_part]
+            [COMMAND Within the for loop over args, append Mul._from_args(ncp) to nc_parts to preserve the noncommutative part of arg. RESULT nc_parts]
+            [COMMAND After the loop completes, return the tuple (c_part, nc_parts). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the adjoint of a tensor product by applying Dagger to each component of self.args and rebuilding a TensorProduct from the adjointed components." _eval_adjoint]
+    [INPUTS]
+        <REF> self.args </REF>: iterable of objects supporting Dagger "Ordered iterable of tensor-product factors whose adjoints are computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: TensorProduct "TensorProduct constructed from the adjointed factors; if self.args is empty, a TensorProduct with no factors is returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.args as the ordered iterable of tensor-product factors. RESULT factors]
+            [COMMAND For each factor i in factors, in order, compute Dagger(i) and store it in a temporary list, preserving the original order. RESULT adjointed_factors]
+            [COMMAND Unpack adjointed_factors with the star operator and pass each element as a separate argument to TensorProduct. RESULT tensor_product_arguments]
+            [COMMAND Return the resulting TensorProduct; if self.args was empty, this returns TensorProduct() with no factors. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively applies the rewrite operation to every argument of self, reconstructs a TensorProduct from the rewritten terms, and expands the tensor product." _eval_rewrite]
+    [INPUTS]
+        <REF> self </REF>: object "The tensor product instance whose args are to be rewritten."
+        <REF> pattern </REF>: object "The pattern to match during rewriting."
+        <REF> rule </REF>: object "The rewrite rule to apply."
+        <REF> hints </REF>: dict "Additional keyword hints forwarded to each _eval_rewrite call."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The expanded TensorProduct built from the rewritten terms."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.args to the local variable sargs. RESULT sargs]
+            [COMMAND For each element t in sargs, call t._eval_rewrite(pattern, rule, **hints) and append the returned value to the new list terms. RESULT terms]
+            [COMMAND Construct a TensorProduct object by passing the collected terms as positional arguments: TensorProduct(*terms). RESULT tensor_product]
+            [COMMAND Call tensor_product.expand(tensorproduct=True) and return the resulting expanded expression. RESULT expanded_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If sargs is empty, the list comprehension produces no terms and TensorProduct() is constructed with no positional arguments.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct TensorProduct() with no terms because terms is empty. RESULT tensor_product]
+            [COMMAND Call tensor_product.expand(tensorproduct=True) and return the resulting expanded expression. RESULT expanded_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a string representation of self.args by joining elements with 'x' and wrapping Add, Pow, or Mul arguments in parentheses." _sympystr]
+    [INPUTS]
+        <REF> self </REF>: object "Object exposing args, a sequence of expression elements."
+        <REF> printer </REF>: object "Printer instance; not used in this method."
+        <REF> args </REF>: tuple "Additional positional arguments; not used in this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> s </REF>: string "The constructed string representation of self.args."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import sstr from sympy.printing.str for string conversion. RESULT sstr]
+            [COMMAND Set length to len(self.args). RESULT length]
+            [COMMAND Initialize s to an empty string. RESULT s]
+            [COMMAND Within the loop for i from 0 to length - 1 inclusive, if self.args[i] is an instance of Add, Pow, or Mul, append '(' to s. RESULT s]
+            [COMMAND Within the loop for i from 0 to length - 1 inclusive, append sstr(self.args[i]) to s. RESULT s]
+            [COMMAND Within the loop for i from 0 to length - 1 inclusive, if self.args[i] is an instance of Add, Pow, or Mul, append ')' to s. RESULT s]
+            [COMMAND Within the loop for i from 0 to length - 1 inclusive, if i is not equal to length - 1, append 'x' to s. RESULT s]
+            [COMMAND Return s. RESULT s]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Pretty-prints a tensor-product expression, using combined bra/ket notation when all arguments are bras or kets and otherwise joining formatted arguments with a tensor-product operator (⊙ or x)." _pretty]
+    [INPUTS]
+        <REF> printer </REF>: object "Printer instance with a _print method and a _use_unicode flag."
+        <REF> args </REF>: tuple "Additional positional arguments forwarded to printer._print calls."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> pform </REF>: prettyForm "A prettyForm object containing the final pretty-printed representation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the combined-printing guard with short-circuit semantics: if _combined_printing is truthy and (every argument in self.args is a Ket instance or every argument is a Bra instance), execute the combined bra/ket flow in alternative_flows and return its result; otherwise continue with the default flow. RESULT combined_printing_active]
+            [COMMAND In the default flow, set length = len(self.args) and initialize pform = printer._print('', *args). RESULT length_pform]
+            [COMMAND For each i in range(length), format the current argument: set next_pform = printer._print(self.args[i], *args); if self.args[i] is an Add or Mul instance, set next_pform = prettyForm(*next_pform.parens(left='(', right=')')); then set pform = prettyForm(*pform.right(next_pform)); if i != length - 1, set pform to prettyForm(*pform.right('⊙ ')) when printer._use_unicode is true, or to prettyForm(*pform.right('x ')) otherwise. RESULT pform]
+            [COMMAND After the loop completes, return pform from the default flow. RESULT pform]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The combined-printing guard is true: _combined_printing is truthy and either every argument in self.args is a Ket instance or every argument is a Bra instance.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the combined flow, set length = len(self.args) and initialize pform = printer._print('', *args). RESULT length_pform]
+            [COMMAND In the combined flow, for each i in range(length): initialize next_pform = printer._print('', *args) and length_i = len(self.args[i].args); for each j in range(length_i), set part_pform = printer._print(self.args[i].args[j], *args), set next_pform = prettyForm(*next_pform.right(part_pform)), and if j != length_i - 1 set next_pform = prettyForm(*next_pform.right(', ')); after the inner loop, if length_i > 1 set next_pform = prettyForm(*next_pform.parens(left='{', right='}')); then set pform = prettyForm(*pform.right(next_pform)); if i != length - 1, set pform = prettyForm(*pform.right(', ')). RESULT pform]
+            [COMMAND After the outer loop completes, set pform = prettyForm(*pform.left(self.args[0].lbracket)) and then set pform = prettyForm(*pform.right(self.args[0].rbracket)). RESULT pform]
+            [COMMAND Return pform from the combined flow. RESULT pform]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders a LaTeX representation of a tensor-product-like expression, using a combined bracketed ket/bra list when combined printing is enabled and all arguments are uniformly kets or bras, otherwise wrapping Add/Mul arguments in left-right parentheses and joining all arguments with tensor-product separators." _latex]
+    [INPUTS]
+        <REF> self </REF>: object "The object being rendered. It must provide args, and each arg must expose _print_label_latex and args; if the combined branch is taken, the first arg must provide lbracket_latex and rbracket_latex."
+        <REF> printer </REF>: object "Printer object exposing _print, used to render individual arguments and forwarded to label rendering."
+        <REF> args </REF>: tuple "Additional positional arguments forwarded to printer._print and _print_label_latex."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "LaTeX string for the expression: either the combined bracketed ket/bra list or the tensor-product separated fallback."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether _combined_printing is truthy and either every element of self.args is a Ket or every element of self.args is a Bra; if the condition is true, execute the combined-printing alternative flow and return its result immediately; otherwise continue with normal tensor-product formatting. RESULT combined_condition]
+            [COMMAND Set length to the number of elements in self.args. RESULT length]
+            [COMMAND Initialize s to an empty string. RESULT s]
+            [COMMAND For each index i in range(length), so i runs from 0 to length - 1, if self.args[i] is an instance of Add or Mul, append the literal LaTeX string '\left(' to s. RESULT s]
+            [COMMAND In the same loop iteration, append the result of '{' + printer._print(self.args[i], *args) + '}' to s. RESULT s]
+            [COMMAND Still within the loop iteration, if self.args[i] is an instance of Add or Mul, append the literal LaTeX string '\right)' to s. RESULT s]
+            [COMMAND Still within the loop iteration, if i is not the last index (i != length - 1), append the literal LaTeX string '\otimes ' to s. RESULT s]
+            [COMMAND After the loop finishes, return s as the LaTeX representation. RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: _combined_printing is truthy and (all elements of self.args are Ket instances or all elements of self.args are Bra instances), evaluated before the normal fallback loop.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define a local helper _label_wrap(label, nlabels) that returns label unchanged when nlabels == 1, otherwise returns the result of r'\left\{%s\right\}' % label. RESULT _label_wrap]
+            [COMMAND Build s by mapping each arg in self.args to _label_wrap(arg._print_label_latex(printer, *args), len(arg.args)) and joining the resulting strings with ', '. RESULT s]
+            [COMMAND Return the string r'{%s%s%s}' % (self.args[0].lbracket_latex, s, self.args[0].rbracket_latex); this assumes self.args is non-empty, otherwise self.args[0] raises IndexError. RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Applies doit with the given hints to every argument in self.args and returns a new TensorProduct built from the results." doit]
+    [INPUTS]
+        <REF> self </REF>: object "TensorProduct-like instance whose args attribute contains the items to process."
+        <REF> hints </REF>: dict "Keyword arguments forwarded to each item's doit method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: TensorProduct "TensorProduct constructed from the doit results of all items in self.args, preserving order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over self.args in order and, for each item, call item.doit(**hints); collect every returned value into transformed_items. RESULT transformed_items]
+            [COMMAND Unpack transformed_items as positional arguments and pass them to the TensorProduct constructor; if transformed_items is empty, call TensorProduct() with no arguments. RESULT result_tensor_product]
+            [COMMAND Return result_tensor_product. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Distributes TensorProducts across the first additive argument by replacing each term of the matched Add with a new TensorProduct, recursively expanding nested products, and returning either the resulting Add or the original object when no expansion occurred." _eval_expand_tensorproduct]
+    [INPUTS]
+        <REF> self </REF>: TensorProduct "The TensorProduct instance whose args are inspected for an Add factor."
+        <REF> hints </REF>: dict "Optional keyword hints accepted for compatibility; not used in this implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Expr "A new Add expression if an Add factor was expanded; otherwise the original TensorProduct instance self."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign args = self.args, initialize add_args as an empty list, and initialize stop to False. RESULT args, add_args, stop]
+            [COMMAND For each index i from 0 to len(args)-1 inclusive, examine args[i]. RESULT i]
+            [COMMAND Within the outer loop over i, if args[i] is an Add, then for each direct term aa in args[i].args, construct a candidate TensorProduct with arguments args[:i] + (aa,) + args[i+1:]. RESULT candidate_tp]
+            [COMMAND Within that inner loop, if candidate_tp is a TensorProduct, recursively call candidate_tp._eval_expand_tensorproduct(). RESULT expanded_tp]
+            [COMMAND Append expanded_tp to add_args if recursive expansion was performed; otherwise append candidate_tp to add_args. RESULT add_args]
+            [COMMAND After all terms of the first Add have been processed, break out of the outer loop. RESULT none]
+            [COMMAND If add_args is truthy, return Add(*add_args), unpacking add_args as positional arguments. RESULT expanded_add]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: No argument in args is an Add, so add_args remains empty after the loop.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self unchanged. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Evaluates the trace of a tensor product expression by applying Tr(...).doit() to every factor when no indices are supplied, or only to the factors at the supplied indices, then returns the product of the resulting terms." _eval_trace]
+    [INPUTS]
+        <REF> self </REF>: expression "The tensor product expression whose trace is to be evaluated."
+        <REF> kwargs </REF>: dict "Keyword arguments; the optional 'indices' key selects which positions in exp.args should be traced."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: expression "The product of traced and untraced factors after applying Tr(...).doit() according to the provided indices."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read 'indices' from kwargs, defaulting to None if the key is absent. RESULT indices]
+            [COMMAND Simplify self as a tensor product by calling tensor_product_simp(self). RESULT exp]
+            [COMMAND Evaluate the short-circuit condition: indices is None, or if indices is not None then len(indices) == 0. RESULT no_indices]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: indices is None or len(indices) == 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For every argument arg in exp.args, apply Tr(arg).doit(); multiply all resulting terms with Mul and return the product. RESULT trace_all_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: indices is not None and len(indices) > 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each enumerated (idx, value) in exp.args, apply Tr(value).doit() if idx is in indices, otherwise keep value unchanged; multiply all resulting terms with Mul and return the product. RESULT trace_selected_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets a global flag controlling whether tensor product states are printed as a combined bra/ket or as explicit tensor products of individual bra/kets." combined_tensor_printing]
+    [INPUTS]
+        <REF> combined </REF>: bool "When true, tensor product states are combined into one ket/bra; when false, explicit tensor product notation is used between each ket/bra."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare _combined_printing as a global variable so the following assignment modifies the module-level flag. RESULT _combined_printing]
+            [COMMAND Copy the value of parameter combined into the global variable _combined_printing. RESULT _combined_printing]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Simplifies a Mul that contains TensorProducts by multiplying corresponding tensor components of non-commutative factors, preserving commutative factors and returning the input unchanged when no simplification applies." tensor_product_simp_Mul]
+    [INPUTS]
+        <REF> e </REF>: Expr "A SymPy expression, typically a Mul whose non-commutative factors are TensorProducts, to simplify."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Expr "The simplified expression: a TensorProduct of Mul terms with commutative factors preserved, or the original expression e when no simplification is possible."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether e is an instance of Mul; if it is not, return e unchanged via the alternative flow. RESULT e]
+            [COMMAND Split e into commutative and non-commutative parts by calling e.args_cnc(); assign the commutative list to c_part and the non-commutative list to nc_part. RESULT c_part, nc_part]
+            [COMMAND Set n_nc to the length of nc_part. RESULT n_nc]
+            [COMMAND If n_nc is 0 or 1, return e unchanged via the alternative flow. RESULT e]
+            [COMMAND If e does not contain a TensorProduct, return e unchanged via the alternative flow. RESULT e]
+            [COMMAND Set current to nc_part[0], the first non-commutative factor. RESULT current]
+            [COMMAND Verify that current is an instance of TensorProduct; if it is not, raise TypeError via the exception flow. RESULT current]
+            [COMMAND Set n_terms to len(current.args), the number of terms in the initial TensorProduct. RESULT n_terms]
+            [COMMAND Initialize new_args as a list copy of current.args. RESULT new_args]
+            [COMMAND For each next in nc_part[1:], if next is an instance of TensorProduct and n_terms is not equal to len(next.args), raise QuantumError via the exception flow. RESULT current]
+            [COMMAND Within the loop over next, when next is a TensorProduct and the length check has passed, for each index i from 0 to len(new_args)-1 multiply new_args[i] by next.args[i]. RESULT new_args]
+            [COMMAND Within the loop over next, when next is not a TensorProduct, for each index i from 0 to len(new_args)-1 multiply new_args[i] by next. RESULT new_args]
+            [COMMAND Within the loop over next, after processing the current factor, set current to next. RESULT current]
+            [COMMAND After the loop finishes, reconstruct the simplified expression by computing Mul(*c_part) * TensorProduct(*new_args) and return it. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: e is not an instance of Mul]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return e unchanged. RESULT e]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: e is an instance of Mul and n_nc is 0 or 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return e unchanged. RESULT e]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: e is an instance of Mul, n_nc is not 0 or 1, and e does not contain a TensorProduct]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return e unchanged. RESULT e]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: After setting current to nc_part[0], current is not an instance of TensorProduct]
+        [LOG "A TensorProduct was expected as the first non-commutative factor, but received an object of a different type."]
+        [THROW TypeError "Raised when the first non-commutative factor of e is not a TensorProduct."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the loop over next, next is an instance of TensorProduct and n_terms is not equal to len(next.args)]
+        [LOG "TensorProducts of different lengths were encountered while combining non-commutative factors."]
+        [THROW QuantumError "Raised when two TensorProducts being combined have different numbers of components."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively simplifies an expression by applying tensor-product simplification rules inside Add, Pow, Mul, Commutator, and AntiCommutator containers, delegating multiplication to tensor_product_simp_Mul, and passing through any other expression unchanged." tensor_product_simp]
+    [INPUTS]
+        <REF> e </REF>: sympy expression "Expression to simplify and combine TensorProducts."
+        <REF> hints </REF>: dict "Optional keyword hints accepted for compatibility but not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: sympy expression "Simplified expression after recursive tensor-product simplification."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Receive expression e and optional hints; ignore hints and begin recursive simplification. RESULT e]
+            [COMMAND Evaluate the isinstance dispatch chain on e to select the first applicable branch among Add, Pow, Mul, Commutator, AntiCommutator, or the default identity branch. RESULT selected_branch]
+            [COMMAND Execute the selected branch and return the resulting simplified expression. RESULT result_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: e is an instance of Add.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the Add branch, for each argument in e.args, recursively call tensor_product_simp(arg) and collect the resulting simplified arguments. RESULT simplified_args]
+            [COMMAND Construct a new Add from simplified_args and return it. RESULT result_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: e is an instance of Pow.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the Pow branch, recursively call tensor_product_simp on e.base to get a simplified base. RESULT simplified_base]
+            [COMMAND Return simplified_base raised to the original exponent e.exp. RESULT result_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: e is an instance of Mul.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the Mul branch, call tensor_product_simp_Mul(e) and use its return value as the simplified expression. RESULT result_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: e is an instance of Commutator.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the Commutator branch, for each argument in e.args, recursively call tensor_product_simp(arg) and collect the resulting simplified arguments. RESULT simplified_args]
+            [COMMAND Construct a new Commutator from simplified_args and return it. RESULT result_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: e is an instance of AntiCommutator.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the AntiCommutator branch, for each argument in e.args, recursively call tensor_product_simp(arg) and collect the resulting simplified arguments. RESULT simplified_args]
+            [COMMAND Construct a new AntiCommutator from simplified_args and return it. RESULT result_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: e is not an instance of Add, Pow, Mul, Commutator, or AntiCommutator.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the fallback branch, return e unchanged as the base case. RESULT result_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

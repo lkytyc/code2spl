@@ -1,0 +1,1363 @@
+# FILE: sphinx/domains/std.py
+# CLASS GenericObject
+
+[DEFINE_WORKER: "Resolves the display name for a signature by using a custom parse_node callback when available, otherwise clearing signode and adding a default descriptor name with whitespace-normalized signature text." handle_signature]
+    [INPUTS]
+        <REF> self </REF>: object "The handler instance providing the parse_node callback and the environment used by that callback."
+        <REF> sig </REF>: str "The signature string to render or normalize."
+        <REF> signode </REF>: desc_signature "The signature node that is cleared and populated with a default descriptor name when parse_node is unavailable."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> name </REF>: str "The resolved signature name: parse_node's return value when available, otherwise ws_re-normalized sig."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.parse_node is truthy. RESULT parse_node_available]
+            [COMMAND When self.parse_node is truthy, call self.parse_node(self.env, sig, signode) and assign its return value to name. RESULT name]
+            [COMMAND After the parse_node conditional is resolved in either branch, return the value stored in name. RESULT name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.parse_node is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clear signode. RESULT signode]
+            [COMMAND Append addnodes.desc_name(sig, sig) to signode. RESULT signode]
+            [COMMAND Normalize whitespace in sig using ws_re.sub(' ', sig), as XRefRole does, and assign the result to name. RESULT name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers a documentation target and optional index entry by generating a canonical node ID, preserving a legacy ID for old hyperlinks, and notifying the standard domain." add_target_and_index]
+    [INPUTS]
+        <REF> name </REF>: str "Target name used to generate node IDs and index entry text."
+        <REF> sig </REF>: str "Signature string retained for API compatibility; unused in this method."
+        <REF> signode </REF>: desc_signature "Sphinx signature node that receives the generated IDs and is registered as an explicit target."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None; all effects are side effects on signode, the document, the index node, and the standard domain."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Generate the canonical node_id by calling make_id(self.env, self.state.document, self.objtype, name). RESULT node_id]
+            [COMMAND Append node_id to signode['ids']. RESULT signode]
+            [COMMAND Generate the legacy old_node_id by calling self.make_old_id(name). RESULT old_node_id]
+            [COMMAND If old_node_id is not already in self.state.document.ids and old_node_id is not already in signode['ids'], append old_node_id to signode['ids']. RESULT signode]
+            [COMMAND Register signode as an explicit target by calling self.state.document.note_explicit_target(signode). RESULT signode]
+            [COMMAND Inside the block guarded by if self.indextemplate, call self.indextemplate.find(':') to locate the first colon. RESULT colon]
+            [COMMAND Inside the truthy indextemplate block, if colon != -1, set indextype to self.indextemplate[:colon].strip(); otherwise set indextype to 'single'. RESULT indextype]
+            [COMMAND Inside the truthy indextemplate block, if colon != -1, set indexentry to self.indextemplate[colon + 1:].strip() % (name,); otherwise set indexentry to self.indextemplate % (name,). RESULT indexentry]
+            [COMMAND Inside the truthy indextemplate block, append the tuple (indextype, indexentry, node_id, '', None) to self.indexnode['entries']. RESULT indexnode]
+            [COMMAND Retrieve the standard domain by calling cast(StandardDomain, self.env.get_domain('std')). RESULT std]
+            [COMMAND Call std.note_object(self.objtype, name, node_id, location=signode). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates an old-style node id by joining the object type and the given name with a hyphen." make_old_id]
+    [INPUTS]
+        <REF> name </REF>: str "The name suffix to append after the hyphen."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> old_id </REF>: str "The old-style node id in the form '<objtype>-<name>'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Concatenate self.objtype, the literal '-', and name to produce the old-style node id. RESULT old_id]
+            [COMMAND Return the old-style node id. RESULT old_id]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS EnvVar
+
+# CLASS EnvVarXRefRole
+
+[DEFINE_WORKER: "Converts a reference node into index and target nodes and returns them with the original node, while passing non-reference nodes through unchanged." result_nodes]
+    [INPUTS]
+        <REF> document </REF>: nodes.document "The document to which the explicit target node is registered."
+        <REF> env </REF>: BuildEnvironment "Build environment used to generate a unique serial number for the index target."
+        <REF> node </REF>: Element "The node being processed; node['reftarget'] supplies the varname for index entries."
+        <REF> is_ref </REF>: bool "Whether the node is a reference and should generate index and target nodes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Tuple[List[Node], List[system_message]] "A tuple whose first element is the node list to return and whose second element is an empty system_message list; for is_ref=False the node list is [node] and the system_message list is []."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND When is_ref is True, read varname from node['reftarget']. RESULT varname]
+            [COMMAND Generate tgtid by applying the format string 'index-%s' to env.new_serialno('index'). RESULT tgtid]
+            [COMMAND Create indexnode by calling addnodes.index(). RESULT indexnode]
+            [COMMAND Set indexnode['entries'] to a list containing the tuple ('single', varname, tgtid, '', None) and the tuple ('single', _('environment variable; %s') % varname, tgtid, '', None). RESULT indexnode]
+            [COMMAND Create targetnode by calling nodes.target('', '', ids=[tgtid]). RESULT targetnode]
+            [COMMAND Register targetnode as an explicit target by calling document.note_explicit_target(targetnode). RESULT targetnode]
+            [COMMAND Return [indexnode, targetnode, node] as the node list and [] as the system_message list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When is_ref is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return [node] as the node list and [] as the system_message list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS Target
+
+[DEFINE_WORKER: "Creates a doctree target node for a normalized directive argument, optionally prepends an index entry, registers the target explicitly, and records the object under the standard domain." run]
+    [INPUTS]
+        <REF> self </REF>: directive instance "Directive instance providing arguments[0], name, indextemplate, env, state.document, set_source_info, and make_old_id."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ret </REF>: List[Node] "List of doctree nodes; contains the target node and, when an index template is present, an index node prepended at position 0."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the first directive argument self.arguments[0] by stripping leading/trailing whitespace and collapsing internal whitespace runs to a single space using ws_re.sub(' ', ...); assign the result to fullname. RESULT fullname]
+            [COMMAND Generate node_id by calling make_id(self.env, self.state.document, self.name, fullname). RESULT node_id]
+            [COMMAND Create node using nodes.target('', '', ids=[node_id]). RESULT node]
+            [COMMAND Set source information on node by calling self.set_source_info(node). RESULT node]
+            [COMMAND Compute old_node_id by calling self.make_old_id(fullname) for backward-compatible old-style hyperlink IDs. RESULT old_node_id]
+            [COMMAND If old_node_id is not in self.state.document.ids and old_node_id is not in node['ids'], append old_node_id to node['ids']. RESULT node]
+            [COMMAND Register node as an explicit target by calling self.state.document.note_explicit_target(node). RESULT self.state.document]
+            [COMMAND Initialize ret as a list containing node. RESULT ret]
+            [COMMAND If self.indextemplate is truthy, compute indexentry by formatting self.indextemplate with fullname using self.indextemplate % (fullname,), set indextype to 'single', and set colon to indexentry.find(':'). RESULT indexentry]
+            [COMMAND Within the if self.indextemplate block, if colon != -1, set indextype to indexentry[:colon].strip() and set indexentry to indexentry[colon + 1:].strip(). RESULT indexentry]
+            [COMMAND Still within the if self.indextemplate block, create inode with addnodes.index(entries=[(indextype, indexentry, node_id, '', None)]) and insert it at position 0 of ret using ret.insert(0, inode). RESULT ret]
+            [COMMAND Set name to self.name; if self.name contains ':', split self.name on the first colon with self.name.split(':', 1) and assign the part after the colon to name. RESULT name]
+            [COMMAND Obtain the standard domain by calling self.env.get_domain('std'), cast it to StandardDomain, and assign to std. RESULT std]
+            [COMMAND Record the object by calling std.note_object(name, fullname, node_id, location=node). RESULT std]
+            [COMMAND Return ret. RESULT ret]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates an old-style Sphinx node identifier by concatenating the object's base name with a hyphen and the given target name." make_old_id]
+    [INPUTS]
+        <REF> name </REF>: str "Target name to append to the base node name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Old-style node id of the form '<self.name>-<name>'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the instance attribute self.name and the method argument name. RESULT operands]
+            [COMMAND Concatenate self.name, the literal hyphen '-', and name in that order. RESULT concatenated_string]
+            [COMMAND Return the concatenated string as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Cmdoption
+
+[DEFINE_WORKER: "Parses a comma-separated option description string, validates each option with a regular expression, builds Sphinx signature nodes for valid options, and returns the first valid option name." handle_signature]
+    [INPUTS]
+        <REF> sig </REF>: str "Comma-separated option description string to be parsed into signature nodes."
+        <REF> signode </REF>: desc_signature "Sphinx signature node that receives the generated option name, argument, and separator nodes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> firstname </REF>: str "Option name of the first valid option encountered in sig."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize count to 0 and firstname to an empty string. RESULT count, firstname]
+            [COMMAND For each potential_option in sig.split(', '), strip surrounding whitespace and assign the stripped value to potential_option. RESULT potential_option]
+            [COMMAND Match potential_option against option_desc_re and store the match object in m. RESULT m]
+            [COMMAND For each valid option, when m is truthy, extract optname and args from m.groups(). RESULT optname, args]
+            [COMMAND For each valid option, when m is truthy and count is nonzero, add an addnodes.desc_addname node with ', ' to signode as a separator before the current option. RESULT signode]
+            [COMMAND For each valid option, when m is truthy, add an addnodes.desc_name node containing optname and an addnodes.desc_addname node containing args to signode. RESULT signode]
+            [COMMAND For each valid option, when m is truthy, if count is zero set firstname to optname and initialize signode['allnames'] to [optname]; otherwise append optname to signode['allnames']. RESULT firstname, signode['allnames']]
+            [COMMAND For each valid option, when m is truthy, increment count by 1. RESULT count]
+            [COMMAND After the loop, if firstname is not empty, return firstname. RESULT firstname]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop, option_desc_re.match(potential_option) returns a falsy value, meaning the option description is malformed.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log a warning with message __('Malformed option description %r, should look like "opt", "-opt args", "--opt args", "/opt args" or "+opt args"'), passing potential_option and location=signode to logger.warning. RESULT None]
+            [COMMAND Continue to the next iteration of the for loop. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: After processing all potential_option values, firstname is still empty because no valid option was encountered.]
+        [LOG "No valid option name was found in the signature."]
+        [THROW ValueError "Raised when the parsed signature contains no valid option names."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates stable IDs for each command-line option name in signode, registers them with the standard program-option domain, and appends index entries for each comma-and-space-separated option in the signature." add_target_and_index]
+    [INPUTS]
+        <REF> firstname </REF>: str "Unused method parameter."
+        <REF> sig </REF>: str "Comma-and-space-separated option names used to create index entries."
+        <REF> signode </REF>: desc_signature "Signature node whose 'ids' list is updated and which is registered as an explicit target and indexed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the current program from self.env.ref_context.get('std:program') and assign it to currprogram. RESULT currprogram]
+            [COMMAND For each optname in signode.get('allnames', []), set prefixes to ['cmdoption']; if currprogram is truthy, append currprogram to prefixes; if optname does not start with '-' or '/', append 'arg' to prefixes; set prefix to '-'.join(prefixes); call make_id(self.env, self.state.document, prefix, optname) to get node_id; append node_id to signode['ids']. RESULT signode['ids']]
+            [COMMAND Call self.state.document.note_explicit_target(signode) to register signode as an explicit target. RESULT self.state.document]
+            [COMMAND Retrieve self.env.get_domain('std'), cast it to StandardDomain, and assign it to domain. RESULT domain]
+            [COMMAND For each optname in signode.get('allnames', []), call domain.add_program_option(currprogram, optname, self.env.docname, signode['ids'][0]), where currprogram may be None. RESULT domain]
+            [COMMAND If currprogram is truthy, set descr to _('%s command line option') % currprogram; otherwise set descr to _('command line option'). RESULT descr]
+            [COMMAND For each option in the list produced by sig.split(', '), set entry to '; '.join([descr, option]) and append ('pair', entry, signode['ids'][0], '', None) to self.indexnode['entries']. RESULT self.indexnode['entries']]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Program
+
+[DEFINE_WORKER: "Normalizes the first directive argument into a hyphenated program name and updates the Sphinx ref_context 'std:program' entry, returning an empty list." run]
+    [INPUTS]
+        <REF> self </REF>: object "Method receiver exposing arguments[0] and env.ref_context."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: List[Node] "An empty list of nodes; the method only updates the environment context."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the first argument from self.arguments. RESULT raw_argument]
+            [COMMAND Strip leading and trailing whitespace from raw_argument. RESULT stripped_argument]
+            [COMMAND Replace every whitespace sequence in stripped_argument with a single hyphen using ws_re.sub('-', stripped_argument). RESULT program]
+            [COMMAND Execute the branch selected by whether program equals the string literal 'None'. RESULT ref_context]
+            [COMMAND Return an empty list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: program is the string literal 'None']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Remove the 'std:program' entry from self.env.ref_context using pop('std:program', None). RESULT pop_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: program is not the string literal 'None']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.env.ref_context['std:program'] to program. RESULT ref_context_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS OptionXRefRole
+
+[DEFINE_WORKER: "Updates the reference node's std:program from the build environment's current reference context and returns the original title and target unchanged." process_link]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "The Sphinx build environment providing the current reference context."
+        <REF> refnode </REF>: Element "The reference node whose 'std:program' value is set."
+        <REF> has_explicit_title </REF>: bool "Indicates whether the reference has an explicit title; not used in the conversion."
+        <REF> title </REF>: str "The reference title to be returned."
+        <REF> target </REF>: str "The reference target to be returned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Tuple[str, str] "A tuple containing the unchanged title and target."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set refnode['std:program'] to the value of env.ref_context.get('std:program') RESULT refnode]
+            [COMMAND Return the tuple containing title and target RESULT title, target]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Glossary
+
+[DEFINE_WORKER: "Parses a reStructuredText glossary directive body into a docutils glossary node, collecting term/definition entries and warnings, optionally sorting them, and returning the warnings plus the glossary node." run]
+    [INPUTS]
+        <REF> self </REF>: GlossaryDirective "Directive instance providing self.content, self.content.items, self.options, self.state, and self.env."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: List[Node] "The accumulated warning/system message nodes plus the completed glossary node."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a glossary node with addnodes.glossary() and set its document attribute to self.state.document. RESULT node]
+            [COMMAND Initialize entries to an empty list, in_definition to True, in_comment to False, was_empty to True, and messages to an empty list. RESULT entries, in_definition, in_comment, was_empty, messages]
+            [COMMAND For each (line, (source, lineno)) in zip(self.content, self.content.items), if the line is empty: if in_definition is true and entries is non-empty, append an empty line to the last entry's definition string list; set was_empty to True; continue to the next iteration. RESULT entries, was_empty]
+            [COMMAND Within the same content-line loop, if the line is non-empty and unindented and starts with '.. ', set in_comment to True and continue to the next iteration, leaving was_empty unchanged. RESULT in_comment]
+            [COMMAND Within the same content-line loop, if the line is non-empty and unindented and is not a comment marker, set in_comment to False; if in_definition is true, append a warning 'glossary term must be preceded by empty line' to messages when was_empty is false, append a new entry ([(line, source, lineno)], StringList()) to entries, and set in_definition to False; otherwise, if was_empty is true append a warning 'glossary terms must not be separated by empty lines' to messages, and if entries is non-empty append (line, source, lineno) to the last entry's term list else append a warning 'glossary seems to be misformatted, check indentation' to messages. RESULT in_comment, in_definition, entries, messages]
+            [COMMAND Within the same content-line loop, if the line is indented and in_comment is true, do nothing (pass). RESULT in_comment]
+            [COMMAND Within the same content-line loop, if the line is indented and not in a comment: if in_definition is false, set in_definition to True and set indent_len to len(line) - len(line.lstrip()); if entries is non-empty, append line[indent_len:] with source and lineno to the last entry's definition string list; otherwise append a warning 'glossary seems to be misformatted, check indentation' to messages. RESULT in_definition, indent_len, entries, messages]
+            [COMMAND Within the same content-line loop, after the branch handling for an indented comment-body line or any non-empty non-comment line, set was_empty to False; empty lines and unindented comment marker lines skip this by continuing. RESULT was_empty]
+            [COMMAND Initialize items to an empty list. RESULT items]
+            [COMMAND For each (terms, definition) entry in entries: initialize termtexts, termnodes, and system_messages as empty lists; for each (line, source, lineno) in terms, call split_term_classifiers(line), parse parts[0] with self.state.inline_text(parts[0], lineno), create a glossary term with make_glossary_term(self.env, textnodes, parts[1], source, lineno, document=self.state.document), set term.rawsource to line, extend system_messages with sysmsg, append term.astext() to termtexts, and append term to termnodes; after the terms, extend termnodes with system_messages, create defnode as nodes.definition(), if definition is truthy parse it with self.state.nested_parse(definition, definition.items[0][1], defnode), append defnode to termnodes, and append (termtexts, nodes.definition_list_item('', *termnodes)) to items. RESULT items]
+            [COMMAND If 'sorted' is in self.options, sort items in place with key lambda x: unicodedata.normalize('NFD', x[0][0].lower()). RESULT items]
+            [COMMAND Create dlist as nodes.definition_list(), append 'glossary' to dlist['classes'], extend dlist with item[1] for each item in items, and add dlist to node. RESULT node]
+            [COMMAND Return messages + [node]. RESULT messages + [node]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS ProductionList
+
+[DEFINE_WORKER: "Parses production-rule directive arguments by removing line continuations, building productionlist nodes with token IDs and cross-references, and returning a single-node list." run]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: List[Node] "A list containing the constructed productionlist node with all parsed production subnodes appended."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the standard domain from self.env using get_domain('std'), cast it to StandardDomain, and assign it to domain. RESULT domain]
+            [COMMAND Create a new productionlist node with addnodes.productionlist() and assign it to node. RESULT node]
+            [COMMAND Set source information on node by calling self.set_source_info(node). RESULT node]
+            [COMMAND Compile the line-continuation regex that matches a backslash followed by a newline, and assign it to nl_escape_re. RESULT nl_escape_re]
+            [COMMAND Remove line-continuation matches from self.arguments[0] using nl_escape_re.sub('', ...), split the result on newlines, and assign the resulting list to lines. RESULT lines]
+            [COMMAND Initialize productionGroup to an empty string. RESULT productionGroup]
+            [COMMAND Initialize i to 0. RESULT i]
+            [COMMAND For each rule in lines, if i == 0 and ':' is not in rule, set productionGroup to rule.strip() and continue to the next rule. RESULT productionGroup]
+            [COMMAND In the loop, after the header check, increment i by 1. RESULT i]
+            [COMMAND In the loop, split rule on the first colon into name and tokens, assigning the two resulting parts to name and tokens. RESULT name, tokens]
+            [COMMAND In the loop, create subnode by calling addnodes.production(rule) and set subnode['tokenname'] to name.strip(). RESULT subnode]
+            [COMMAND In the loop, if subnode['tokenname'] is truthy, build prefix by formatting productionGroup as 'grammar-token-%s', compute node_id = make_id(self.env, self.state.document, prefix, name), and append node_id to subnode['ids']. RESULT node_id]
+            [COMMAND In the loop, if subnode['tokenname'] is truthy, compute old_node_id = self.make_old_id(name), and if old_node_id is not in self.state.document.ids and not in subnode['ids'], append old_node_id to subnode['ids']. RESULT old_node_id]
+            [COMMAND In the loop, if subnode['tokenname'] is truthy, call self.state.document.note_implicit_target(subnode, subnode). RESULT none]
+            [COMMAND In the loop, if subnode['tokenname'] is truthy, set objName to the formatted '%s:%s' value using productionGroup and name when productionGroup is non-empty, otherwise set objName to name. RESULT objName]
+            [COMMAND In the loop, if subnode['tokenname'] is truthy, call domain.note_object('token', objName, node_id, location=node). RESULT none]
+            [COMMAND In the loop, regardless of whether subnode['tokenname'] was truthy, extend subnode with token_xrefs(tokens, productionGroup) and append subnode to node. RESULT node]
+            [COMMAND After the loop completes, return a list containing node. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: In the loop, after the header check, rule.split(':', 1) raises ValueError because the rule contains no colon.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Break out of the for loop immediately without creating or appending a production subnode for the current rule. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates an old-style Sphinx node ID for a grammar token by concatenating a fixed prefix with the token and passing the result to nodes.make_id." make_old_id]
+    [INPUTS]
+        <REF> token </REF>: str "The grammar token used to construct the old-style node ID."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "The old-style node ID generated by nodes.make_id."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Concatenate the literal string 'grammar-token-' with the value of token to create the raw id string. RESULT raw_id]
+            [COMMAND Call nodes.make_id with raw_id to compute the old-style node ID. RESULT old_id]
+            [COMMAND Return old_id as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS TokenXRefRole
+
+[DEFINE_WORKER: "Strips all leading '~' characters from the target and, when no explicit title is set and the title begins with '~', normalizes the title by removing the tilde and any text before a colon before returning the title-target pair." process_link]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "The build environment used while processing the reference."
+        <REF> refnode </REF>: Element "The reference node being processed."
+        <REF> has_explicit_title </REF>: bool "Boolean parameter indicating whether an explicit title was provided; the body as written checks self.has_explicit_title instead."
+        <REF> title </REF>: str "The title string to normalize."
+        <REF> target </REF>: str "The target string to normalize."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Tuple[str, str] "The processed title and target returned as a tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Strip all leading '~' characters from target and store the cleaned string back into target. RESULT target]
+            [COMMAND Evaluate the condition `not self.has_explicit_title and title[0] == '~'` with short-circuit semantics (title[0] is accessed only when not self.has_explicit_title is true; accessing title[0] on an empty title raises IndexError). If the condition is true, execute the matching tilde-title normalization alternative flow; otherwise leave title unchanged. RESULT title]
+            [COMMAND Return the final title and target as a tuple. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: No explicit title is set (not self.has_explicit_title is true), title[0] equals '~', and title contains ':'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split title on ':' and assign the substring after the colon to title, discarding the substring before the colon; this assumes title contains exactly one colon. RESULT title]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: No explicit title is set (not self.has_explicit_title is true), title[0] equals '~', and title does not contain ':'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Remove the leading '~' character from title by slicing off the first character. RESULT title]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS StandardDomain
+
+[DEFINE_WORKER: "Initializes the object by calling the superclass initializer and setting up an instance-local mapping of enumerable nodes populated from the application registry." __init__]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "Build environment whose app registry provides enumerable node settings."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke the superclass initializer with env. RESULT self]
+            [COMMAND Create a shallow copy of self.enumerable_nodes to act as an instance-local mapping and assign it back to self.enumerable_nodes. RESULT self.enumerable_nodes]
+            [COMMAND For each node and settings in env.app.registry.enumerable_nodes.items(), set self.enumerable_nodes[node] to settings, overwriting any existing entry for the same node. RESULT self.enumerable_nodes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers a hyperlink target in the internal anonlabels mapping, logs a warning when the label already exists under a different document or node, and stores a labelled entry when a title is provided." note_hyperlink_target]
+    [INPUTS]
+        <REF> name </REF>: str "Label name used as the key for the hyperlink target."
+        <REF> docname </REF>: str "Document name associated with the hyperlink target."
+        <REF> node_id </REF>: str "Node identifier associated with the hyperlink target."
+        <REF> title </REF>: str "Optional title for the labelled hyperlink target; defaults to an empty string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: None "This method returns None and updates internal mapping state as a side effect."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the short-circuit condition: if name is in self.anonlabels and the stored tuple self.anonlabels[name] is not equal to (docname, node_id), then call logger.warning with the localized message 'duplicate label %s, other instance in %s' and arguments name and self.env.doc2path(self.anonlabels[name][0]). RESULT warning_logged]
+            [COMMAND Assign the tuple (docname, node_id) to self.anonlabels[name], overwriting any previous entry or creating a new entry if name was absent. RESULT anonlabels_updated]
+            [COMMAND If title is truthy, assign the tuple (docname, node_id, title) to self.labels[name]; otherwise, make no assignment to self.labels[name]. RESULT labels_updated]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the value stored under the 'objects' key in self.data, creating and storing a new empty dictionary if that key is absent." objects]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Dict[Tuple[str, str], Tuple[str, str]] "The existing value under self.data['objects'], or the newly created empty dictionary that was inserted because the key was missing."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call setdefault on self.data with the literal key 'objects' and a fresh empty dictionary as the default value, so the default is inserted only when the key is missing. RESULT objects_value]
+            [COMMAND Return objects_value from the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers an object description for cross-reference in the current environment, warning about duplicate descriptions before updating the registry." note_object]
+    [INPUTS]
+        <REF> objtype </REF>: str "Type of the object being noted."
+        <REF> name </REF>: str "Name of the object being noted."
+        <REF> labelid </REF>: str "Label identifier associated with the object in the current document."
+        <REF> location </REF>: Any "Optional location information used when reporting a duplicate object warning."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the tuple (objtype, name) is already a key in self.objects. RESULT duplicate_found]
+            [COMMAND After the duplicate check, store the tuple (self.env.docname, labelid) in self.objects under the tuple key (objtype, name), overwriting any existing value for that key. RESULT self.objects]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: duplicate_found is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve docname as the first element of the existing value stored at self.objects[(objtype, name)]. RESULT docname]
+            [COMMAND Log a warning using the translated message 'duplicate %s description of %s, other instance in %s' with objtype, name, docname, and location=location. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds an object mapping to the domain's objects registry and issues a deprecation warning." add_object]
+    [INPUTS]
+        <REF> self </REF>: StandardDomain "The domain instance whose objects mapping is updated."
+        <REF> objtype </REF>: str "The object type used as the first component of the mapping key."
+        <REF> name </REF>: str "The object name used as the second component of the mapping key."
+        <REF> docname </REF>: str "The document name stored as the first component of the mapped tuple."
+        <REF> labelid </REF>: str "The label identifier stored as the second component of the mapped tuple."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit a deprecation warning with the message 'StandardDomain.add_object() is deprecated.' using RemovedInSphinx50Warning. RESULT None]
+            [COMMAND Assign the tuple (docname, labelid) to self.objects[objtype, name], overwriting any existing value for that exact key. RESULT self.objects]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the 'progoptions' dictionary stored in self.data, initializing it to an empty dictionary on first access." progoptions]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> progoptions_result </REF>: Dict[Tuple[str, str], Tuple[str, str]] "The existing value associated with 'progoptions' in self.data, or a newly created empty dictionary that was stored there if the key was absent."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.data and evaluate the constant key 'progoptions' and a new empty dictionary as the default value. RESULT setdefault_call]
+            [COMMAND Invoke setdefault on self.data with key 'progoptions' and default value {}; if the key exists, use the existing stored value unchanged; if the key is absent, store the new empty dictionary under 'progoptions' and use it as the resulting value. RESULT progoptions_value]
+            [COMMAND Return progoptions_value to the caller. RESULT progoptions_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the dictionary stored under the 'labels' key in self.data, creating and storing an empty dictionary if that key does not already exist." labels]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Dict[str, Tuple[str, str, str]] "The dictionary stored at self.data['labels']; if the key was missing, a new empty dictionary is inserted and returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.data and evaluate setdefault('labels', {}), inserting an empty dictionary as self.data['labels'] if the key is absent and returning the stored dictionary value. RESULT labels_value]
+            [COMMAND Return labels_value to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the anonymous labels dictionary from self.data, creating and storing an empty dictionary under 'anonlabels' when the key is missing." anonlabels]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Dict[str, Tuple[str, str]] "The dictionary stored at self.data['anonlabels']; if the key was absent, a new empty dictionary is inserted and returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the instance dictionary self.data. RESULT data_dict]
+            [COMMAND Use setdefault on data_dict with key 'anonlabels' and default value {} to obtain the existing value, or to insert and use a new empty dictionary if the key is absent. RESULT anonlabels_value]
+            [COMMAND Return anonlabels_value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes every entry from the progoptions, objects, labels, and anonlabels dictionaries whose associated document name equals docname, using safe snapshot iteration." clear_doc]
+    [INPUTS]
+        <REF> docname </REF>: str "The document name compared against the first element of each stored tuple to determine which dictionary entries to remove."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize the local variable key to None. RESULT key]
+            [COMMAND Iterate over a snapshot created by list(self.progoptions.items()); for each key and (fn, _l), if fn == docname, delete self.progoptions[key] from the original dictionary. RESULT self.progoptions]
+            [COMMAND Iterate over a snapshot created by list(self.objects.items()); for each key and (fn, _l), if fn == docname, delete self.objects[key] from the original dictionary. RESULT self.objects]
+            [COMMAND Iterate over a snapshot created by list(self.labels.items()); for each key and (fn, _l, _l), with the second and third tuple elements ignored, if fn == docname, delete self.labels[key] from the original dictionary. RESULT self.labels]
+            [COMMAND Iterate over a snapshot created by list(self.anonlabels.items()); for each key and (fn, _l), if fn == docname, delete self.anonlabels[key] from the original dictionary. RESULT self.anonlabels]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Filters and copies selected entries from otherdata's progoptions, objects, labels, and anonlabels dictionaries into the corresponding self attributes when the entry's first data element is in docnames." merge_domaindata]
+    [INPUTS]
+        <REF> docnames </REF>: List[str] "List of document names used as the membership filter for deciding which data entries are copied."
+        <REF> otherdata </REF>: Dict "Dictionary containing 'progoptions', 'objects', 'labels', and 'anonlabels' sub-dictionaries, each mapping keys to data values whose first element is a document name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each key, data pair in otherdata['progoptions'].items(), if the first element of data is in docnames, insert or overwrite self.progoptions[key] with data. RESULT self.progoptions]
+            [COMMAND For each key, data pair in otherdata['objects'].items(), if the first element of data is in docnames, insert or overwrite self.objects[key] with data. RESULT self.objects]
+            [COMMAND For each key, data pair in otherdata['labels'].items(), if the first element of data is in docnames, insert or overwrite self.labels[key] with data. RESULT self.labels]
+            [COMMAND For each key, data pair in otherdata['anonlabels'].items(), if the first element of data is in docnames, insert or overwrite self.anonlabels[key] with data. RESULT self.anonlabels]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Processes explicit document labels by resolving indirect hyperlink targets, skipping ignored label types, recording anonymous labels, and registering named labels with section, figure, or toctree captions while warning about duplicates." process_doc]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "The Sphinx build environment used for document path lookup and environment state."
+        <REF> docname </REF>: str "The name of the document being processed."
+        <REF> document </REF>: nodes.document "The doctree document node containing label names, name ids, and target nodes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each name and explicit flag in document.nametypes.items(). RESULT loop_processing]
+            [COMMAND Within the outer loop, if explicit is false, skip to the next iteration. RESULT _]
+            [COMMAND Within the outer loop, set labelid to document.nameids[name]. RESULT labelid]
+            [COMMAND Within the outer loop, if labelid is None, skip to the next iteration. RESULT _]
+            [COMMAND Within the outer loop, set node to document.ids[labelid]. RESULT node]
+            [COMMAND Within the outer loop, if node is a nodes.target and contains 'refid', resolve the indirect hyperlink target by setting node to document.ids.get(node['refid']) and labelid to node['names'][0]. RESULT resolved_node]
+            [COMMAND Within the outer loop, if node.tagname is 'footnote', or 'refuri' is in node, or node.tagname starts with 'desc_', skip to the next iteration. RESULT _]
+            [COMMAND Within the outer loop, if name is already in self.labels, log a duplicate-label warning that includes the existing location via env.doc2path(self.labels[name][0]) and the current location via node. RESULT duplicate_warning_logged]
+            [COMMAND Within the outer loop, set self.anonlabels[name] to (docname, labelid). RESULT anonlabels_updated]
+            [COMMAND Within the outer loop, determine sectname: if node.tagname is 'section' or 'rubric', set sectname to clean_astext(cast(nodes.title, node[0])); otherwise if self.is_enumerable_node(node) is true, set sectname to self.get_numfig_title(node) and if it is empty skip to the next iteration; otherwise find the first toctree descendant using next(iter(node.traverse(addnodes.toctree)), None), and if that toctree has a 'caption' set sectname to the caption, otherwise skip to the next iteration because the label is anonymous-only. RESULT sectname]
+            [COMMAND Within the outer loop, after sectname has been determined, set self.labels[name] to (docname, labelid, sectname). RESULT labels_updated]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Stores a new program option in the progoptions dictionary by mapping the (program, name) key to the (docname, labelid) tuple." add_program_option]
+    [INPUTS]
+        <REF> program </REF>: str "Program identifier used as part of the dictionary key."
+        <REF> name </REF>: str "Option name used as part of the dictionary key."
+        <REF> docname </REF>: str "Documentation name stored in the option value tuple."
+        <REF> labelid </REF>: str "Label identifier stored in the option value tuple."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: NoneType "This method returns no value; it updates self.progoptions in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the tuple (docname, labelid) in the progoptions dictionary under the key (program, name). RESULT self.progoptions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a reference node for a cross-reference role, setting either an internal refid or a relative URI with optional anchor, and adding standard CSS classes." build_reference_node]
+    [INPUTS]
+        <REF> fromdocname </REF>: str "The document name containing the reference."
+        <REF> builder </REF>: Builder "The builder used to resolve relative URIs between documents."
+        <REF> docname </REF>: str "The target document name of the reference."
+        <REF> labelid </REF>: str "The label or anchor identifier for the target, possibly empty."
+        <REF> sectname </REF>: str "The section title text used to label the reference."
+        <REF> rolename </REF>: str "The cross-reference role name used to build a CSS class."
+        <REF> options </REF>: dict[str, Any] "Arbitrary keyword arguments forwarded to the node class after removing the 'nodeclass' option."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> newnode </REF>: Element "The constructed reference node with an appended inline section node and either refid or refuri set."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Pop the 'nodeclass' key from options, falling back to nodes.reference if absent, and store the resulting node class as nodeclass. RESULT nodeclass]
+            [COMMAND Call nodeclass('', '', internal=True, **options) and assign the result to newnode. RESULT newnode]
+            [COMMAND Call nodes.inline(sectname, sectname) and assign the result to innernode. RESULT innernode]
+            [COMMAND If innernode.get('classes') is not None, append the literal class 'std' and the role-specific class 'std-' + rolename to innernode['classes']. RESULT innernode]
+            [COMMAND If docname == fromdocname, set newnode['refid'] = labelid; otherwise use the cross-document reference alternative flow. RESULT newnode]
+            [COMMAND After the reference-target branch completes, append innernode to newnode. RESULT newnode]
+            [COMMAND Return newnode. RESULT newnode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: docname != fromdocname (the reference targets a different document than the current one)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create contnode as pending_xref('') to hold fallback cross-reference metadata. RESULT contnode]
+            [COMMAND Set contnode['refdocname'] = docname and contnode['refsectname'] = sectname. RESULT contnode]
+            [COMMAND Set newnode['refuri'] to builder.get_relative_uri(fromdocname, docname). RESULT newnode['refuri']]
+            [COMMAND If labelid is truthy, append '#' + labelid to newnode['refuri']. RESULT newnode['refuri']]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Selects a cross-reference resolver based on typ, delegates citation references to the citation domain after a deprecation warning, and returns the resolved Element." resolve_xref]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "The Sphinx build environment used to retrieve domains."
+        <REF> fromdocname </REF>: str "The document name from which the reference originates."
+        <REF> builder </REF>: Builder "The Sphinx builder in effect during resolution."
+        <REF> typ </REF>: str "The cross-reference type used to select the resolver."
+        <REF> target </REF>: str "The target of the cross-reference."
+        <REF> node </REF>: pending_xref "The pending cross-reference node being resolved."
+        <REF> contnode </REF>: Element "The content node to use for the resolved reference."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Element "The resolved cross-reference element returned by the selected resolver."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Select the resolver method appropriate for typ, unless typ is 'citation', in which case resolve directly through the citation domain after emitting a warning. RESULT resolver]
+            [COMMAND Except when typ is 'citation', invoke the selected resolver with env, fromdocname, builder, typ, target, node, and contnode. RESULT resolved_element]
+            [COMMAND Return resolved_element. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: typ is 'ref']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set resolver to self._resolve_ref_xref. RESULT resolver]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: typ is 'numref']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set resolver to self._resolve_numref_xref. RESULT resolver]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: typ is 'keyword']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set resolver to self._resolve_keyword_xref. RESULT resolver]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: typ is 'doc']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set resolver to self._resolve_doc_xref. RESULT resolver]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: typ is 'option']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set resolver to self._resolve_option_xref. RESULT resolver]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: typ is 'citation']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit a RemovedInSphinx40Warning with message 'pending_xref(domain=std, type=citation) is deprecated: %r' formatted with node. RESULT None]
+            [COMMAND Get the 'citation' domain from env. RESULT domain]
+            [COMMAND Return domain.resolve_xref(env, fromdocname, builder, typ, target, node, contnode). RESULT resolved_element]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: typ is not 'ref', 'numref', 'keyword', 'doc', 'option', or 'citation']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set resolver to self._resolve_obj_xref. RESULT resolver]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a pending cross-reference by selecting either the anonymous-label or named-label lookup path, returning None when no target document is found, and otherwise delegating to build_reference_node to create the reference Element." _resolve_ref_xref]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "The build environment that exposes the anonlabels and labels registries."
+        <REF> fromdocname </REF>: str "The document name containing the cross-reference, used when building the reference node."
+        <REF> builder </REF>: Builder "The builder used to construct the final reference node."
+        <REF> typ </REF>: str "The cross-reference type; accepted as part of the resolver signature but not directly used in this method."
+        <REF> target </REF>: str "The label target to resolve."
+        <REF> node </REF>: pending_xref "The pending cross-reference node; its refexplicit flag selects the anonymous-label or named-label path."
+        <REF> contnode </REF>: Element "The content node carried by the pending reference; retained for API compatibility and not used in this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Element | None "The constructed reference node, or None when the resolved docname is falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate node['refexplicit'] to choose the reference resolution path. RESULT refexplicit_flag]
+            [COMMAND If refexplicit_flag is truthy, resolve the reference as an anonymous label: assign docname and labelid from self.anonlabels.get(target, ('', '')), and set sectname to node.astext(). RESULT anonymous_ref]
+            [COMMAND After the chosen label-resolution branch, if the resulting docname is falsy (for example, empty), return None. RESULT none_return]
+            [COMMAND Return self.build_reference_node(fromdocname, builder, docname, labelid, sectname, 'ref'). RESULT reference_node]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: refexplicit_flag is falsey, so the target is treated as a named label.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the reference as a named label: assign docname, labelid, and sectname from self.labels.get(target, ('', '', '')). RESULT named_ref]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a :numref: cross-reference by looking up the target label, validating the figure-numbering configuration, computing the resolved number/title, and returning a number_reference node (or contnode/None when resolution is not possible)." _resolve_numref_xref]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "Sphinx build environment used to resolve the doctree and configuration."
+        <REF> fromdocname </REF>: str "Name of the document containing the reference; passed to build_reference_node."
+        <REF> builder </REF>: Builder "Current builder, passed to get_fignumber and build_reference_node."
+        <REF> typ </REF>: str "Reference type (unused by the resolution logic)."
+        <REF> target </REF>: str "Cross-reference target label to resolve in self.labels or self.anonlabels."
+        <REF> node </REF>: pending_xref "Pending cross-reference node providing the 'refexplicit' flag and warning location."
+        <REF> contnode </REF>: Element "Content node to return when the reference is ignored or to use as explicit title text."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Element or None "A number_reference node built by build_reference_node; may return contnode when the reference is ignored, or None when the target cannot be resolved."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the target label: if target is a key in self.labels, unpack docname, labelid, and figname from self.labels.get(target, ('', '', '')); otherwise unpack docname and labelid from self.anonlabels.get(target, ('', '')) and set figname to None. RESULT resolved_label_info]
+            [COMMAND If docname is falsy, return None immediately. RESULT None]
+            [COMMAND Look up target_node = env.get_doctree(docname).ids.get(labelid), then compute figtype = self.get_enumerable_node_type(target_node). RESULT target_node_and_figtype]
+            [COMMAND If figtype is None, return None immediately. RESULT None]
+            [COMMAND If figtype is not 'section' and env.config.numfig is exactly the boolean False (using and short-circuit: evaluate the second condition only when figtype is not 'section'), log the warning 'numfig is disabled. :numref: is ignored.' and return contnode. RESULT contnode]
+            [COMMAND Attempt to compute fignumber = self.get_fignumber(env, builder, figtype, docname, target_node). If fignumber is None, return contnode immediately. If this call raises ValueError, follow the alternative flow for ValueError. RESULT fignumber]
+            [COMMAND Determine title: if node['refexplicit'] is truthy, set title to contnode.astext(); otherwise set title to env.config.numfig_format.get(figtype, ''). If node['refexplicit'] raises KeyError, follow the alternative flow for KeyError. RESULT title]
+            [COMMAND If figname is None and '{name}' is present in title, log the warning 'the link has no caption: %s' with title and return contnode. Otherwise continue to title formatting. RESULT contnode]
+            [COMMAND Format newtitle: set fignum to '.'.join(map(str, fignumber)); if '{name}' or 'number' appears in title, use title.format(name=figname, number=fignum) when figname is truthy otherwise title.format(number=fignum); otherwise use old-style formatting title % fignum. If formatting raises KeyError or TypeError, follow the corresponding alternative flow. RESULT newtitle]
+            [COMMAND Return self.build_reference_node(fromdocname, builder, docname, labelid, newtitle, 'numref', nodeclass=addnodes.number_reference, title=title). RESULT reference_node]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.get_fignumber(env, builder, figtype, docname, target_node) raises ValueError (caught by the try block)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the warning 'no number is assigned for %s: %s' with figtype and labelid, using location=node. RESULT None]
+            [COMMAND Return contnode immediately. RESULT contnode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: During title selection or formatting, a KeyError is raised (for example by node['refexplicit'], title.format, or an invalid placeholder), and the caught exception object is exc]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the warning 'invalid numfig_format: %s (%r)' with title and exc, using location=node. RESULT None]
+            [COMMAND Return contnode immediately. RESULT contnode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: During title formatting, a TypeError is raised (for example by title.format or by old-style title % fignum)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the warning 'invalid numfig_format: %s' with title, using location=node. RESULT None]
+            [COMMAND Return contnode immediately. RESULT contnode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a keyword cross-reference by looking up the target label in self.labels; if the label's docname is non-empty, creates and returns a reference node, otherwise returns None." _resolve_keyword_xref]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "The build environment."
+        <REF> fromdocname </REF>: str "The source document name from which the reference is made."
+        <REF> builder </REF>: Builder "The builder used to create the reference node."
+        <REF> typ </REF>: str "The cross-reference type."
+        <REF> target </REF>: str "The keyword label name being referenced."
+        <REF> node </REF>: pending_xref "The pending cross-reference node."
+        <REF> contnode </REF>: Element "The content node for the reference."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Element "The resolved reference node, or None when the target is not found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up target in self.labels with a default tuple ('', '', ''); unpack the stored value into docname, labelid, and an ignored third element. RESULT docname, labelid, _]
+            [COMMAND If docname is non-empty, create and return the reference node by calling make_refnode(builder, fromdocname, docname, labelid, contnode). RESULT refnode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: docname is empty or falsy, meaning the target was not found in self.labels or its stored docname is blank]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None to indicate the keyword cross-reference could not be resolved. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a document cross-reference by joining the reference document with the target, verifying that the target document exists, and returning a reference node whose caption is either the explicit reference title or the target document title." _resolve_doc_xref]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "Build environment containing all_docs and titles."
+        <REF> fromdocname </REF>: str "Source document name from which the cross-reference is made."
+        <REF> builder </REF>: Builder "Builder used to create the reference node."
+        <REF> typ </REF>: str "Reference type; not used in the method body."
+        <REF> target </REF>: str "Reference target string; not used directly in the method body."
+        <REF> node </REF>: pending_xref "Pending cross-reference node providing 'reftarget', 'refexplicit', and optionally 'refdoc'."
+        <REF> contnode </REF>: Element "Continuation node; not used in the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Element or None "Reference node returned by make_refnode, or None if the target document is not in env.all_docs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine refdoc as node.get('refdoc', fromdocname), using fromdocname only if 'refdoc' is missing. RESULT refdoc]
+            [COMMAND Determine docname by calling docname_join with refdoc and node['reftarget']. RESULT docname]
+            [COMMAND Check whether docname is present in env.all_docs. RESULT docname_present]
+            [COMMAND If docname is present, enter the outer else branch and check whether node['refexplicit'] is truthy. RESULT refexplicit_flag]
+            [COMMAND Within the explicit-title branch, set caption to node.astext(). RESULT caption]
+            [COMMAND Create innernode with nodes.inline(caption, caption, classes=['doc']). RESULT innernode]
+            [COMMAND Return make_refnode(builder, fromdocname, docname, None, innernode). RESULT returned_reference_node]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: docname is not in env.all_docs]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the outer else branch, node['refexplicit'] is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the non-explicit branch, set caption to clean_astext(env.titles[docname]). RESULT caption]
+            [COMMAND Create innernode with nodes.inline(caption, caption, classes=['doc']). RESULT innernode]
+            [COMMAND Return make_refnode(builder, fromdocname, docname, None, innernode). RESULT returned_reference_node]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves an option cross-reference by looking up (program, target) in self.progoptions and, if that fails, repeatedly splitting a whitespace-separated target into hyphen-joined command prefixes until a document name is found, then returning a reference node or None when no resolution is possible." _resolve_option_xref]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "Build environment used during cross-reference resolution."
+        <REF> fromdocname </REF>: str "Source document name containing the cross-reference."
+        <REF> builder </REF>: Builder "Builder used to construct the reference node."
+        <REF> typ </REF>: str "Cross-reference type; not used by this method body."
+        <REF> target </REF>: str "Target text to resolve, optionally containing whitespace-separated command tokens."
+        <REF> node </REF>: pending_xref "Pending cross-reference node that provides the 'std:program' attribute."
+        <REF> contnode </REF>: Element "Continuation node forwarded to make_refnode."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Element | None "Reference node created by make_refnode when the target is resolved, or None if no matching document is found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get progname from node.get('std:program'). RESULT progname]
+            [COMMAND Strip leading and trailing whitespace from target. RESULT target]
+            [COMMAND Look up (progname, target) in self.progoptions with default ('', '') and unpack the result into docname and labelid. RESULT docname, labelid]
+            [COMMAND If docname is truthy, skip the fallback block and return the result of make_refnode(builder, fromdocname, docname, labelid, contnode). RESULT reference_node]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When if not docname is true, meaning the initial lookup produced a falsy docname.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize commands to an empty list. RESULT commands]
+            [COMMAND Enter a while loop that continues while ws_re.search(target) finds a whitespace match. RESULT while_condition]
+            [COMMAND Within the while loop, split target at the first whitespace match using ws_re.split(target, 1) into subcommand and the remaining target. RESULT subcommand, target]
+            [COMMAND Within the while loop, append subcommand to commands. RESULT commands]
+            [COMMAND Within the while loop, set progname to '-'.join(commands). RESULT progname]
+            [COMMAND Within the while loop, look up (progname, target) in self.progoptions with default ('', '') and unpack the result into docname and labelid. RESULT docname, labelid]
+            [COMMAND Within the while loop, if docname is truthy, break out of the loop and return the result of make_refnode(builder, fromdocname, docname, labelid, contnode). RESULT reference_node]
+            [COMMAND If the while loop ends because ws_re.search(target) no longer matches without having broken, return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves an object cross-reference target by searching role-specific object types for a matching self.objects entry and returning a reference node, or None if no target document is found." _resolve_obj_xref]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "The build environment used for cross-reference resolution."
+        <REF> fromdocname </REF>: str "The name of the document containing the cross-reference."
+        <REF> builder </REF>: Builder "The builder used to construct the reference node."
+        <REF> typ </REF>: str "The role type used to determine candidate object types."
+        <REF> target </REF>: str "The target identifier to resolve."
+        <REF> node </REF>: pending_xref "The pending cross-reference node associated with the unresolved reference."
+        <REF> contnode </REF>: Element "The content node to be wrapped by the resolved reference node."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Element or None "A reference node produced by make_refnode when a matching docname is found; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate self.objtypes_for_role(typ); assign its result to objtypes if it is truthy, otherwise use the short-circuit 'or' fallback and assign a new empty list [] to objtypes. RESULT objtypes]
+            [COMMAND Iterate in order over each objtype in objtypes and check whether the tuple (objtype, target) is a key in self.objects. RESULT objtype]
+            [COMMAND Within the for loop, if (objtype, target) is found in self.objects, retrieve the corresponding value, unpack it into docname and labelid, and break out of the loop. RESULT docname, labelid]
+            [COMMAND If docname is truthy after the lookup, build the reference node by calling make_refnode(builder, fromdocname, docname, labelid, contnode) and return it. RESULT reference_node]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If no objtype in objtypes matches target, so the for loop completes without executing break]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Execute the for loop's else clause and set docname and labelid to empty strings. RESULT docname, labelid]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If docname is empty or otherwise falsy after the lookup]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves any cross-reference target by trying the 'ref' and 'option' roles first, then looking up all registered object types, and returns a list of resolved reference tuples." resolve_any_xref]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "Sphinx build environment used during cross-reference resolution."
+        <REF> fromdocname </REF>: str "Name of the document containing the pending cross-reference."
+        <REF> builder </REF>: Builder "Sphinx builder used to create reference nodes."
+        <REF> target </REF>: str "Cross-reference target string to resolve."
+        <REF> node </REF>: pending_xref "The pending cross-reference node being resolved."
+        <REF> contnode </REF>: Element "The content node used when constructing the reference node."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> results </REF>: List[Tuple[str, Element]] "List of resolved reference tuples, each containing a standard role name and a reference node."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize results to an empty list. RESULT results]
+            [COMMAND Compute ltarget as target.lower() for case-insensitive lookups. RESULT ltarget]
+            [COMMAND For each role in the fixed tuple ('ref', 'option'), call self.resolve_xref with the role, using ltarget if the role is 'ref' and target otherwise; if the returned res is truthy, append ('std:' + role, res) to results. RESULT results]
+            [COMMAND For each objtype in self.object_types, build key as (objtype, target), or as (objtype, ltarget) when objtype is 'term'; if key exists in self.objects, retrieve docname and labelid and append ('std:' + self.role_for_objtype(objtype), make_refnode(builder, fromdocname, docname, labelid, contnode)) to results. RESULT results]
+            [COMMAND Return results. RESULT results]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Yields normalized search-index records for documents, command-line options, objects, labels, and anonymous labels from the environment." get_objects]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> iterator </REF>: Iterator[Tuple[str, str, str, str, str, int]] "Yields tuples containing name, display name, record type, docname, labelid or empty string, and search priority."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Handle the special 'doc' reference by iterating over every doc in self.env.all_docs and yielding (doc, clean_astext(self.env.titles[doc]), 'doc', doc, '', -1). RESULT doc_records]
+            [COMMAND For each item in self.progoptions.items(), unpack the key as (prog, option) and the value as info; if prog is truthy, set fullname to '.'.join([prog, option]) and yield (fullname, fullname, 'cmdoption', info[0], info[1], 1); otherwise yield (option, option, 'cmdoption', info[0], info[1], 1). RESULT cmdoption_records]
+            [COMMAND For each item in self.objects.items(), unpack the key as (type, name) and the value as info, then yield (name, name, type, info[0], info[1], self.object_types[type].attrs['searchprio']). RESULT object_records]
+            [COMMAND For each item in self.labels.items(), unpack the key as name and the value as (docname, labelid, sectionname), then yield (name, sectionname, 'label', docname, labelid, -1). RESULT label_records]
+            [COMMAND Build non_anon_labels by assigning set(self.labels). RESULT non_anon_labels]
+            [COMMAND For each item in self.anonlabels.items(), unpack the key as name and the value as (docname, labelid); if name is not in non_anon_labels, yield (name, name, 'label', docname, labelid, -1). RESULT anon_label_records]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the lname attribute of the supplied object type without prepending a Default prefix." get_type_name]
+    [INPUTS]
+        <REF> type </REF>: ObjType "The object type whose lname attribute is returned."
+        <REF> primary </REF>: bool "Optional flag indicating whether the type is primary; accepted for signature compatibility but not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The value of type.lname."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return type.lname without prepending any Default prefix. RESULT type.lname]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the exact class of the given node is contained in the enumerable_nodes collection, otherwise False." is_enumerable_node]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance providing the enumerable_nodes collection."
+        <REF> node </REF>: Node "The AST node whose exact class is checked against self.enumerable_nodes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if node.__class__ is present in self.enumerable_nodes; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate node.__class__ to obtain the exact runtime class object of node. RESULT node_class]
+            [COMMAND Check whether node_class is contained in self.enumerable_nodes. RESULT is_enumerable]
+            [COMMAND Return the boolean result is_enumerable. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the title of an enumerable node by using a registered class-specific title getter if available, otherwise falling back to the cleaned text of its first caption or title child, or None when no title exists." get_numfig_title]
+    [INPUTS]
+        <REF> node </REF>: Node "The node whose enumerable title is being retrieved."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string or None "The title text for the enumerable node, or None if the node is not enumerable or no caption/title child is found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine whether node is enumerable by calling self.is_enumerable_node(node). RESULT is_enumerable]
+            [COMMAND If is_enumerable is false, return None immediately and do not process the node further. RESULT None]
+            [COMMAND If node is enumerable, cast node to Element and assign it to elem. RESULT elem]
+            [COMMAND Look up title_getter from self.enumerable_nodes using elem.__class__ as the key, unpacking the default (None, None) when the class is not registered. RESULT title_getter]
+            [COMMAND If title_getter is truthy, call title_getter(elem) and return its result immediately. RESULT title]
+            [COMMAND If title_getter is falsy, iterate over each direct child subnode of elem in iteration order. RESULT subnode]
+            [COMMAND Within the loop over subnode in elem, if subnode is an instance of nodes.caption or nodes.title, call clean_astext(subnode) and return its result immediately. RESULT subnode_title]
+            [COMMAND If the loop completes without finding any caption or title child, return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.is_enumerable_node(node) is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None without attempting to find a title. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: title_getter is falsy, meaning no class-specific getter is registered for elem.__class__]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Loop over each direct child subnode of elem in order. RESULT subnode]
+            [COMMAND For each subnode, check whether it is an instance of nodes.caption or nodes.title. RESULT is_title_child]
+            [COMMAND For the first subnode that is a caption or title, return clean_astext(subnode). RESULT subnode_title]
+            [COMMAND After the loop, if no such child exists, return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Classifies a Docutils node as a section, a container with a literal-block child, or a mapped enumerable figure type, falling back to None when unmapped." get_enumerable_node_type]
+    [INPUTS]
+        <REF> node </REF>: Node "The Docutils node to classify."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str|None "Returns 'section', 'code-block', the mapped enumerable figure type, or None if the node class is not in self.enumerable_nodes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the inner helper function has_child(node, cls) that returns True if any direct child of node is an instance of cls. RESULT has_child]
+            [COMMAND Check whether node is an instance of nodes.section; if so, set result to 'section' and return immediately. RESULT result]
+            [COMMAND If the section check was false, evaluate the short-circuit condition: node is an instance of nodes.container, 'literal_block' is a member of node, and has_child(node, nodes.literal_block) is true; if all are true, set result to 'code-block' and return immediately. RESULT result]
+            [COMMAND If neither previous branch matched, look up node.__class__ in self.enumerable_nodes with default (None, None), take the first tuple element as figtype, set result to figtype, and return it, which may be None. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts an option element into a fully qualified option name by splitting reftarget, optionally prefixing program, and joining command tokens with hyphens before the final option token; returns None for non-option elements or when only the option token is present." get_full_qualified_name]
+    [INPUTS]
+        <REF> node </REF>: Element "Element to inspect for reftype, std:program, and reftarget attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return </REF>: str or None "Fully qualified name in the form 'program-command.option' or 'command.option', or None if the element is not an option or no command token remains."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether node.get('reftype') equals 'option'. RESULT is_option]
+            [COMMAND On the option path, assign progname = node.get('std:program'). RESULT progname]
+            [COMMAND On the option path, assign command_tokens = ws_re.split(node.get('reftarget')). RESULT command_tokens]
+            [COMMAND On the option path, if progname is truthy, insert progname at the front of command_tokens; otherwise leave command_tokens unchanged. RESULT command_tokens]
+            [COMMAND On the option path, remove the last element from command_tokens and assign it to option. RESULT option]
+            [COMMAND On the option path, after popping option, if command_tokens is non-empty, join command_tokens with hyphens, append a dot and option, and return the resulting string; otherwise return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: node.get('reftype') is not equal to 'option']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: On the option path, command_tokens is empty after removing the final token as option]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Emits a deprecation warning that StandardDomain.note_citations() is deprecated, using the RemovedInSphinx40Warning category." note_citations]
+    [INPUTS]
+        <REF> self </REF>: object "The class instance on which the method is called."
+        <REF> env </REF>: BuildEnvironment "The build environment parameter; unused in this method."
+        <REF> docname </REF>: str "The document name parameter; unused in this method."
+        <REF> document </REF>: nodes.document "The document node parameter; unused in this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "The method always returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit a deprecation warning with the fixed message 'StandardDomain.note_citations() is deprecated.' and the warning category RemovedInSphinx40Warning by calling warnings.warn. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Emits a deprecation warning indicating that StandardDomain.note_citation_refs() is deprecated and will be removed in Sphinx 4.0." note_citation_refs]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "Sphinx build environment; unused by this method."
+        <REF> docname </REF>: str "Document name; unused by this method."
+        <REF> document </REF>: nodes.document "Document tree; unused by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call warnings.warn with the constant message 'StandardDomain.note_citation_refs() is deprecated.' and the RemovedInSphinx40Warning category to emit a deprecation warning. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Emits a deprecation warning stating that StandardDomain.note_labels() is deprecated, using RemovedInSphinx40Warning as the warning category." note_labels]
+    [INPUTS]
+        <REF> self </REF>: StandardDomain "The StandardDomain instance on which the method is invoked."
+        <REF> env </REF>: BuildEnvironment "The Sphinx build environment."
+        <REF> docname </REF>: str "The name of the document being processed."
+        <REF> document </REF>: nodes.document "The docutils document node tree."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call warnings.warn with the message 'StandardDomain.note_labels() is deprecated.' and the warning category RemovedInSphinx40Warning. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Splits a line into a term and optional classifiers using the regex ' +: +', appending None as a sentinel when no classifier is present." split_term_classifiers]
+    [INPUTS]
+        <REF> line </REF>: string "The input line to be split into term and classifiers."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> parts </REF>: array of strings/null "The split components of the input line, with a final None appended as a missing-value sentinel."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split the input 'line' using the regular expression ' +: +' which matches one or more spaces, a colon, and one or more spaces, then append None to the resulting list. RESULT parts]
+            [COMMAND Return the resulting list 'parts'. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a glossary term node from text nodes, assigns source/line metadata and a unique target ID, registers the term with the standard domain and an index entry, and returns the completed term." make_glossary_term]
+    [INPUTS]
+        <REF> env </REF>: BuildEnvironment "Sphinx build environment used to access domains, temporary data, and serial number generation."
+        <REF> textnodes </REF>: Iterable[Node] "Child nodes whose text becomes the glossary term content."
+        <REF> index_key </REF>: str "Key used for the index entry associated with the term."
+        <REF> source </REF>: str "Source document or location name stored on the term node."
+        <REF> lineno </REF>: int "Source line number stored on the term node."
+        <REF> node_id </REF>: str "Optional externally supplied ID for the term target; if truthy, it is used directly."
+        <REF> document </REF>: nodes.document "Optional document node used to generate and register a unique term target ID."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> term </REF>: nodes.term "The fully constructed term node with source metadata, target ID, and an attached index node."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new term node with nodes.term('', '', *textnodes), using empty rawsource and text strings and preserving textnodes as children. RESULT term]
+            [COMMAND Set term.source to source and term.line to lineno. RESULT term]
+            [COMMAND Compute termtext by calling term.astext(). RESULT termtext]
+            [COMMAND Dispatch to the appropriate ID-assignment flow based on whether node_id is truthy, document is truthy, or neither is truthy; the selected flow sets the final node_id. RESULT node_id]
+            [COMMAND Retrieve the standard domain by calling cast(StandardDomain, env.get_domain('std')). RESULT std]
+            [COMMAND Register the term in the standard domain by calling std.note_object('term', termtext.lower(), node_id, location=term). RESULT term]
+            [COMMAND Create an index node with addnodes.index(). RESULT indexnode]
+            [COMMAND Set indexnode['entries'] to [('single', termtext, node_id, 'main', index_key)]. RESULT indexnode]
+            [COMMAND Copy indexnode.source from term.source and indexnode.line from term.line. RESULT indexnode]
+            [COMMAND Append indexnode to term. RESULT term]
+            [COMMAND Return term. RESULT term]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: node_id is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append the externally supplied node_id to term['ids']. RESULT term]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: node_id is falsy and document is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Generate node_id by calling make_id(env, document, 'term', termtext). RESULT node_id]
+            [COMMAND Append node_id to term['ids']. RESULT term]
+            [COMMAND Register term as an explicit target by calling document.note_explicit_target(term). RESULT term]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: node_id is falsy and document is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the fallback branch, emit RemovedInSphinx40Warning with message 'make_glossary_term() expects document is passed as an argument.' RESULT warning_issued]
+            [COMMAND In the fallback branch, obtain or create the gloss_entries set from env.temp_data using setdefault('gloss_entries', set()). RESULT gloss_entries]
+            [COMMAND In the fallback branch, generate candidate node_id by calling nodes.make_id('term-' + termtext). RESULT node_id]
+            [COMMAND In the fallback branch, if node_id equals the literal string 'term', replace it with 'term-%d' % env.new_serialno('glossary'). RESULT node_id]
+            [COMMAND In the fallback branch, while node_id is still present in gloss_entries, regenerate it as 'term-%d' % env.new_serialno('glossary') to ensure uniqueness. RESULT node_id]
+            [COMMAND In the fallback branch, add node_id to gloss_entries. RESULT gloss_entries]
+            [COMMAND In the fallback branch, append node_id to term['ids']. RESULT term]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Scans text with token_re and returns a list of docutils nodes containing plain Text segments for gaps and inline xref literal nodes for each token match." token_xrefs]
+    [INPUTS]
+        <REF> text </REF>: str "The source text to scan for token regex matches."
+        <REF> productionGroup </REF>: str "Optional grammar production group prefix added to token xref targets; defaults to an empty string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: List[Node] "List of docutils nodes representing plain text and token cross-reference literals in source order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If productionGroup is not empty, append ':' to productionGroup. RESULT productionGroup]
+            [COMMAND Initialize retnodes as an empty list of docutils nodes. RESULT retnodes]
+            [COMMAND Initialize pos to 0. RESULT pos]
+            [COMMAND For each regex match m yielded by token_re.finditer(text), if m.start() is greater than pos, create a Text node from the substring text[pos:m.start()] and append it to retnodes. RESULT retnodes]
+            [COMMAND For each regex match m yielded by token_re.finditer(text), create refnode by calling pending_xref(m.group(1), reftype='token', refdomain='std', reftarget=productionGroup + m.group(1)). RESULT refnode]
+            [COMMAND For each regex match m yielded by token_re.finditer(text), append a nodes.literal containing m.group(1) with classes ['xref'] to refnode, then append refnode to retnodes. RESULT retnodes]
+            [COMMAND For each regex match m yielded by token_re.finditer(text), set pos to m.end(). RESULT pos]
+            [COMMAND After all regex matches are processed, if pos is less than len(text), append a Text node containing text[pos:] to retnodes. RESULT retnodes]
+            [COMMAND Return retnodes. RESULT retnodes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers StandardDomain with the given Sphinx application and returns a configuration dictionary specifying version, environment version, and parallel safety flags." setup]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "The Sphinx application instance on which the domain is registered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> config </REF>: Dict[str, Any] "Dictionary of extension configuration values including version, env_version, and parallel safety flags."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Register StandardDomain on the Sphinx application by calling app.add_domain(StandardDomain). RESULT app]
+            [COMMAND Return a dictionary containing version 'builtin', env_version 1, parallel_read_safe True, and parallel_write_safe True. RESULT config]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

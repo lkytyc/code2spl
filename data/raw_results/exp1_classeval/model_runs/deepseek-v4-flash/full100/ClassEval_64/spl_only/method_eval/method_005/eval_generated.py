@@ -1,0 +1,81 @@
+import logging
+
+
+class NumberConverter:
+    @staticmethod
+    def decimal_to_binary(decimal_num):
+        binary_num = bin(decimal_num)[2:]
+        return binary_num
+
+    @staticmethod
+    def binary_to_decimal(binary_num):
+        try:
+            decimal_num = int(binary_num, 2)
+        except ValueError:
+            logging.error("Error converting binary_num to integer: invalid binary literal")
+            raise ValueError("int(binary_num, 2) fails because binary_num is not a valid base-2 string.") from None
+        return decimal_num
+
+    @staticmethod
+    def decimal_to_octal(decimal_num):
+        try:
+            octal_num = oct(decimal_num)[2:]
+        except TypeError:
+            logging.error("oct() conversion failed because decimal_num is not an integer or an object implementing __index__.")
+            raise TypeError("Raised by oct(decimal_num) when decimal_num is not a valid integer type.") from None
+        return octal_num
+
+    @staticmethod
+    def octal_to_decimal(octal_num):
+        try:
+            decimal_num = int(octal_num, 8)
+        except ValueError:
+            logging.error("ValueError: invalid octal literal")
+            raise ValueError("Raised when the input cannot be parsed as a base-8 integer.") from None
+        except TypeError:
+            logging.error("TypeError: int() can't convert non-string with explicit base")
+            raise TypeError("Raised when the input type is unsupported for explicit base conversion.") from None
+        return decimal_num
+
+    @staticmethod
+    def decimal_to_hex(decimal_num):
+        try:
+            hex_num = hex(decimal_num)[2:]
+        except TypeError:
+            logging.error("TypeError raised by hex() because decimal_num must be integer-compatible.")
+            raise TypeError("hex() cannot convert a non-integer-compatible value.") from None
+        return hex_num
+
+    @staticmethod
+    def hex_to_decimal(hex_num):
+        try:
+            decimal_num = int(hex_num, 16)
+        except ValueError:
+            logging.error("int(hex_num, 16) raised ValueError: invalid literal for int() with base 16")
+            raise ValueError("Raised when the hexadecimal string cannot be interpreted as an integer.") from None
+        except TypeError:
+            logging.error("int(hex_num, 16) raised TypeError: int() can't convert non-string with explicit base")
+            raise TypeError("Raised when the input type is not supported by int() with base 16.") from None
+        return decimal_num
+
+import unittest
+
+class NumberConvertTestHexToDecimal(unittest.TestCase):
+    def test_hex_to_decimal(self):
+        self.assertEqual(42423, NumberConverter.hex_to_decimal('a5b7'))
+
+    def test_hex_to_decimal_2(self):
+        self.assertEqual(21207, NumberConverter.hex_to_decimal('52d7'))
+
+    def test_hex_to_decimal_3(self):
+        self.assertEqual(84627, NumberConverter.hex_to_decimal('14a93'))
+
+    def test_hex_to_decimal_4(self):
+        self.assertEqual(170615, NumberConverter.hex_to_decimal('29a77'))
+
+    def test_hex_to_decimal_5(self):
+        self.assertEqual(342647, NumberConverter.hex_to_decimal('53a77'))
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

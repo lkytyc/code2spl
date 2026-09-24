@@ -1,0 +1,137 @@
+class XMLProcessor:
+    def __init__(self, file_name):
+        self.file_name = file_name
+        self.root = None
+
+    def read_file(self):
+        try:
+            import xml.etree.ElementTree as ET
+            tree = ET.parse(self.file_name)
+            self.root = tree.getroot()
+            return self.root
+        except Exception:
+            return None
+
+    def modify_items(self):
+        if self.root is None:
+            return False
+        try:
+            for elem in self.root.iter('item'):
+                if elem.text:
+                    elem.text = elem.text.upper()
+            return True
+        except Exception:
+            return False
+
+    def write_file(self, output_file=None):
+        if self.root is None:
+            return False
+        try:
+            import xml.etree.ElementTree as ET
+            target = output_file if output_file else self.file_name
+            tree = ET.ElementTree(self.root)
+            tree.write(target, encoding='utf-8', xml_declaration=True)
+            return True
+        except Exception:
+            return False
+
+    def find_elements(self, tag_name):
+        if self.root is None:
+            return []
+        return self.root.findall('.//' + tag_name)
+
+import unittest
+import os
+
+class XMLProcessorTestReadXml(unittest.TestCase):
+    def test_read_xml_1(self):
+        with open('test.xml', 'w') as f:
+            f.write('<root>\n    <item>apple</item>\n    <item>banana</item>\n    <item>orange</item>\n</root>')
+        self.xml_file = 'test.xml'
+        self.processor = XMLProcessor(self.xml_file)
+        tree = ET.parse(self.processor.file_name)
+        self.processor.root = tree.getroot()
+
+        root = self.processor.read_xml()
+        self.assertIsNotNone(root)
+        lst = root.findall('item')
+        self.assertEqual(lst[0].text, 'apple')
+        self.assertEqual(lst[1].text, 'banana')
+        self.assertEqual(lst[2].text, 'orange')
+
+        os.remove('test.xml')
+
+    def test_read_xml_2(self):
+        with open('test.xml', 'w') as f:
+            f.write('<root>\n    <item>aaa</item>\n    <item>bbb</item>\n    <item>ccc</item>\n</root>')
+        self.xml_file = 'test.xml'
+        self.processor = XMLProcessor(self.xml_file)
+        tree = ET.parse(self.processor.file_name)
+        self.processor.root = tree.getroot()
+
+        root = self.processor.read_xml()
+        self.assertIsNotNone(root)
+        lst = root.findall('item')
+        self.assertEqual(lst[0].text, 'aaa')
+        self.assertEqual(lst[1].text, 'bbb')
+        self.assertEqual(lst[2].text, 'ccc')
+
+        os.remove('test.xml')
+
+    def test_read_xml_3(self):
+        with open('test.xml', 'w') as f:
+            f.write('<root>\n    <item>apple</item>\n</root>')
+        self.xml_file = 'test.xml'
+        self.processor = XMLProcessor(self.xml_file)
+        tree = ET.parse(self.processor.file_name)
+        self.processor.root = tree.getroot()
+
+        root = self.processor.read_xml()
+        self.assertIsNotNone(root)
+        lst = root.findall('item')
+        self.assertEqual(lst[0].text, 'apple')
+
+        os.remove('test.xml')
+
+    def test_read_xml_4(self):
+        with open('test.xml', 'w') as f:
+            f.write('<root>\n    <item>apple</item>\n    <item>banana</item>\n</root>')
+        self.xml_file = 'test.xml'
+        self.processor = XMLProcessor(self.xml_file)
+        tree = ET.parse(self.processor.file_name)
+        self.processor.root = tree.getroot()
+
+        root = self.processor.read_xml()
+        self.assertIsNotNone(root)
+        lst = root.findall('item')
+        self.assertEqual(lst[0].text, 'apple')
+        self.assertEqual(lst[1].text, 'banana')
+
+        os.remove('test.xml')
+
+    def test_read_xml_5(self):
+        with open('test.xml', 'w') as f:
+            f.write('<root>\n    <item>apple</item>\n    <item>orange</item>\n</root>')
+        self.xml_file = 'test.xml'
+        self.processor = XMLProcessor(self.xml_file)
+        tree = ET.parse(self.processor.file_name)
+        self.processor.root = tree.getroot()
+
+        root = self.processor.read_xml()
+        self.assertIsNotNone(root)
+        lst = root.findall('item')
+        self.assertEqual(lst[0].text, 'apple')
+        self.assertEqual(lst[1].text, 'orange')
+
+        os.remove('test.xml')
+
+    def test_read_xml_6(self):
+        self.xml_file = ''
+        self.processor = XMLProcessor(self.xml_file)
+
+        root = self.processor.read_xml()
+        self.assertIsNone(root)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

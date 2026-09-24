@@ -1,0 +1,108 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: BookManagementDB
+# Fields: cursor, connection
+# Calls: __init__→create_table
+
+## __init__(db_name: str)
+Summary: Initializes a database connection and cursor from the given database name, then delegates table creation to a setup method.
+#   db_name: str — File path or ':memory:' identifier for the SQLite database to open
+1. Open a SQLite connection to the database identified by db_name and assign the resulting Connection object to self.connection → self.connection
+2. Create a Cursor object from self.connection and assign it to self.cursor, binding the cursor to the same database context established by self.connection → self.cursor
+3. Call self.create_table() to perform initial table setup using the open connection and cursor → none
+   ! log: "Connection could not be established for the given db_name; self.connection and self.cursor are never assigned and the instance is left in an unusable state"
+   ! raise: sqlite3.OperationalError "Propagates unhandled if the database file cannot be opened or created"
+
+## add_book(title: string, author: string)
+Summary: Inserts a new book record into the books table with the given title and author, setting available to 1, and commits the transaction.
+#   title: string — The title of the book to insert; passed directly to the SQL driver without validation or transformation
+#   author: string — The author of the book to insert; passed directly to the SQL driver without validation or transformation
+1. Execute a parameterized INSERT statement against the books table, binding title to the first placeholder and author to the second placeholder, with the available column hardcoded to the integer literal 1 → execute_result
+2. Commit the current database transaction unconditionally, persisting the inserted row to disk → commit_result
+   ! log: "execute() failed before commit() was reached; the transaction is left in an uncommitted state with no rollback performed, which may leave the connection in a dirty transaction state"
+   ! raise: ExceptionName "Exception description"
+
+## borrow_book(book_id: any)
+Summary: Marks a book as unavailable in the database by setting its available flag to 0 for the given book ID and committing the transaction.
+#   book_id: any — The identifier of the book to be borrowed; used as the WHERE clause parameter to match the target row in the books table
+1. Execute a parameterized SQL UPDATE statement against the books table, binding book_id as the sole dynamic parameter to set available = 0 for the row where id equals book_id → sql_execute_result
+2. Commit the open database transaction to persist the UPDATE to durable storage → commit_result
+   ! log: "Database operation failed during borrow_book: either the execute call raised due to a bad transaction state, type mismatch, lock contention, or constraint violation, preventing commit from being reached"
+   ! raise: ExceptionName "Exception description"
+
+## create_table()
+Summary: Ensures the 'books' table exists in the SQLite database by executing an idempotent DDL statement and committing the transaction.
+1. Execute the SQL DDL statement 'CREATE TABLE IF NOT EXISTS books (id INTEGER PRIMARY KEY, title TEXT, author TEXT, available INTEGER)' against the database using the pre-initialized cursor object; discard the return value → _execute_result_discarded
+2. Commit the current transaction on the connection object to durably persist the DDL change to disk → _commit_result_discarded
+   ! log: "AttributeError or sqlite3.ProgrammingError raised because the cursor object is invalid or closed"
+   ! raise: ExceptionName "Exception description"
+   ! log: "AttributeError or sqlite3.ProgrammingError raised because the connection object is invalid or closed"
+   ! raise: ExceptionName "Exception description"
+
+## remove_book(book_id: integer)
+Summary: Deletes the record with the given ID from the books table and commits the transaction to persist the change.
+#   book_id: integer — Primary key of the book record to delete from the books table
+1. Execute a parameterized DELETE SQL statement against the books table, binding book_id as the value for the WHERE id = ? placeholder via the instance cursor → execute_result
+2. Commit the open transaction on the instance connection to durably persist the DELETE operation to the database → commit_result
+   ? Execute completes with zero rows affected and no error is raised; proceed to commit
+   ? Commit the transaction; the commit is effectively a no-op for this statement
+   ! log: "cursor.execute raises an exception; commit is never reached and the transaction remains open or is implicitly rolled back by the DB-API driver"
+   ! raise: ExceptionName "Exception description"
+   ! log: "The DELETE is staged but not persisted; depending on the DB-API 2.0 driver the transaction is left open or implicitly rolled back, and no rollback call is made explicitly"
+   ! raise: ExceptionName "Exception description"
+
+## return_book(book_id: any)
+Summary: Marks a book as available in the database by setting its available flag to 1 for the given book ID, then commits the transaction.
+#   book_id: any — The identifier of the book to mark as available; used as the WHERE clause parameter in the UPDATE statement
+1. Execute a parameterized SQL UPDATE statement against the books table, binding book_id to the ? placeholder, to set the available column to the integer value 1 for the row where id equals book_id → execute_result
+2. Commit the open database transaction on self.connection to durably persist the UPDATE to storage → commit_result
+   ! log: "Exception propagates up from cursor.execute; self.connection.commit is never reached and the transaction remains open for the caller to handle or roll back"
+   ! raise: ExceptionName "Exception description"
+   ! log: "Exception propagates up from connection.commit; the UPDATE may or may not be persisted depending on the database engine state"
+   ! raise: ExceptionName "Exception description"
+
+## search_books() → list
+Summary: Executes a SELECT query to retrieve all rows from the books table and returns them as a list.
+#   → books: list — All rows from the books table as a list of tuples; returns an empty list if no rows exist
+1. Execute the SQL query 'SELECT * FROM books' against the database using the active cursor → _cursor_executed
+2. Fetch all rows returned by the executed query from the cursor into the local variable books; result is an empty list if the query matched no rows → books
+3. Return books to the caller → return_value
+   ? Assign an empty list to books as the fetchall result
+   ? Return the empty list to the caller
+

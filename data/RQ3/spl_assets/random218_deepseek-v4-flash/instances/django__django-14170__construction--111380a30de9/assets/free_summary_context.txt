@@ -1,0 +1,48 @@
+# FILE: django/db/backends/base/operations.py
+This code defines `BaseDatabaseOperations`, a base class in Django’s database backend layer. It encapsulates database-specific behavior so individual database backends (PostgreSQL, MySQL, SQLite, Oracle, etc.) can override only the pieces they need. The class is instantiated with a database connection object and provides many small helper methods used by Django’s query compiler, schema editor, and ORM when generating and executing SQL.
+
+Key responsibilities and behaviors:
+
+- **SQL generation for common operations**: Methods build database-specific SQL fragments for features such as `LIMIT`/`OFFSET`, `DISTINCT`, `FOR UPDATE` row locking, savepoints, transaction start/end, tablespaces, sequence reset, flushing tables, and `INSERT` statements. Many methods return simple defaults; others raise `NotImplementedError` to require backend subclasses to provide real implementations.
+
+- **Date, time, and datetime handling**: Methods like `date_extract_sql`, `date_trunc_sql`, `datetime_cast_date_sql`, `datetime_extract_sql`, and related helpers define SQL for extracting or truncating date/time components. Several are abstract and must be supplied by backend subclasses. There are also value adaptation methods that convert Python date, time, datetime, and decimal values into strings or other driver-compatible formats.
+
+- **Query parameter and value adaptation**: Methods convert Python objects to values suitable for a backend driver, e.g. `adapt_datefield_value`, `adapt_datetimefield_value`, `adapt_timefield_value`, `adapt_decimalfield_value`, and `adapt_ipaddressfield_value`. A generic `adapt_unknown_value` dispatches based on value type.
+
+- **Placeholder and casting helpers**: Methods like `field_cast_sql`, `lookup_cast`, `binary_placeholder_sql`, and `unification_cast_sql` return SQL fragments containing `%s` placeholders used for casting or searching columns. `prep_for_like_query` escapes `\`, `%`, and `_` for `LIKE` queries.
+
+- **Window function support**: Methods such as `window_frame_start`, `window_frame_end`, `window_frame_rows_start_end`, and `window_frame_range_start_end` generate SQL for window frame boundaries like `UNBOUNDED PRECEDING`, `CURRENT ROW`, and `FOLLOWING`.
+
+- **Explain and compiler support**: `explain_query_prefix` validates and returns the `EXPLAIN` prefix if supported. `compiler` dynamically imports the backend’s SQL compiler module and returns the requested compiler class.
+
+- **Connection-specific metadata**: Class attributes define integer field ranges, set operation keywords (`UNION`, `INTERSECT`, `EXCEPT`), cast data types, and window frame constants. Instance methods like `integer_field_range`, `max_in_list_size`, `max_name_length`, and `no_limit_value` report backend limits or capabilities.
+
+- **Transaction and flush execution**: `execute_sql_flush` runs a list of SQL flush statements inside a transaction, optionally using savepoints depending on whether DDL rollback is supported.
+
+- **Last insert ID and returned columns**: `last_insert_id` returns the auto-incrementing primary key from a cursor using its `lastrowid`; `fetch_returned_insert_columns` retrieves data returned by `INSERT ... RETURNING`.
+
+- **SQL script parsing**: `prepare_sql_script` uses `sqlparse` to split a multi-statement SQL script into a list of individual statements with comments stripped.
+
+- **Feature checks and validation**: `check_expression_support`, `conditional_expression_supported_in_where_clause`, and `subtract_temporals` enforce backend support for certain expressions or raise `NotSupportedError`.
+
+- **Miscellaneous helpers**: Methods for generating savepoint SQL, sequence reset SQL, tablespace SQL, and force-no-ordering clauses provide per-backend SQL text. `last_executed_query` formats an executed SQL query and its parameters as a readable string.
+
+Overall, this class is the default template that Django database backends extend. It centralizes all the places where SQL syntax, value binding, and database capabilities differ, letting the rest of Django’s ORM stay database-agnostic.
+
+# FILE: django/db/models/lookups.py
+This code defines Django’s database query lookup system: classes that turn Python lookup expressions (like `field__exact=value` or `field__contains=value`) into SQL clauses. It provides the foundational `Lookup` class, which holds a left-hand side (a field expression) and a right-hand side (a value, expression, or queryset), prepares both sides for the database, and compiles them into SQL via a compiler and connection. It also supports “bilateral transforms” applied to both sides of the lookup, expression resolution, cloning with renamed aliases, aggregate/over-clause detection, and equality/hashing based on the lookup class and operands.
+
+The `Transform` class extends `Func` and supports single-expression database transformations, with optional bilateral behavior. Built-in lookups are registered on Django model fields using `Field.register_lookup`. Key built-ins include:
+
+- `Exact`, `IExact`, `GreaterThan`, `GreaterThanOrEqual`, `LessThan`, `LessThanOrEqual` – basic comparison operators, with field-value preparation and database-specific casting. `Exact` has special handling for boolean left-hand expressions and for querysets limited to one result.
+- `In` – handles iterables of values as well as subqueries; removes `None` values (since NULL never equals anything), raises `EmptyResultSet` if the list becomes empty, and splits large `IN` lists into multiple `OR` groups when the database has a size limit.
+- Pattern-based lookups: `Contains`, `IContains`, `StartsWith`, `IStartsWith`, `EndsWith`, `IEndsWith` – produce `LIKE`/`ILIKE`-style SQL, prepare pattern strings with wildcards and escaping, and handle SQL reference values by appending the pattern at the database level.
+- `Range` – builds a `BETWEEN ... AND ...` clause.
+- `IsNull` – requires a boolean and emits `IS NULL` or `IS NOT NULL`.
+- `Regex`, `IRegex` – use database regex operators if available, otherwise a database-specific regex SQL template.
+- Year lookups (`YearExact`, `YearGt`, `YearGte`, `YearLt`, `YearLte`) – optimize direct-year filters by converting them to range comparisons on the underlying date/datetime field, using database-specific year boundary calculations.
+- UUID-specific lookups (`UUIDIExact`, `UUIDContains`, `UUIDIContains`, `UUIDStartsWith`, `UUIDIStartsWith`, `UUIDEndsWith`, `UUIDIEndsWith`) – strip hyphens from UUID values when the database lacks a native UUID type, using a `Replace` expression.
+- PostgreSQL operator lookups support custom operators via `PostgresOperatorLookup`.
+- Integer comparisons `IntegerGreaterThanOrEqual` and `IntegerLessThan` round float right-hand values up before preparation so floats can be used properly with integer fields.
+
+The code also includes mixins: `FieldGetDbPrepValueMixin` and its iterable variant prepare values via the field’s `get_db_prep_value` method, and `FieldGetDbPrepValueIterableMixin` handles iterables of values that may contain expressions. There is Oracle-specific handling that wraps `Exists` expressions in `CASE WHEN` when used in comparisons, because Oracle does not allow direct comparison of `EXISTS()` to another expression. Overall, this module is the engine for converting Django ORM field lookups into valid, database-appropriate SQL while supporting Python-side value preparation, transformations, subqueries, and edge cases across different database backends.

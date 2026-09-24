@@ -1,0 +1,2519 @@
+# FILE: django/db/models/query.py
+# CLASS BaseIterable
+
+[DEFINE_WORKER: "Initializes the instance by storing the provided queryset, chunked_fetch flag, and chunk_size as instance attributes." __init__]
+    [INPUTS]
+        <REF> queryset </REF>: QuerySet "The queryset to be stored on the instance."
+        <REF> chunked_fetch </REF>: bool "Whether chunked fetching is enabled; defaults to False."
+        <REF> chunk_size </REF>: int "The number of items to fetch per chunk when chunked fetching is enabled; defaults to GET_ITERATOR_CHUNK_SIZE."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.queryset to the incoming queryset parameter. RESULT self.queryset]
+            [COMMAND Assign self.chunked_fetch to the incoming chunked_fetch parameter. RESULT self.chunked_fetch]
+            [COMMAND Assign self.chunk_size to the incoming chunk_size parameter. RESULT self.chunk_size]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS ModelIterable
+
+# CLASS ValuesIterable
+
+# CLASS ValuesListIterable
+
+# CLASS NamedValuesListIterable
+
+[DEFINE_WORKER: "Creates and returns a namedtuple class named 'Row' with the field names supplied as positional arguments." create_namedtuple_class]
+    [INPUTS]
+        <REF> names </REF>: tuple "Variable-length field names for the namedtuple class, collected from the positional arguments."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: type "A namedtuple subclass named 'Row' with one field per name in names."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Bind the supplied positional arguments into a tuple named names. RESULT names]
+            [COMMAND Call namedtuple with typename 'Row' and the names tuple to create a new namedtuple class. RESULT namedtuple_class]
+            [COMMAND Return the created namedtuple class as the function result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS FlatValuesListIterable
+
+# CLASS QuerySet
+
+[DEFINE_WORKER: "Initializes a QuerySet-like object by storing the model, database alias, hints, and query, then resetting all internal cache, write-mode, prefetch, and iteration state to defaults." QuerySet.__init__]
+    [INPUTS]
+        <REF> model </REF>: model class "Model class that the queryset operates on; used to build the default SQL query when no query is supplied."
+        <REF> query </REF>: sql.Query or None "Optional prebuilt SQL query; if falsy, a new sql.Query is constructed from model."
+        <REF> using </REF>: database alias or None "Database alias used for the queryset; stored as self._db."
+        <REF> hints </REF>: dict or None "Optional query hints; if falsy, a new empty dictionary is assigned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the model parameter as self.model. RESULT self.model]
+            [COMMAND Store the using parameter as self._db. RESULT self._db]
+            [COMMAND Assign self._hints to hints if hints is truthy, otherwise assign a new empty dictionary. RESULT self._hints]
+            [COMMAND Assign self.query to query if query is truthy, otherwise create and assign a new sql.Query(self.model). RESULT self.query]
+            [COMMAND Initialize self._result_cache to None. RESULT self._result_cache]
+            [COMMAND Initialize self._sticky_filter to False. RESULT self._sticky_filter]
+            [COMMAND Initialize self._for_write to False. RESULT self._for_write]
+            [COMMAND Initialize self._prefetch_related_lookups to an empty tuple. RESULT self._prefetch_related_lookups]
+            [COMMAND Initialize self._prefetch_done to False. RESULT self._prefetch_done]
+            [COMMAND Initialize self._known_related_objects to an empty dictionary mapping related fields to pk-to-object dictionaries. RESULT self._known_related_objects]
+            [COMMAND Set self._iterable_class to ModelIterable. RESULT self._iterable_class]
+            [COMMAND Initialize self._fields to None. RESULT self._fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Locally imports Django's Manager to avoid circular dependency, constructs a manager from the given queryset class, marks it with _built_with_as_manager, and returns it." as_manager]
+    [INPUTS]
+        <REF> cls </REF>: type "A model or queryset class from which the manager is created."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> manager </REF>: object "A Django Manager instance generated from the queryset class and marked as built with as_manager."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import Manager from django.db.models.manager inside the method to address the circular dependency between Queryset and Manager. RESULT _]
+            [COMMAND Call Manager.from_queryset(cls) to create a manager class for cls and instantiate it. RESULT manager]
+            [COMMAND Set the instance attribute manager._built_with_as_manager to True. RESULT manager]
+            [COMMAND Return the configured manager instance. RESULT manager]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the generator iteration to self._iterable_class, passing the chunked fetch flag and chunk size, and yields each item produced by that iterable." _iterator]
+    [INPUTS]
+        <REF> use_chunked_fetch </REF>: bool "Flag indicating whether chunked fetching should be used."
+        <REF> chunk_size </REF>: int "Chunk size to use when fetching chunks if chunked fetch is enabled."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> yielded_items </REF>: generator "Generator that yields items delegated from self._iterable_class."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Delegate iteration to self._iterable_class by calling it with self, chunked_fetch=use_chunked_fetch, and chunk_size=chunk_size, then yield from that iterable so all yielded items are passed through. RESULT yielded_items]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over QuerySet results by validating chunk_size, determining whether to enable chunked fetching based on the DISABLE_SERVER_SIDE_CURSORS setting, and returning the underlying iterator." iterator]
+    [INPUTS]
+        <REF> chunk_size </REF>: int "Maximum number of results to fetch per chunk; must be strictly positive, defaults to 2000."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> iterator_result </REF>: Iterator "An iterator over the results from applying this QuerySet to the database."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether chunk_size is greater than zero; if not, follow the exception flow for ValueError. RESULT is_positive_chunk_size]
+            [COMMAND Compute use_chunked_fetch as the logical negation of connections[self.db].settings_dict.get('DISABLE_SERVER_SIDE_CURSORS'). RESULT use_chunked_fetch]
+            [COMMAND Return self._iterator(use_chunked_fetch, chunk_size). RESULT iterator_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: chunk_size is less than or equal to 0]
+        [LOG "Chunk size must be strictly positive."]
+        [THROW ValueError "Raised when chunk_size is not strictly positive."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes aggregate expressions over the current queryset, assigning default aliases to positional aggregate arguments and validating all annotated expressions are aggregates before returning the aggregation result." aggregate]
+    [INPUTS]
+        <REF> self </REF>: object "The queryset-like object providing query, db, and validation helpers."
+        <REF> args </REF>: tuple "Positional aggregate expressions; each must expose a default_alias attribute or property."
+        <REF> kwargs </REF>: dict "Keyword aggregate expressions mapping alias names to aggregate expressions; mutated by adding default aliases for positional args."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Dictionary containing the aggregate calculations over the current queryset."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.query.distinct_fields is truthy; if so, follow the NotImplementedError exception flow. RESULT no_variable]
+            [COMMAND Validate that the unpacked tuple (*args, *kwargs.values()) contains only valid expressions by calling self._validate_values_are_expressions with method_name='aggregate'. RESULT no_variable]
+            [COMMAND For each arg in args, access arg.default_alias inside a try/except block that catches AttributeError and TypeError; if either error occurs, follow the TypeError exception flow. RESULT no_variable]
+            [COMMAND For each arg whose default_alias access succeeded, assign kwargs[arg.default_alias] = arg; note that this re-evaluates arg.default_alias outside the try/except block. RESULT kwargs]
+            [COMMAND Create query = self.query.chain() as a chained copy of the current query. RESULT query]
+            [COMMAND For each (alias, aggregate_expr) pair in kwargs.items(), call query.add_annotation(aggregate_expr, alias, is_summary=True). RESULT query]
+            [COMMAND Within the loop over kwargs.items(), after adding each annotation, test query.annotations[alias].contains_aggregate; if it is false, follow the TypeError exception flow. RESULT no_variable]
+            [COMMAND Return query.get_aggregation(self.db, kwargs) as the aggregation result dictionary. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.distinct_fields is truthy when aggregate() is called.]
+        [LOG "aggregate() + distinct(fields) not implemented."]
+        [THROW NotImplementedError "Raised when distinct fields are set on the query because aggregate() combined with distinct(fields) is unsupported."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Accessing arg.default_alias raises AttributeError or TypeError for any arg in args.]
+        [LOG "Complex aggregates require an alias."]
+        [THROW TypeError "Raised when a positional aggregate expression cannot provide an automatic default_alias."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: query.annotations[alias].contains_aggregate is false for an added annotation.]
+        [LOG "The annotation for the current alias is not an aggregate expression."]
+        [THROW TypeError "Raised when an expression passed as an aggregate is not recognized as an aggregate expression."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the number of records, using the cached result set length when available and otherwise delegating to the query count for the specified database." count]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: integer "The number of records counted by the query, or the length of the cached result set when it is available."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether the result cache is not None. RESULT cache_availability]
+            [COMMAND If the result cache is None, call get_count on self.query using self.db as the database alias and return the resulting count. RESULT query_count]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self._result_cache is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the length of self._result_cache as the cached count. RESULT cached_count]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a new object by instantiating self.model with kwargs, sets _for_write to True, saves the object with force_insert on the configured database, and returns it." create]
+    [INPUTS]
+        <REF> kwargs </REF>: dict "Keyword arguments used to construct the model instance."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> obj </REF>: model instance "The newly created and saved model instance."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Instantiate the model by calling self.model(**kwargs) and assign the result to obj. RESULT obj]
+            [COMMAND Set self._for_write to True. RESULT self._for_write]
+            [COMMAND Save obj to the database by calling obj.save(force_insert=True, using=self.db), preserving the saved object as obj. RESULT obj]
+            [COMMAND Return obj as the result of create. RESULT obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over each object in the objs collection and, for any object whose primary key is not yet assigned, sets it to the primary key value generated by the model field's get_pk_value_on_save logic." _populate_pk_values]
+    [INPUTS]
+        <REF> objs </REF>: iterable of Django model instances "Collection of model objects whose missing primary keys are to be populated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each object obj in the objs collection. RESULT obj]
+            [COMMAND Within the loop over obj, evaluate whether obj.pk is None. RESULT pk_is_none]
+            [COMMAND Within the loop over obj, if pk_is_none is true, assign obj.pk the value returned by obj._meta.pk.get_pk_value_on_save(obj). RESULT obj.pk]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Bulk updates the requested concrete, non-primary-key fields on a batch of model objects using per-batch CASE/WHEN expressions inside a database transaction." bulk_update]
+    [INPUTS]
+        <REF> self </REF>: object "The model manager, queryset, or model instance context providing self.model and self.db."
+        <REF> objs </REF>: iterable "Iterable of model objects whose fields should be updated in the database."
+        <REF> fields </REF>: iterable of str "Names of concrete, non-primary-key fields to update on the provided objects."
+        <REF> batch_size </REF>: int or None "Optional upper bound on the number of objects per update batch; when omitted, the database adapter supplies the maximum batch size."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: NoneType "The method returns None after completing the updates or after an early return."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that batch_size is None or a non-negative integer; if batch_size is not None and less than 0, raise the corresponding ValueError. RESULT batch_size_validated]
+            [COMMAND Validate that fields is non-empty; if no field names are given, raise the corresponding ValueError. RESULT fields_nonempty]
+            [COMMAND Convert objs to a tuple and validate that every object has a primary key; if any object.pk is None, raise the corresponding ValueError. RESULT objs_tuple]
+            [COMMAND Resolve each field name in fields to a field object by calling self.model._meta.get_field(name) for each name. RESULT fields]
+            [COMMAND Validate that every resolved field is concrete and not many-to-many; if any field fails this check, raise the corresponding ValueError. RESULT fields_concrete]
+            [COMMAND Validate that no resolved field is a primary key; if any field.primary_key is true, raise the corresponding ValueError. RESULT fields_non_pk]
+            [COMMAND Compute max_batch_size by evaluating connections[self.db].ops.bulk_batch_size(['pk', 'pk'] + fields, objs_tuple). RESULT max_batch_size]
+            [COMMAND Compute the effective batch_size: use min(batch_size, max_batch_size) if the supplied batch_size is truthy; otherwise use max_batch_size. RESULT batch_size]
+            [COMMAND Read requires_casted_case_in_updates from connections[self.db].features. RESULT requires_casting]
+            [COMMAND Create a lazy batches generator yielding each slice objs_tuple[i:i + batch_size] for i in range(0, len(objs_tuple), batch_size). RESULT batches]
+            [COMMAND Initialize an empty updates list to store (primary-key list, update kwargs) pairs. RESULT updates]
+            [COMMAND For each batch_objs in batches, initialize an empty update_kwargs dictionary. RESULT update_kwargs]
+            [COMMAND Within the loop over batch_objs, for each field in fields, initialize an empty when_statements list. RESULT when_statements]
+            [COMMAND Within the loops over batch_objs and fields, for each obj in batch_objs, get attr = getattr(obj, field.attname); if attr is not an Expression, set attr = Value(attr, output_field=field); then append When(pk=obj.pk, then=attr) to when_statements. RESULT when_statements]
+            [COMMAND Within the loop over batch_objs, for each field in fields, build case_statement = Case(*when_statements, output_field=field); if requires_casting is true, set case_statement = Cast(case_statement, output_field=field); assign case_statement to update_kwargs[field.attname]. RESULT update_kwargs]
+            [COMMAND After processing every field for the current batch, append ([obj.pk for obj in batch_objs], update_kwargs) to updates. RESULT updates]
+            [COMMAND After all batches are processed, open transaction.atomic(using=self.db, savepoint=False). RESULT transaction]
+            [COMMAND Within the transaction, for each pks and update_kwargs in updates, execute self.filter(pk__in=pks).update(**update_kwargs). RESULT None]
+            [COMMAND Exit the transaction.atomic block after all update batches have been executed. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The converted objs tuple is empty.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return from the method without performing any database updates. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: batch_size is not None and batch_size < 0]
+        [LOG "Batch size must be a positive integer."]
+        [THROW ValueError "Raised when batch_size is a negative integer."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: fields is empty or falsy]
+        [LOG "Field names must be given to bulk_update()."]
+        [THROW ValueError "Raised when no field names are provided."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: any obj.pk is None in objs]
+        [LOG "All bulk_update() objects must have a primary key set."]
+        [THROW ValueError "Raised when at least one object lacks a primary key value."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: any resolved field is not concrete or is many-to-many]
+        [LOG "bulk_update() can only be used with concrete fields."]
+        [THROW ValueError "Raised when a field is non-concrete or many-to-many."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: any resolved field has primary_key True]
+        [LOG "bulk_update() cannot be used with primary key fields."]
+        [THROW ValueError "Raised when a field is a primary key field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Looks up a model object matching the given keyword arguments, returning it with created=False, or creates a new object using defaults and keyword arguments when no existing object is found." get_or_create]
+    [INPUTS]
+        <REF> self </REF>: object "The model manager instance on which get_or_create is called."
+        <REF> defaults </REF>: dict or None "Optional dictionary of default field values to use when creating a new object."
+        <REF> kwargs </REF>: dict "Keyword arguments used as lookup criteria for the get() call and as creation attributes if no existing object is found."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (object, created), where object is the existing or newly created model instance and created is True if a new object was created, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self._for_write to True to target the write database for the subsequent get operation. RESULT self._for_write]
+            [COMMAND Look up an existing object by calling self.get(**kwargs) with the given lookup keyword arguments. RESULT existing_object]
+            [COMMAND If the lookup returns an existing object, return the tuple (existing_object, False). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.get(**kwargs) raises self.model.DoesNotExist, meaning no existing object matches the lookup criteria.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extract the creation parameters by calling self._extract_model_params(defaults, **kwargs) using the provided defaults and lookup kwargs. RESULT params]
+            [COMMAND Create the model object by calling self._create_object_from_params(kwargs, params). RESULT new_object]
+            [COMMAND Return the tuple (new_object, True) to indicate that a new object was created. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Attempts to create an object from the provided parameters inside an atomic block, returning the new object with True on success or the existing matching object with False when an integrity error occurs." _create_object_from_params]
+    [INPUTS]
+        <REF> lookup </REF>: dict "Lookup parameters used to find an existing object when creation fails with an integrity error."
+        <REF> params </REF>: dict "Parameters used to create the object; callable values are evaluated before creation."
+        <REF> lock </REF>: bool "When True, select the existing row for update in the fallback query; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "Returns (obj, True) after successful creation, or (existing_obj, False) after retrieving an existing object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Start a database atomic block using self.db. RESULT atomic_context]
+            [COMMAND Within the atomic block, normalize params by replacing each callable value with its return value and keeping non-callable values unchanged. RESULT normalized_params]
+            [COMMAND Within the atomic block, create an object by calling self.create(**normalized_params). RESULT obj]
+            [COMMAND Exit the atomic block and return the tuple (obj, True). RESULT created_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: An IntegrityError occurs while creating the object inside the atomic block.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enter the IntegrityError handler and prepare the fallback query set. RESULT ready_to_fallback]
+            [COMMAND Set qs to self.select_for_update() if lock is True; otherwise set qs to self. RESULT qs]
+            [COMMAND Retrieve the existing object using qs.get(**lookup). RESULT existing_obj]
+            [COMMAND Return the tuple (existing_obj, False). RESULT existing_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: While in the IntegrityError handler, the fallback qs.get(**lookup) raises self.model.DoesNotExist.]
+        [LOG "No existing object matches the lookup after the integrity error; the original IntegrityError is re-raised."]
+        [THROW IntegrityError "Re-raises the original database integrity error that triggered the fallback lookup."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and validates the parameter dictionary for creating a model instance by merging defaults into filtered keyword arguments and rejecting invalid fields or non-settable properties." _extract_model_params]
+    [INPUTS]
+        <REF> self </REF>: object "Receiver of the method; self.model provides the model class whose _meta is used to look up fields and property names."
+        <REF> defaults </REF>: dict "Optional dictionary of default parameter values; any falsy value is replaced with a new empty dictionary."
+        <REF> kwargs </REF>: dict "Keyword arguments used as the base parameter dictionary after filtering out keys that contain LOOKUP_SEP."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> params </REF>: dict "Validated parameter dictionary containing filtered kwargs merged with defaults, ready for creating a model instance."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize defaults: if defaults is falsy, set defaults to a new empty dictionary; otherwise keep the existing defaults object. RESULT defaults]
+            [COMMAND Build params as a new dictionary containing each key-value pair from kwargs whose key does not contain LOOKUP_SEP; skip any key that contains LOOKUP_SEP. RESULT params]
+            [COMMAND Update params in place with all key-value pairs from defaults, overwriting any existing keys in params that are also present in defaults. RESULT params]
+            [COMMAND Retrieve self.model._meta._property_names and assign it to property_names. RESULT property_names]
+            [COMMAND Initialize invalid_params as a new empty list. RESULT invalid_params]
+            [COMMAND For each param in params, attempt to retrieve the model field via self.model._meta.get_field(param); if the lookup succeeds, do nothing and continue to the next param. If exceptions.FieldDoesNotExist is raised, then: if param is not in property_names, append param to invalid_params; otherwise evaluate getattr(self.model, param).fset and append param to invalid_params only if fset is falsy. RESULT invalid_params]
+            [COMMAND After the loop, if invalid_params is truthy, trigger the FieldError exception flow; otherwise continue to the final step. RESULT FieldError]
+            [COMMAND Return the value of params. RESULT params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: invalid_params is truthy after validation, meaning at least one parameter is neither a real model field nor a model property with a setter.]
+        [LOG "Raise exceptions.FieldError with message 'Invalid field name(s) for model {self.model._meta.object_name}: {quoted_sorted_invalid_params}', where the invalid parameter names are sorted and joined with single quotes and commas."]
+        [THROW FieldError "Indicates that one or more provided parameter names are not valid model fields and are not settable model properties."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the earliest object by applying field-based or Meta.get_latest_by ordering, limiting the query to one row and fetching the resulting object." _earliest]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The QuerySet instance whose model, query, and chain method are used to construct and execute the earliest-object query."
+        <REF> fields </REF>: tuple "Positional field names used for ordering; may be empty to fall back to the model's Meta.get_latest_by."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The earliest model instance returned by the query."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If fields is truthy, set order_by to the supplied fields. RESULT order_by]
+            [COMMAND If order_by is None, trigger the ValueError exception flow. RESULT exception]
+            [COMMAND Assert that the query has not been sliced; if self.query.is_sliced is true, trigger the AssertionError exception flow. RESULT assertion]
+            [COMMAND Create a chained copy of the queryset by calling self._chain() and assign it to obj. RESULT obj]
+            [COMMAND Set the high query limit to 1 on obj.query. RESULT obj.query]
+            [COMMAND Clear existing ordering on obj.query with force_empty set to true. RESULT obj.query]
+            [COMMAND Add the order_by fields to obj.query's ordering by unpacking order_by as positional arguments. RESULT obj.query]
+            [COMMAND Return the single object obtained by calling obj.get(). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When fields is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the alternative branch taken when fields is falsy, retrieve get_latest_by from self.model._meta and assign it to order_by. RESULT order_by]
+            [COMMAND Within that same alternative branch, if order_by is truthy and is not already a tuple or list, wrap it in a one-element tuple and assign it to order_by. RESULT order_by]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: When order_by is None after determining ordering from fields or Meta.get_latest_by]
+        [LOG "earliest() and latest() require either fields as positional arguments or 'get_latest_by' in the model's Meta."]
+        [THROW ValueError "Raised when no ordering criteria could be determined from fields or the model's Meta.get_latest_by."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: When self.query.is_sliced is true]
+        [LOG "Cannot change a query once a slice has been taken."]
+        [THROW AssertionError "Raised when attempting to modify the ordering or limits of a query that has already been sliced."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the result of forwarding all supplied fields as positional arguments to the internal _earliest method." earliest]
+    [INPUTS]
+        <REF> fields </REF>: tuple "Variable-length positional arguments to be forwarded to _earliest."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "The return value of self._earliest(*fields)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack fields as positional arguments, invoke self._earliest with those arguments, and return the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reverses the current object and then selects the earliest matching entries according to the given fields, returning the result." latest]
+    [INPUTS]
+        <REF> fields </REF>: iterable "Field names or keys to pass to the earliest selection operation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The result of selecting the earliest entries from the reversed object using the provided fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Reverse the current object by calling reverse() on self and store the reversed object. RESULT reversed_obj]
+            [COMMAND Call _earliest on reversed_obj with fields unpacked as positional arguments and return the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the first object of the queryset using its current ordering when available, otherwise ordering by primary key, or None if no object exists." first]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The queryset on which first() is called; its ordered flag determines whether the existing ordering can be used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object or None "The first object from the queryset under the resolved ordering, or None when the queryset is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate self.ordered to determine whether the queryset already has an explicit ordering. RESULT ordered]
+            [COMMAND If ordered is truthy, use self as the iteration source; otherwise call self.order_by('pk') and use that resulting queryset as the iteration source. RESULT iteration_source]
+            [COMMAND Apply the slice [:1] to iteration_source, limiting the iteration source to at most one element. RESULT first_element_iterator]
+            [COMMAND Iterate over first_element_iterator, assigning each yielded item to the loop variable obj. RESULT obj]
+            [COMMAND Inside the for loop, return obj immediately, so the method exits as soon as the first object exists. RESULT result]
+            [COMMAND If the for loop body was never entered because first_element_iterator yielded no items, return None as the implicit fallback. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the last object of the queryset by reversing the current ordering when self.ordered is true, otherwise ordering by descending primary key, and returns None if no object exists." last]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object or None "The last object of the query, or None if no match is found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.ordered is truthy to choose the queryset ordering method. RESULT ordered_flag]
+            [COMMAND If self.ordered is true, create the iterable as self.reverse(); otherwise create it as self.order_by('-pk'). RESULT ordered_iterable]
+            [COMMAND Apply the slice [:1] to the chosen iterable so that it yields at most one element. RESULT limited_iterable]
+            [COMMAND For the single element yielded by limited_iterable, assign it to obj. RESULT obj]
+            [COMMAND Return obj immediately; if limited_iterable is empty, the loop body never runs and the method implicitly returns None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a dictionary mapping each requested field value to the corresponding queryset object, using the entire queryset when no ID list is supplied and batching the ID lookup when the database backend limits query parameters." in_bulk]
+    [INPUTS]
+        <REF> id_list </REF>: iterable or None "Optional iterable of field values used to filter the queryset. If None, the whole queryset is evaluated."
+        <REF> field_name </REF>: str "Name of the model field used for the lookup and as the dictionary key. Defaults to 'pk'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result_dict </REF>: dict "Dictionary mapping each object's field_name value to the corresponding model object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate the queryset state: if self.query.is_sliced is true, route to the AssertionError exception flow. RESULT queryset_not_sliced]
+            [COMMAND Validate field_name: if field_name is not 'pk' and the model field obtained by self.model._meta.get_field(field_name) is not unique, route to the ValueError exception flow. RESULT field_name_valid]
+            [COMMAND Branch on id_list: if id_list is None, follow the alternative flow that sets qs to self._chain() and returns the result dictionary. If id_list is not None and bool(id_list) is False, follow the alternative flow that returns {}. Otherwise continue with id_list processing. RESULT id_list_branch_selected]
+            [COMMAND In the id_list processing path, set filter_key = '{}__in'.format(field_name). RESULT filter_key]
+            [COMMAND Read batch_size = connections[self.db].features.max_query_params from the current database backend. RESULT batch_size]
+            [COMMAND Convert id_list to a tuple and assign it to id_tuple. RESULT id_tuple]
+            [COMMAND Set qs by querying with the IN lookup: if batch_size is truthy and batch_size < len(id_tuple), enter the batching loop by initializing qs = (); for offset in range(0, len(id_tuple), batch_size), define batch = id_tuple[offset:offset + batch_size] and execute qs += tuple(self.filter(**{filter_key: batch}).order_by()). Otherwise set qs = self.filter(**{filter_key: id_tuple}).order_by(). RESULT qs]
+            [COMMAND Return the dictionary comprehension {getattr(obj, field_name): obj for obj in qs}. RESULT result_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: id_list is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set qs = self._chain(). RESULT qs]
+            [COMMAND Return the dictionary comprehension {getattr(obj, field_name): obj for obj in qs}. RESULT result_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: id_list is not None and bool(id_list) is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty dictionary {} immediately. RESULT empty_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.query.is_sliced is true]
+        [LOG "Cannot use 'limit' or 'offset' with in_bulk"]
+        [THROW AssertionError "Raised because in_bulk cannot be used on a queryset that has already been sliced with limit or offset."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: field_name != 'pk' and self.model._meta.get_field(field_name).unique is false]
+        [LOG "in_bulk()'s field_name must be a unique field but the supplied field_name isn't."]
+        [THROW ValueError "Raised when a non-pk field_name does not refer to a unique model field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deletes the records represented by this QuerySet by preparing an internal delete query, collecting related objects, and returning the deleted-object and row count tuple after clearing the result cache." delete]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The QuerySet instance whose matching records will be deleted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (deleted, _rows_count) returned by collector.delete(); deleted is the number of deleted objects and _rows_count is the number of affected rows."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that self.query.is_sliced is false; otherwise the delete is forbidden on sliced QuerySets. RESULT none]
+            [COMMAND Proceed only when self._fields is None; otherwise delete() cannot be called after .values() or .values_list(). RESULT none]
+            [COMMAND Create the delete query by calling self._chain() and assign the result to del_query. RESULT del_query]
+            [COMMAND Mark del_query as a write query by setting del_query._for_write to True. RESULT del_query]
+            [COMMAND Disable unsupported options by setting del_query.query.select_for_update and del_query.query.select_related to False. RESULT del_query]
+            [COMMAND Clear any ordering on del_query.query with force_empty=True. RESULT del_query]
+            [COMMAND Instantiate Collector with using=del_query.db and assign it to collector. RESULT collector]
+            [COMMAND Collect deletion-related objects by calling collector.collect(del_query). RESULT collector]
+            [COMMAND Call collector.delete() and unpack the returned tuple into deleted and _rows_count. RESULT deleted, _rows_count]
+            [COMMAND Clear the result cache by setting self._result_cache to None. RESULT self]
+            [COMMAND Return the tuple (deleted, _rows_count). RESULT deleted, _rows_count]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.is_sliced is truthy]
+        [LOG "Cannot use 'limit' or 'offset' with delete."]
+        [THROW AssertionError "Raised when the QuerySet uses limit or offset and cannot be deleted."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self._fields is not None]
+        [LOG "Cannot call delete() after .values() or .values_list()"]
+        [THROW TypeError "Raised when delete() is called on a QuerySet after .values() or .values_list() has been used."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deletes the objects in the queryset using a single direct SQL delete query without sending signals or applying cascade protection." _raw_delete]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The queryset whose matching objects should be deleted."
+        <REF> using </REF>: str | None "The database alias to use for the deletion; when None, default database routing is used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: int "The number of deleted objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a DeleteQuery instance from sql.DeleteQuery, passing self.model as the model. RESULT delete_query]
+            [COMMAND Call delete_qs on delete_query with self as the queryset and using as the database alias. RESULT deleted_count]
+            [COMMAND Return deleted_count to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Updates all matching records in the current QuerySet with the given field values using a single SQL UPDATE statement, after ensuring the queryset is not sliced, and clears cached results before returning the affected row count." update]
+    [INPUTS]
+        <REF> kwargs </REF>: dict "Field names mapped to the values that should be set for all matching records."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rows </REF>: int "Number of rows updated by the SQL UPDATE statement."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that the queryset has not been sliced; if it has, abort with AssertionError and the message 'Cannot update a query once a slice has been taken.' RESULT validation_passed]
+            [COMMAND Set self._for_write to True to mark this operation as a write. RESULT self._for_write]
+            [COMMAND Build an update query by chaining self.query with sql.UpdateQuery. RESULT query]
+            [COMMAND Call query.add_update_values(kwargs) to apply the provided field values to the update query. RESULT query]
+            [COMMAND Clear query.annotations to an empty dictionary so annotations are not included in subqueries. RESULT query]
+            [COMMAND Within the transaction context managed by transaction.mark_for_rollback_on_error(using=self.db), compile and execute the update query by calling query.get_compiler(self.db).execute_sql(CURSOR), and capture the result as rows. RESULT rows]
+            [COMMAND Reset self._result_cache to None to invalidate any cached QuerySet results. RESULT self._result_cache]
+            [COMMAND Return rows as the number of affected rows. RESULT rows]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.is_sliced evaluates to true]
+        [LOG "Cannot update a query once a slice has been taken."]
+        [THROW AssertionError "Raises AssertionError because an update cannot be performed after slicing the QuerySet."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and executes an UPDATE query from field-object values after verifying the queryset is not sliced and clearing annotations/cache." _update]
+    [INPUTS]
+        <REF> values </REF>: dict "Mapping of field objects to the update values to apply."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: cursor "Database cursor returned by executing the compiled UPDATE SQL."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that self.query.is_sliced is False; if it is True, fail the assertion before any update is attempted. RESULT None]
+            [COMMAND Create an UpdateQuery by chaining the current self.query with sql.UpdateQuery. RESULT query]
+            [COMMAND Add the provided update values to query by calling query.add_update_fields(values). RESULT query]
+            [COMMAND Clear query.annotations by assigning a new empty dictionary so annotations will not appear in subqueries. RESULT query]
+            [COMMAND Reset self._result_cache to None to invalidate any cached result set. RESULT _result_cache]
+            [COMMAND Compile the query for self.db and execute the generated SQL with CURSOR, returning the resulting cursor. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.is_sliced is True]
+        [LOG "Cannot update a query once a slice has been taken."]
+        [THROW AssertionError "Raised when an attempt is made to update a sliced queryset."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether results exist by delegating to the underlying query when the result cache is not initialized, otherwise returning the boolean value of the cached result." exists]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if results exist, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self._result_cache is None using an identity check. RESULT cache_is_none]
+            [COMMAND When cache_is_none is false, convert self._result_cache to a boolean with bool(self._result_cache). RESULT cache_boolean]
+            [COMMAND Return cache_boolean to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: cache_is_none is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.query.has_results(using=self.db) and immediately return its result. RESULT query_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prefetches related objects for the stored result cache using the instance's prefetch lookups and marks the prefetch as done." _prefetch_related_objects]
+    [INPUTS]
+        <REF> self </REF>: object "The instance with _result_cache and _prefetch_related_lookups attributes used to perform the prefetch operation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Given the documented precondition that the result cache has already been filled, call the prefetch_related_objects function with self._result_cache as the first argument and the unpacked elements of self._prefetch_related_lookups as the remaining arguments. RESULT prefetch_related_objects_completed]
+            [COMMAND After the prefetch call returns, set the instance attribute self._prefetch_done to True to mark that the prefetch step has been completed. RESULT self._prefetch_done]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the explain request to the underlying query, supplying the database, optional format, and any additional keyword options, and returns the query result unchanged." explain]
+    [INPUTS]
+        <REF> format </REF>: object "Optional format value to pass to the EXPLAIN operation."
+        <REF> options </REF>: dict "Additional keyword arguments to forward to query.explain."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The value returned by self.query.explain."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.query.explain with the keyword arguments using=self.db, format=format, and the unpacked options dictionary, and return the result unchanged. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a RawQuerySet for the given raw SQL query, defaulting the database alias to self.db, and copies self's prefetch related lookups onto the new queryset." raw]
+    [INPUTS]
+        <REF> raw_query </REF>: str "Raw SQL query string to execute."
+        <REF> params </REF>: list/tuple/dict or None "Parameters to be used with the raw query."
+        <REF> translations </REF>: dict or None "Mapping of query field names to model field names."
+        <REF> using </REF>: str or None "Database alias; when None, self.db is used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> qs </REF>: RawQuerySet "Configured RawQuerySet instance with prefetch related lookups copied from self."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Instantiate RawQuerySet with raw_query, model=self.model, params=params, translations=translations, and using=using. RESULT qs]
+            [COMMAND Shallow-copy self._prefetch_related_lookups by slicing it and assign the new list to qs._prefetch_related_lookups. RESULT qs._prefetch_related_lookups]
+            [COMMAND Return qs. RESULT qs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: using is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set using to self.db. RESULT using]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a clone of the current queryset, optionally applies keyword annotation expressions to it, sets the selected fields on the clone, and returns the clone." _values]
+    [INPUTS]
+        <REF> fields </REF>: tuple "Positional field names to use for the values selection."
+        <REF> expressions </REF>: dict "Keyword expression names and values to apply as annotations before selecting fields; if empty, no annotation is applied."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: QuerySet "The cloned queryset with optional annotations, _fields set to fields, and query values set to fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign to clone the result of calling self._chain(). RESULT clone]
+            [COMMAND If expressions is non-empty, assign to clone the result of calling clone.annotate with the keyword expressions. RESULT clone]
+            [COMMAND Assign fields to clone._fields. RESULT clone._fields]
+            [COMMAND Call clone.query.set_values(fields) to set the selected fields on the clone's underlying query. RESULT clone.query]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a new values object by calling self._values with all positional fields plus the keys of the keyword expressions, then sets the returned object's _iterable_class to ValuesIterable and returns it." values]
+    [INPUTS]
+        <REF> fields </REF>: tuple "Positional arguments collected by *fields; the keys of expressions are concatenated with this tuple before forwarding to _values."
+        <REF> expressions </REF>: dict "Keyword arguments collected by **expressions; its keys are concatenated to fields and its items are passed as keyword arguments to _values."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: object "The object returned by self._values with its _iterable_class attribute set to ValuesIterable. Assumes self._values returns a non-None object; otherwise assigning _iterable_class raises AttributeError."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Rebind fields to the concatenation of the current fields tuple and the tuple of keys of expressions, preserving expression key order. RESULT fields]
+            [COMMAND Call self._values, expanding the combined fields tuple as positional arguments and expressions as keyword arguments (both may be empty), and assign the returned object to clone. RESULT clone]
+            [COMMAND Set the _iterable_class attribute of clone to ValuesIterable, which requires clone to be non-None; otherwise the assignment raises AttributeError. RESULT clone._iterable_class]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a values-list clone by replacing expression-capable fields with generated unique aliases, then returns the clone configured with the iterable class selected from the named/flat flags." values_list]
+    [INPUTS]
+        <REF> self </REF>: object "The instance providing the _values method, typically a queryset or manager."
+        <REF> fields </REF>: tuple "Variable-length positional field names or expression objects to include in the values list."
+        <REF> flat </REF>: bool "When true, the returned values list is flattened; cannot be combined with named or more than one field."
+        <REF> named </REF>: bool "When true, the returned values list entries are named; cannot be combined with flat."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: object "A clone of the current values query with _iterable_class set to NamedValuesListIterable, FlatValuesListIterable, or ValuesListIterable based on the named and flat flags."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether `flat` and `named` are both truthy; if so, branch to the corresponding exception flow raised with message "'flat' and 'named' can't be used together." RESULT flat_named_validation]
+            [COMMAND Check whether `flat` is truthy and `len(fields)` is greater than 1; if so, branch to the corresponding exception flow raised with message "'flat' is not valid when values_list is called with more than one field." RESULT flat_field_count_validation]
+            [COMMAND Build `field_names` as the set of all elements from `fields` that do not have a `resolve_expression` attribute. RESULT field_names]
+            [COMMAND Initialize `_fields` to an empty list, `expressions` to an empty dictionary, and `counter` to 1. RESULT _fields_expressions_counter]
+            [COMMAND Within the loop over each `field` in `fields`: if the field has a `resolve_expression` attribute, generate a unique field ID by setting `field_id_prefix` to `getattr(field, 'default_alias', field.__class__.__name__.lower())` and entering a `while True` loop that sets `field_id` to `field_id_prefix + str(counter)`, increments `counter`, and breaks when `field_id` is not in `field_names`; then set `expressions[field_id] = field` and append `field_id` to `_fields`. If the field does not have `resolve_expression`, append the original field object to `_fields`. RESULT processed_fields]
+            [COMMAND Call `self._values(*_fields, **expressions)` and assign the returned object to `clone`. RESULT clone]
+            [COMMAND Set `clone._iterable_class` to `NamedValuesListIterable` if `named` is truthy, otherwise to `FlatValuesListIterable` if `flat` is truthy, otherwise to `ValuesListIterable`. RESULT configured_clone]
+            [COMMAND Return `clone`. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When `flat` and `named` are both truthy.]
+        [LOG "TypeError: 'flat' and 'named' can't be used together."]
+        [THROW TypeError "Raised when flat mode and named mode are requested together."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: When `flat` is truthy and more than one field is supplied.]
+        [LOG "TypeError: 'flat' is not valid when values_list is called with more than one field."]
+        [THROW TypeError "Raised when flat mode is used with more than one field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a flat, distinct, non-null list of date values for a given field, truncated to year, month, week, or day resolution and sorted ascending or descending." dates]
+    [INPUTS]
+        <REF> field_name </REF>: str "Name of the source field whose date values are truncated."
+        <REF> kind </REF>: str "Truncation resolution; must be one of 'year', 'month', 'week', or 'day'."
+        <REF> order </REF>: str "Sort direction; must be 'ASC' or 'DESC'. Defaults to 'ASC'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list of date objects "Flat, distinct, non-null datefield values sorted according to the requested order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Annotate self with datefield=Trunc(field_name, kind, output_field=DateField()) and plain_field=F(field_name). RESULT annotated_qs]
+            [COMMAND Call values_list('datefield', flat=True) on annotated_qs to project only the truncated date field as a flat list. RESULT date_values_qs]
+            [COMMAND Apply distinct() to date_values_qs to remove duplicate date values. RESULT distinct_dates_qs]
+            [COMMAND Apply filter(plain_field__isnull=False) to distinct_dates_qs to keep only rows where the original source field is not null. RESULT non_null_dates_qs]
+            [COMMAND Order non_null_dates_qs by 'datefield' in ascending order. RESULT sorted_dates_qs]
+            [COMMAND Return sorted_dates_qs as the final result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: order == 'DESC']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Order non_null_dates_qs by '-datefield' in descending order. RESULT sorted_dates_qs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: kind not in ('year', 'month', 'week', 'day')]
+        [LOG "AssertionError: 'kind' must be one of 'year', 'month', 'week', or 'day'."]
+        [THROW AssertionError "Raised when kind is not a valid truncation resolution."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: order not in ('ASC', 'DESC')]
+        [LOG "AssertionError: 'order' must be either 'ASC' or 'DESC'."]
+        [THROW AssertionError "Raised when order is not a valid sort direction."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the distinct non-null truncated datetime values for a given field grouped by the specified date part, with timezone support and ascending or descending order." datetimes]
+    [INPUTS]
+        <REF> field_name </REF>: str "The name of the date/datetime field to truncate."
+        <REF> kind </REF>: str "One of 'year', 'month', 'week', 'day', 'hour', 'minute', or 'second', indicating the truncation level."
+        <REF> order </REF>: str "Either 'ASC' or 'DESC'; determines whether the returned datetimes are sorted ascending or descending. Defaults to 'ASC'."
+        <REF> tzinfo </REF>: datetime.tzinfo or None "Optional timezone object for the truncated datetime field. If None and settings.USE_TZ is enabled, the current timezone is used; if timezone support is disabled, it is set to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet of datetime.datetime "Distinct, non-null truncated datetime values from the field, ordered as requested."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that kind is one of 'year', 'month', 'week', 'day', 'hour', 'minute', or 'second'; if not, raise AssertionError. RESULT kind_checked]
+            [COMMAND Validate that order is either 'ASC' or 'DESC'; if not, raise AssertionError. RESULT order_checked]
+            [COMMAND Determine the effective timezone: if settings.USE_TZ is true and tzinfo is None, set tzinfo to timezone.get_current_timezone(); if settings.USE_TZ is false, set tzinfo to None; otherwise keep the provided tzinfo. RESULT effective_tzinfo]
+            [COMMAND Annotate self with datetimefield equal to Trunc(field_name, kind, output_field=DateTimeField(), tzinfo=effective_tzinfo) and plain_field equal to F(field_name). RESULT annotated_qs]
+            [COMMAND Select values_list('datetimefield', flat=True) from annotated_qs. RESULT values_qs]
+            [COMMAND Apply distinct() to values_qs. RESULT distinct_qs]
+            [COMMAND Filter distinct_qs to keep only rows where plain_field__isnull=False. RESULT filtered_qs]
+            [COMMAND Build the order expression: use '-datetimefield' if order is 'DESC', otherwise use 'datetimefield'. RESULT order_expression]
+            [COMMAND Order filtered_qs by order_expression and return the resulting queryset. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: kind is not one of 'year', 'month', 'week', 'day', 'hour', 'minute', or 'second'.]
+        [LOG "'kind' must be one of 'year', 'month', 'week', 'day', 'hour', 'minute', or 'second'."]
+        [THROW AssertionError "Raised when the kind parameter is not one of the allowed date-part truncation levels."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: order is not 'ASC' or 'DESC'.]
+        [LOG "'order' must be either 'ASC' or 'DESC'."]
+        [THROW AssertionError "Raised when the order parameter is not 'ASC' or 'DESC'."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty QuerySet by cloning the current queryset and clearing the clone's query." none]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: QuerySet "A clone of the current queryset with its query set to empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._chain() to clone the current queryset and assign the result to clone. RESULT clone]
+            [COMMAND Invoke clone.query.set_empty() to clear the query on the cloned queryset. RESULT clone.query]
+            [COMMAND Return the cloned queryset whose query is now empty. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new QuerySet instance that is a copy of the current one by delegating to the internal _chain() method." all]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The current QuerySet instance to copy."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "A new QuerySet instance created by calling _chain() on the current QuerySet."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of invoking the _chain() method on the current QuerySet instance to create and return a copy. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Applies the given query arguments to the QuerySet by first rejecting combined queries and then delegating to the internal _filter_or_exclude helper with an include flag." filter]
+    [INPUTS]
+        <REF> args </REF>: tuple "Positional query arguments to be ANDed to the existing QuerySet filter."
+        <REF> kwargs </REF>: dict "Keyword query arguments to be ANDed to the existing QuerySet filter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "A new QuerySet instance containing the filtered results."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._not_support_combined_queries('filter') to ensure combined queries are not used. RESULT guard_result]
+            [COMMAND Return self._filter_or_exclude(False, *args, **kwargs), forwarding the original args and kwargs, with False indicating the filter path. RESULT filtered_queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new QuerySet that selects objects not matching the supplied filter conditions by delegating to _filter_or_exclude with the negate flag True and forwarding args and kwargs." exclude]
+    [INPUTS]
+        <REF> args </REF>: tuple "Positional arguments representing the filter conditions to exclude."
+        <REF> kwargs </REF>: dict "Keyword arguments representing the filter conditions to exclude."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "A new QuerySet instance with NOT (args) ANDed to the existing set."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the guard method _not_support_combined_queries with the operation name 'exclude' to reject combined queries. RESULT guard_result]
+            [COMMAND Call _filter_or_exclude with the constant True as the first positional argument, followed by *args and **kwargs, to compute the excluded query set. RESULT filtered_queryset]
+            [COMMAND Return the queryset produced by _filter_or_exclude. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query is a combined query when _not_support_combined_queries('exclude') runs]
+        [LOG "NotSupportedError: Calling QuerySet.exclude() after a combined query is not supported."]
+        [THROW NotSupportedError "Raised when exclude() is attempted on a QuerySet whose query has been combined with another query."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clones the query and adds either a negated or normal Q object built from the supplied args and kwargs to the clone's query, while guarding against filtering a query that has already been sliced." _filter_or_exclude]
+    [INPUTS]
+        <REF> self </REF>: object "The query object on which the method is called; provides _chain(), query, and query.is_sliced."
+        <REF> negate </REF>: bool "Determines whether the Q object is negated before being added to the clone's query."
+        <REF> args </REF>: tuple "Positional arguments forwarded to Q() to build the filter condition."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to Q() to build the filter condition."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: object "A cloned query object with the filter or exclude Q object added to its query."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Using short-circuit evaluation, if args or kwargs is truthy, assert that self.query.is_sliced is False; if self.query.is_sliced is True, raise AssertionError with message 'Cannot filter a query once a slice has been taken.' RESULT guard_passed]
+            [COMMAND Call self._chain() to create a clone of the query and assign it to clone. RESULT clone]
+            [COMMAND If negate is truthy, add a negated Q object to clone.query by calling clone.query.add_q(~Q(*args, **kwargs)); otherwise add a normal Q object by calling clone.query.add_q(Q(*args, **kwargs)). RESULT clone]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: args or kwargs is truthy and self.query.is_sliced is True]
+        [LOG "Cannot filter a query once a slice has been taken."]
+        [THROW AssertionError "Raised when a filter or exclude operation is attempted after a slice has been taken on the query."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new QuerySet with filter_obj applied either by appending a Q object to a cloned query or by passing keyword lookup arguments to _filter_or_exclude." complex_filter]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The current QuerySet instance whose query chain is used as the base."
+        <REF> filter_obj </REF>: Q or dict "A Q object to add directly to the query, or a dictionary of keyword lookup arguments to pass as filters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> new_queryset </REF>: QuerySet "A new QuerySet instance with the specified filters applied; the query is not evaluated."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether filter_obj is an instance of Q or a subclass of Q. RESULT is_q_object]
+            [COMMAND If is_q_object is true, create a clone of the current queryset by calling self._chain(). RESULT clone]
+            [COMMAND Add filter_obj to the clone's query by calling clone.query.add_q(filter_obj). RESULT clone_with_q]
+            [COMMAND Return clone_with_q as the new QuerySet. RESULT new_queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If filter_obj is not an instance of Q or a subclass of Q, it is expected to be a dictionary of keyword lookup arguments.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._filter_or_exclude(None, **filter_obj) to construct the filtered QuerySet. RESULT filtered_queryset]
+            [COMMAND Return filtered_queryset as the new QuerySet. RESULT new_queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a clone of the current query, clears its ordering and limits, combines the current query with additional queries using the specified combinator and all flag, and returns the clone." _combinator_query]
+    [INPUTS]
+        <REF> combinator </REF>: string or constant "The combinator value to assign to clone.query.combinator, indicating how the queries should be combined."
+        <REF> other_qs </REF>: tuple of query objects "Additional query objects whose query attributes are appended after self.query in the combined_queries tuple."
+        <REF> all </REF>: bool "Flag assigned to clone.query.combinator_all; controls whether the combinator applies to all items. Defaults to false."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: same type as self "A cloned query object with combined_queries, combinator, and combinator_all set, and with ordering and limits cleared."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._chain() to create a clone that inherits the current select list and other state, and assign the returned object to clone. RESULT clone]
+            [COMMAND Call clone.query.clear_ordering(True) to clear ordering, passing True as the force_empty boundary so ordering is reset even if a default ordering exists. RESULT clone.query]
+            [COMMAND Call clone.query.clear_limits() to clear any limit and offset boundaries on the cloned query. RESULT clone.query]
+            [COMMAND Build combined_queries as (self.query,) + tuple(qs.query for qs in other_qs), so the first element is exactly self.query without flattening even if it is a sequence, and each following element is the query attribute of the corresponding item in other_qs in iteration order; if other_qs is empty the tuple contains only self.query, and if self.query is None the first element is None. Assign this tuple to clone.query.combined_queries. RESULT clone.query.combined_queries]
+            [COMMAND Assign the combinator argument to clone.query.combinator. RESULT clone.query.combinator]
+            [COMMAND Assign the all argument to clone.query.combinator_all. RESULT clone.query.combinator_all]
+            [COMMAND Return clone as the result of the method. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines self with one or more other querysets using a UNION query, while excluding EmptyQuerySet operands when self is itself an EmptyQuerySet." union]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The base queryset on which union is invoked; may be an EmptyQuerySet."
+        <REF> other_qs </REF>: tuple of QuerySet "Additional querysets to include in the union operation."
+        <REF> all </REF>: bool "When True, uses UNION ALL instead of UNION."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "The resulting queryset from the union operation, or self when no non-empty querysets remain."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self is an instance of EmptyQuerySet. RESULT self_is_empty]
+            [COMMAND When self_is_empty is false, call self._combinator_query('union', *other_qs, all=all) and return the resulting queryset. RESULT union_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self_is_empty is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build qs by iterating over other_qs and keeping only those querysets that are not instances of EmptyQuerySet. RESULT qs]
+            [COMMAND When qs is non-empty, call qs[0]._combinator_query('union', *qs[1:], all=all) and return the resulting queryset. RESULT filtered_union_result]
+            [COMMAND When qs is empty, return self as the result. RESULT empty_self_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the first empty queryset encountered, either self or any queryset in other_qs, otherwise returns the result of combining all querysets through the internal intersection combinator." intersection]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The queryset on which intersection is called."
+        <REF> other_qs </REF>: Tuple[QuerySet, ...] "The other querysets to intersect with the receiver."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "An empty queryset if self or any other queryset is empty; otherwise the result of _combinator_query('intersection', *other_qs)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over other_qs in order, checking each element to determine whether it is an EmptyQuerySet; continue when it is not. RESULT loop_completed]
+            [COMMAND After the loop over other_qs completes without finding an EmptyQuerySet, call self._combinator_query('intersection', *other_qs) and return its result. RESULT intersection_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self is an instance of EmptyQuerySet.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self immediately. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: During iteration over other_qs, the current other is an instance of EmptyQuerySet.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the current other EmptyQuerySet immediately. RESULT other]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns self unchanged when self is an EmptyQuerySet; otherwise delegates to _combinator_query with 'difference' and the additional querysets other_qs." difference]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The current queryset instance on which difference is called; may be an EmptyQuerySet."
+        <REF> other_qs </REF>: tuple of QuerySet "Additional querysets whose rows are excluded from the result."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "The result of the difference operation, or self unchanged if self is an EmptyQuerySet."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self is an instance of EmptyQuerySet. RESULT is_empty_query_set]
+            [COMMAND If is_empty_query_set is false, call self._combinator_query('difference', *other_qs) by binding the method and unpacking other_qs as additional positional arguments. RESULT combined_query_set]
+            [COMMAND Return combined_query_set as the result of the difference method. RESULT output_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_empty_query_set is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self unchanged as an early exit. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new QuerySet instance configured to select objects with a FOR UPDATE lock, applying NOWAIT, SKIP LOCKED, and OF settings while rejecting the invalid combination of NOWAIT and SKIP LOCKED." select_for_update]
+    [INPUTS]
+        <REF> nowait </REF>: boolean "Whether to set the NOWAIT option on the FOR UPDATE lock; defaults to False."
+        <REF> skip_locked </REF>: boolean "Whether to set the SKIP LOCKED option on the FOR UPDATE lock; defaults to False."
+        <REF> of </REF>: tuple "Tables or columns to include in the FOR UPDATE OF clause; defaults to an empty tuple."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> obj </REF>: QuerySet "A new QuerySet instance with _for_write enabled and SELECT FOR UPDATE configuration applied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether nowait and skip_locked are both true; if they are, the operation raises ValueError and stops. RESULT none]
+            [COMMAND Create a new QuerySet instance by calling self._chain() and store it as obj. RESULT obj]
+            [COMMAND Set obj._for_write to True. RESULT obj]
+            [COMMAND Set obj.query.select_for_update to True. RESULT obj]
+            [COMMAND Set obj.query.select_for_update_nowait to the value of nowait. RESULT obj]
+            [COMMAND Set obj.query.select_for_update_skip_locked to the value of skip_locked. RESULT obj]
+            [COMMAND Set obj.query.select_for_update_of to the value of of. RESULT obj]
+            [COMMAND Return obj as the newly configured QuerySet instance. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: nowait is True and skip_locked is True]
+        [LOG "The nowait option cannot be used with skip_locked."]
+        [THROW ValueError "Raised because nowait and skip_locked are mutually exclusive options."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new QuerySet with related objects selected according to the supplied fields, clearing the selection for select_related(None), adding listed relations for non-empty fields, and enabling full select_related when called with no fields, while rejecting calls made after values() or values_list()." select_related]
+    [INPUTS]
+        <REF> fields </REF>: tuple "Positional relationship field names to follow, the sentinel (None,) to clear select_related, or an empty tuple when called with no arguments."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "A new QuerySet instance with the select_related configuration applied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._not_support_combined_queries('select_related') to reject combined queries. RESULT guard_result]
+            [COMMAND Check whether self._fields is not None; if it is not None, follow the TypeError exception flow; otherwise continue. RESULT values_state]
+            [COMMAND Create a new QuerySet instance by calling self._chain() and assign it to obj. RESULT obj]
+            [COMMAND Select the appropriate select_related configuration branch based on the value of fields. RESULT branch_selection]
+            [COMMAND Return obj as the resulting QuerySet. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: fields is exactly (None,)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set obj.query.select_related to False. RESULT obj.query.select_related]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: fields is non-empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call obj.query.add_select_related(fields) to add the specified related objects to the selection. RESULT obj.query.select_related]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: fields is empty (called with no arguments)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set obj.query.select_related to True. RESULT obj.query.select_related]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self._fields is not None]
+        [LOG "TypeError: Cannot call select_related() after .values() or .values_list()"]
+        [THROW TypeError "Raised when select_related() is called after .values() or .values_list(), because the fields selection is already fixed."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a cloned QuerySet with its prefetch lookup list either cleared when called with the sentinel (None,) or extended with the provided lookups after validating that no lookup conflicts with a FilteredRelation." prefetch_related]
+    [INPUTS]
+        <REF> lookups </REF>: tuple "Variable-length prefetch lookup names or Prefetch objects; passing exactly (None,) clears all prefetches."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: QuerySet "A new QuerySet instance whose _prefetch_related_lookups has been cleared, left unchanged, or extended with the original lookups."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._not_support_combined_queries('prefetch_related') to enforce that combined queries are not allowed. RESULT guard_result]
+            [COMMAND Create clone by calling self._chain() and assigning the result to clone. RESULT clone]
+            [COMMAND Determine whether lookups equals the single-element tuple (None,). RESULT is_clear_lookups]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: lookups == (None,)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set clone._prefetch_related_lookups to the empty tuple () to clear all prefetch lookups. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lookups != (None,)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the else branch, for each lookup in lookups, if lookup is an instance of Prefetch, replace lookup with lookup.prefetch_to, then replace lookup with lookup.split(LOOKUP_SEP, 1)[0] to obtain the root lookup segment. RESULT root_lookup]
+            [COMMAND Within the same iteration, check whether root_lookup is in self.query._filtered_relations; if it is, raise ValueError as described in exception_flows. RESULT validation_passed]
+            [COMMAND After the validation loop completes, set clone._prefetch_related_lookups = clone._prefetch_related_lookups + lookups, appending the original lookups collection rather than the normalized root segments. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: During validation of a lookup in the else branch, the root lookup segment is present in self.query._filtered_relations.]
+        [LOG "prefetch_related() is not supported with FilteredRelation."]
+        [THROW ValueError "Raised because prefetch_related cannot be used with a lookup root that belongs to a FilteredRelation."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Annotate a cloned queryset with extra data or aggregations, validating that annotation values are expressions and that aliases do not conflict with model fields or keyword names." annotate]
+    [INPUTS]
+        <REF> self </REF>: object "The queryset instance on which annotate is called."
+        <REF> args </REF>: tuple "Positional annotation expressions; each must provide a default_alias."
+        <REF> kwargs </REF>: dict "Keyword annotations mapping alias names to expression values."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: QuerySet "A cloned queryset with the requested annotations applied and group_by configured if aggregate annotations are present."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._not_support_combined_queries('annotate') to reject combined queries. RESULT validation_complete]
+            [COMMAND Call self._validate_values_are_expressions(args + tuple(kwargs.values()), method_name='annotate') to validate that all positional and keyword annotation values are expressions. RESULT expressions_validated]
+            [COMMAND Initialize annotations as an empty dictionary. RESULT annotations]
+            [COMMAND Within the for loop over args and the try/except block, for each arg, read arg.default_alias; if arg.default_alias is a key in kwargs, raise ValueError; otherwise, after the try/except block, assign annotations[arg.default_alias] = arg. RESULT annotations]
+            [COMMAND Call annotations.update(kwargs) to merge keyword annotations into the annotations dictionary. RESULT annotations]
+            [COMMAND Call self._chain() to clone the queryset and assign the result to clone. RESULT clone]
+            [COMMAND Read self._fields and assign it to names. RESULT names]
+            [COMMAND If names is None, build a set of field names (and attnames when present) from self.model._meta.get_fields() using chain.from_iterable and assign it to names. RESULT names]
+            [COMMAND Within the for loop over annotations.items(), for each alias, annotation, if alias is in names raise ValueError; if annotation is a FilteredRelation call clone.query.add_filtered_relation(annotation, alias); otherwise call clone.query.add_annotation(annotation, alias, is_summary=False). RESULT clone.query]
+            [COMMAND Within the for loop over clone.query.annotations.items(), for each alias, annotation, if alias is in annotations and annotation.contains_aggregate, then if clone._fields is None set clone.query.group_by = True; otherwise call clone.query.set_group_by(); break after the first matching annotation. RESULT clone.query]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During iteration over args, evaluating arg.default_alias inside the try block raises TypeError.]
+        [LOG "Complex annotations require an alias"]
+        [THROW TypeError "Indicates that a complex annotation was supplied without an explicit alias."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During iteration over args, arg.default_alias is evaluated successfully and is found as a key in kwargs.]
+        [LOG "The named annotation conflicts with the default name for another annotation."]
+        [THROW ValueError "Indicates that the default alias for a positional annotation conflicts with a keyword annotation name."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During iteration over annotations.items(), alias is present in names.]
+        [LOG "The annotation conflicts with a field on the model."]
+        [THROW ValueError "Indicates that an annotation alias collides with an existing model field name."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a new QuerySet whose ordering is replaced by the provided field names, with a guard against reordering a sliced query." order_by]
+    [INPUTS]
+        <REF> field_names </REF>: tuple "Variable-length field names used to set the ordering on the returned QuerySet."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> obj </REF>: QuerySet "A new QuerySet instance with the ordering changed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that self.query.is_sliced is false; if it is true, stop and raise an AssertionError with message 'Cannot reorder a query once a slice has been taken.' RESULT none]
+            [COMMAND Create a new QuerySet instance by calling self._chain() and assign it to obj. RESULT obj]
+            [COMMAND Clear the existing ordering on obj.query by calling obj.query.clear_ordering(force_empty=False). RESULT obj]
+            [COMMAND Apply the new ordering to obj.query by calling obj.query.add_ordering(*field_names). RESULT obj]
+            [COMMAND Return obj as the new QuerySet with the ordering changed. RESULT obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.is_sliced evaluates to true, meaning a slice has already been taken on the query.]
+        [LOG "Cannot reorder a query once a slice has been taken."]
+        [THROW AssertionError "Raised to prevent changing the ordering of a query after a slice has been applied."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new QuerySet that selects only distinct results by applying the given field names to a chained copy of the current query." distinct]
+    [INPUTS]
+        <REF> self </REF>: object "The current QuerySet instance on which distinct is called."
+        <REF> field_names </REF>: tuple "Variadic field name arguments that determine the distinct selection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "A new QuerySet instance configured to return only distinct results."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that self.query has not been sliced; if it has been sliced, raise AssertionError with the message 'Cannot create distinct fields once a slice has been taken.' RESULT validation_passed]
+            [COMMAND Create a chained copy of the current queryset by calling self._chain() and assign it to obj. RESULT obj]
+            [COMMAND Call obj.query.add_distinct_fields(*field_names) to add the given field names as distinct fields to the new queryset. RESULT query_updated]
+            [COMMAND Return obj as the new distinct queryset. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.is_sliced evaluates to true]
+        [LOG "AssertionError: Cannot create distinct fields once a slice has been taken."]
+        [THROW AssertionError "Raised when distinct is called on a queryset that has already been sliced."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clones the current query, validates that it is not a combined or sliced query, adds the supplied extra select, where, params, tables, and order_by fragments to the clone, and returns the clone." extra]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The current QuerySet instance on which extra is called; provides access to query state and _chain()."
+        <REF> select </REF>: dict or None "Optional mapping of select aliases to SQL fragments to add to the SELECT clause; defaults to None."
+        <REF> where </REF>: list/tuple or None "Optional SQL WHERE fragment strings to add, with placeholders supplied by params; defaults to None."
+        <REF> params </REF>: list/tuple or None "Optional parameter values for the added WHERE fragments; defaults to None."
+        <REF> tables </REF>: list/tuple or None "Optional table names or SQL fragments to add to the FROM clause; defaults to None."
+        <REF> order_by </REF>: list/tuple or None "Optional SQL ordering fragments to add to the ORDER BY clause; defaults to None."
+        <REF> select_params </REF>: list/tuple or None "Optional parameter values for the added SELECT fragments; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "A clone of the current QuerySet with the extra SQL fragments applied to clone.query."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._not_support_combined_queries('extra') to reject this operation when the current query is a combined query. RESULT None]
+            [COMMAND Assert that self.query.is_sliced is False; if the assertion fails, the message is 'Cannot change a query once a slice has been taken'. RESULT None]
+            [COMMAND Create a clone of the current query by calling self._chain() and assign the returned object to clone. RESULT clone]
+            [COMMAND Call clone.query.add_extra(select, select_params, where, params, tables, order_by) to add the extra SQL fragments to the cloned query in place. RESULT None]
+            [COMMAND Return clone as the resulting query object. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.combinator is set (the current query is a combined query)]
+        [LOG "Calling extra() after a combined query is not supported."]
+        [THROW NotSupportedError "Raised by _not_support_combined_queries to prevent extra() on combined queries."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.query.is_sliced is True]
+        [LOG "Cannot change a query once a slice has been taken"]
+        [THROW AssertionError "Raised by the explicit assertion when a slice has already been applied to the query."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reverses the ordering of a QuerySet by cloning it and toggling its standard_ordering flag, while raising TypeError if the query has already been sliced." reverse]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The QuerySet instance on which reverse() is called."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: QuerySet "A new QuerySet with the reversed ordering."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.query.is_sliced is true. RESULT is_sliced]
+            [COMMAND Clone the QuerySet by calling self._chain(). RESULT clone]
+            [COMMAND Toggle clone.query.standard_ordering to the logical negation of its current value. RESULT clone.query.standard_ordering]
+            [COMMAND Return the cloned QuerySet. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.is_sliced is true]
+        [LOG "Cannot reverse a query once a slice has been taken."]
+        [THROW TypeError "Raised to indicate that reverse() cannot be applied after a slice has been taken."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defers loading of the specified fields until accessed on a cloned queryset, clearing all deferrals when the only argument is None and rejecting calls when .values() or .values_list() has already been applied." defer]
+    [INPUTS]
+        <REF> self </REF>: object "The current queryset instance on which defer is called."
+        <REF> fields </REF>: tuple "A tuple of field names to defer, populated from positional arguments; if it is exactly (None,), all existing deferred loading is cleared."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: object "A cloned queryset with deferred loading configuration updated by clearing all deferrals or adding the requested fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ensure the queryset can support combined queries by calling self._not_support_combined_queries('defer'). RESULT _]
+            [COMMAND If self._fields is not None, trigger the TypeError exception flow; otherwise continue. RESULT _]
+            [COMMAND Create a clone of the current queryset by calling self._chain(). RESULT clone]
+            [COMMAND If fields equals exactly (None,), call clone.query.clear_deferred_loading(); otherwise, call clone.query.add_deferred_loading(fields). RESULT clone]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self._fields is not None]
+        [LOG "TypeError: Cannot call defer() after .values() or .values_list()"]
+        [THROW TypeError "Raised when defer() is called after .values() or .values_list() has been applied to the queryset."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a clone of the current queryset configured to load only the specified fields immediately, after validating that combined queries, values()/values_list(), None arguments, and FilteredRelation fields are not used." only]
+    [INPUTS]
+        <REF> fields </REF>: tuple "The original variadic positional field names passed to only(); each may be a field path containing LOOKUP_SEP separators."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: QuerySet "A clone of the current queryset with immediate loading of the specified fields configured on clone.query."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._not_support_combined_queries('only') to reject combined queries if the queryset does not support them. RESULT _not_support_combined_queries_called]
+            [COMMAND Confirm that self._fields is None before continuing; the values()/values_list() state is not active. RESULT _self_fields_checked]
+            [COMMAND Confirm that fields is not the single-element tuple (None,) before continuing. RESULT _fields_argument_checked]
+            [COMMAND For each field in fields, split field using field.split(LOOKUP_SEP, 1)[0], take the first part as the base field name, and verify that the base field name is not in self.query._filtered_relations; the loop completes only if every check passes. RESULT _filtered_relations_checked]
+            [COMMAND Create a clone of the queryset by calling self._chain(). RESULT clone]
+            [COMMAND Configure immediate loading by calling clone.query.add_immediate_loading(fields) with the original fields tuple. RESULT _immediate_loading_configured]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self._fields is not None]
+        [LOG "Cannot call only() after .values() or .values_list()"]
+        [THROW TypeError "Raised because only() was called after values() or values_list() has set self._fields."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: fields equals the one-element tuple (None,), meaning exactly None was passed as the only positional argument]
+        [LOG "Cannot pass None as an argument to only()."]
+        [THROW TypeError "Raised because only() does not accept None as an argument, unlike defer()."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the loop over each field in fields, after evaluating field.split(LOOKUP_SEP, 1)[0], the result is in self.query._filtered_relations]
+        [LOG "only() is not supported with FilteredRelation."]
+        [THROW ValueError "Raised because only() cannot be used with a field that is a FilteredRelation."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Selects which database this QuerySet should execute against by creating a clone and setting its _db attribute to the given alias." using]
+    [INPUTS]
+        <REF> alias </REF>: str "The database alias to use for the cloned QuerySet."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: QuerySet "A cloned QuerySet configured to use the specified database alias."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clone the current QuerySet by calling self._chain() and assign the result to clone. RESULT clone]
+            [COMMAND Set the _db attribute of clone to the value of alias. RESULT clone._db]
+            [COMMAND Return clone as the result of the using method. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the query set is empty, has extra or explicit ordering, or has default model ordering enabled with a defined ordering; otherwise returns False." ordered]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the query set is ordered, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self is an instance of EmptyQuerySet. RESULT is_empty_query_set]
+            [COMMAND If is_empty_query_set is true, return True immediately. RESULT empty_query_set_true]
+            [COMMAND Evaluate the short-circuit OR condition self.query.extra_order_by or self.query.order_by. RESULT has_extra_or_explicit_ordering]
+            [COMMAND If has_extra_or_explicit_ordering is true, return True immediately. RESULT explicit_ordering_true]
+            [COMMAND Evaluate the default-ordering condition: if self.query.default_ordering is truthy, call self.query.get_meta().ordering and check whether it is truthy; otherwise the condition is false without calling get_meta(). RESULT has_default_ordering]
+            [COMMAND If has_default_ordering is true, return True immediately. RESULT default_ordering_true]
+            [COMMAND If no ordering source was found, return False. RESULT false_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the database alias that this query would use if executed now, preferring an already-set self._db and otherwise asking the router for either the write or read database depending on self._for_write." db]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> database_alias </REF>: string or None "The resolved database alias returned from either the write or read branch."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate self._for_write to determine whether the query is in write mode. RESULT for_write_mode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: for_write_mode is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._db if it is truthy; otherwise call router.db_for_write(self.model, **self._hints) and return its result. RESULT write_database_alias]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: for_write_mode is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._db if it is truthy; otherwise call router.db_for_read(self.model, **self._hints) and return its result. RESULT read_database_alias]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Inserts new records by constructing an InsertQuery for the model, populating it with the provided field/value data, and executing the compiled SQL with optional returning fields and conflict handling." _insert]
+    [INPUTS]
+        <REF> objs </REF>: iterable "Iterable of row value lists/dicts or model objects to insert."
+        <REF> fields </REF>: list "List of model field names corresponding to the values in objs."
+        <REF> returning_fields </REF>: list or None "Optional list of model fields whose values should be returned from the insert; None means no RETURNING clause."
+        <REF> raw </REF>: bool "Boolean flag indicating whether the provided values are raw database values and should be inserted without field conversion."
+        <REF> using </REF>: str or None "Database alias used for the insert; None selects self.db."
+        <REF> ignore_conflicts </REF>: bool "Boolean flag indicating whether insert conflicts should be ignored."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: cursor or list "Return value of execute_sql: a database cursor, or requested returned field values when returning_fields is provided."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self._for_write to True to mark this model instance as being used for a write operation. RESULT self._for_write]
+            [COMMAND If using is None, set using to self.db so the default database connection is used; otherwise keep the provided using value. RESULT using]
+            [COMMAND Construct an sql.InsertQuery instance for self.model, passing ignore_conflicts to configure conflict handling. RESULT query]
+            [COMMAND Call query.insert_values with fields, objs, and raw=raw to populate the values to be inserted; the return value is not used. RESULT insert_values_result]
+            [COMMAND Compile the query using query.get_compiler(using=using). RESULT compiler]
+            [COMMAND Execute the compiled SQL with compiler.execute_sql(returning_fields) and return its result. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Inserts model objects in batches as a bulk_create helper, collecting returned rows when the backend supports returning rows from bulk insert and conflict ignoring is disabled." _batched_insert]
+    [INPUTS]
+        <REF> self </REF>: object "Current model/manager instance providing _insert, db, and model metadata."
+        <REF> objs </REF>: list "Model objects to insert in batches; must support len() and slicing."
+        <REF> fields </REF>: list "Field names to be set during insertion."
+        <REF> batch_size </REF>: int or None "Maximum number of objects per batch; if falsy, the backend chooses a default of at least 1."
+        <REF> ignore_conflicts </REF>: bool "If true, requests conflict-ignoring insertion; unsupported backends cause NotSupportedError. Defaults to false."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> inserted_rows </REF>: list "Returned rows/columns accumulated from batch inserts; empty when the backend does not return rows or conflicts are ignored."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate conflict support: continue normally when ignore_conflicts is false or connections[self.db].features.supports_ignore_conflicts is true; otherwise apply the NotSupportedError exception flow. RESULT conflict_support_validated]
+            [COMMAND Set ops to connections[self.db].ops. RESULT ops]
+            [COMMAND Resolve batch_size to the original value if it is truthy; otherwise compute max(ops.bulk_batch_size(fields, objs), 1). RESULT batch_size]
+            [COMMAND Initialize inserted_rows as an empty list. RESULT inserted_rows]
+            [COMMAND Set bulk_return to connections[self.db].features.can_return_rows_from_bulk_insert. RESULT bulk_return]
+            [COMMAND In the outer for loop, produce each batch item as objs[i:i + batch_size] for i in range(0, len(objs), batch_size), where the slice start is inclusive and the slice end is exclusive. RESULT item]
+            [COMMAND In the for loop over item, if bulk_return is true and ignore_conflicts is false, call self._insert(item, fields=fields, using=self.db, returning_fields=self.model._meta.db_returning_fields, ignore_conflicts=ignore_conflicts) and store the result as inserted_columns. RESULT inserted_columns]
+            [COMMAND In the returning-rows branch of the for loop over item, if isinstance(inserted_columns, list), extend inserted_rows with its elements; otherwise append inserted_columns to inserted_rows. RESULT inserted_rows]
+            [COMMAND After the loop completes, return inserted_rows. RESULT inserted_rows]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: In the for loop over item, bulk_return is false or ignore_conflicts is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._insert(item, fields=fields, using=self.db, ignore_conflicts=ignore_conflicts) without storing the return value. RESULT insert_batch_done]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: ignore_conflicts is true and connections[self.db].features.supports_ignore_conflicts is false]
+        [LOG "This database backend does not support ignoring conflicts."]
+        [THROW NotSupportedError "Raised when conflict ignoring is requested but the database backend does not support it."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a cloned copy of the current QuerySet, applies the sticky filter flag once if enabled, merges the supplied keyword arguments into the clone, and returns the prepared copy." _chain]
+    [INPUTS]
+        <REF> self </REF>: object "The current QuerySet instance from which a copy is made."
+        <REF> kwargs </REF>: dict "Keyword arguments used to update the cloned object's __dict__."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "A cloned QuerySet ready for another operation, with the sticky filter applied if needed and the kwargs merged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clone the current QuerySet by calling self._clone() and assign the result to obj. RESULT obj]
+            [COMMAND If obj._sticky_filter is truthy, set obj.query.filter_is_sticky to True and set obj._sticky_filter to False. RESULT obj]
+            [COMMAND Update obj.__dict__ with the supplied kwargs. RESULT obj]
+            [COMMAND Return obj. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a lightweight copy of the current queryset-like object by constructing a sibling instance through the same class, replacing the query with a chained clone, and copying selected internal state attributes." _clone]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> c </REF>: same class as self "A cloned queryset-like instance with a chained query copy and copied internal attributes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a new instance c via self.__class__ with model=self.model, query=self.query.chain(), using=self._db, and hints=self._hints. RESULT c]
+            [COMMAND Copy self._sticky_filter to c._sticky_filter. RESULT c]
+            [COMMAND Copy self._for_write to c._for_write. RESULT c]
+            [COMMAND Copy self._prefetch_related_lookups into c._prefetch_related_lookups using a shallow slice copy (self._prefetch_related_lookups[:]) so the new list is independent. RESULT c]
+            [COMMAND Copy self._known_related_objects to c._known_related_objects. RESULT c]
+            [COMMAND Copy self._iterable_class to c._iterable_class. RESULT c]
+            [COMMAND Copy self._fields to c._fields. RESULT c]
+            [COMMAND Return the cloned instance c. RESULT c]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes the result cache from the iterable if it has not been set, and then prefetches related objects if lookups are pending and prefetching has not already been done." _fetch_all]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self._result_cache is None, evaluate self._iterable_class(self), convert that iterable to a list, and assign the list to self._result_cache. RESULT self._result_cache]
+            [COMMAND If self._prefetch_related_lookups is truthy (short-circuiting the condition when it is false) and self._prefetch_done is false, call self._prefetch_related_objects(). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the _sticky_filter flag to True on the current instance and returns the same instance so the next two filter calls are treated as a single filter for related-manager and many-to-many table reuse." _next_is_sticky]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The QuerySet instance to mark as sticky."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: QuerySet "The same QuerySet instance with _sticky_filter set to True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set the instance attribute _sticky_filter to the Boolean constant True. RESULT self._sticky_filter]
+            [COMMAND Return the current instance self unchanged, preserving the same object rather than creating a clone. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that the current QuerySet and another QuerySet use the same values, extra selections, and annotation selections when the current _fields is set, raising TypeError if they differ." _merge_sanity_check]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The current QuerySet instance on which the merge sanity check is performed."
+        <REF> other </REF>: QuerySet "The other QuerySet instance being checked against the current instance for merge compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None when the sanity check passes; otherwise raises TypeError."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the merge sanity condition with short-circuit semantics: first test whether self._fields is not None; if it is not None, compare set(self.query.values_select) with set(other.query.values_select), then set(self.query.extra_select) with set(other.query.extra_select), then set(self.query.annotation_select) with set(other.query.annotation_select), stopping at the first unequal comparison. RESULT merge_sanity_failed]
+            [COMMAND If merge_sanity_failed is false, return None because the merge sanity check passed. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: merge_sanity_failed is true]
+        [LOG "Merging 'ClassName' classes must involve the same values in each case."]
+        [THROW TypeError "Raised when self._fields is set and the current QuerySet and other QuerySet have differing values, extra selections, or annotation selections."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges all related-object mappings from another QuerySet instance into this QuerySet's _known_related_objects, grouped by field, preserving existing entries and letting the other instance's entries overwrite conflicting keys." _merge_known_related_objects]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The QuerySet instance whose _known_related_objects mapping is mutated in place."
+        <REF> other </REF>: QuerySet "The other QuerySet instance providing the related-object mappings to merge into self."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each field, objects in other._known_related_objects.items(), merge objects into self._known_related_objects for that field: if field is not already present in self._known_related_objects, insert an empty dictionary via setdefault(field, {}), then update the resulting field dictionary with objects so that other's entries overwrite existing values on key conflicts. RESULT self._known_related_objects]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the internal query expression by forwarding all arguments, attaches the current database connection to the resolved query, and returns it, while guarding against multi-field values() querysets." resolve_expression]
+    [INPUTS]
+        <REF> self </REF>: object "The object whose `_fields`, `query`, and `_db` attributes are read and/or modified."
+        <REF> args </REF>: tuple "Positional arguments forwarded to `self.query.resolve_expression`."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to `self.query.resolve_expression`."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> query </REF>: object "The resolved query object with its `_db` attribute set to `self._db`."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND At method level, check if `self._fields` is truthy and `len(self._fields) > 1`; if so, trigger the TypeError exception path, otherwise continue. RESULT guard_check]
+            [COMMAND Call `self.query.resolve_expression(*args, **kwargs)` and bind the returned object to `query`. RESULT query]
+            [COMMAND Assign the value of `self._db` to the `_db` attribute of the resolved `query` object. RESULT query._db]
+            [COMMAND Return the resolved `query` object. RESULT query]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: `self._fields` is non-empty and `len(self._fields) > 1`]
+        [LOG "Cannot use multi-field values as a filter value."]
+        [THROW TypeError "Raised because a values() queryset can only be used as a nested query when it selects exactly one field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Accepts arbitrary hint key/value pairs and updates the internal _hints mapping in place, adding new entries and overwriting existing ones." _add_hints]
+    [INPUTS]
+        <REF> hints </REF>: dict "Keyword arguments representing hint key/value pairs to merge into self._hints; existing keys are overwritten and new keys are added."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "No meaningful return value; the method returns None because the update operation is performed in place on self._hints."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Collect the supplied keyword arguments into a local mapping named hints. RESULT hints]
+            [COMMAND Merge all entries from hints into self._hints by calling self._hints.update(hints), adding new keys and overwriting existing key/value pairs; the call returns None and the result is discarded. RESULT self._hints]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether this QuerySet's underlying query object contains any active filters and returns the resulting boolean value." _has_filters]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The QuerySet instance whose query object is inspected for active filters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if the underlying query has active filters; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the query attribute on self to obtain the underlying query object. RESULT self.query]
+            [COMMAND Invoke has_filters() on the underlying query object to determine whether it contains any active filters. RESULT has_filters_result]
+            [COMMAND Return the boolean result of has_filters() to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Guards against unsupported combined queries by raising NotSupportedError when self.query.combinator is already set." _not_support_combined_queries]
+    [INPUTS]
+        <REF> self </REF>: object "The QuerySet instance whose query object may contain an active combinator."
+        <REF> operation_name </REF>: string "Name of the QuerySet operation being attempted; used to build the exception message."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the guard condition `if self.query.combinator:` by testing whether `self.query.combinator` is truthy. RESULT combinator_present]
+            [COMMAND When `self.query.combinator` is falsey, continue past the guard clause, reach the end of `_not_support_combined_queries`, and return `None`. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: `self.query.combinator` is truthy]
+        [LOG "Calling QuerySet.<operation_name>() after <combinator>() is not supported."]
+        [THROW NotSupportedError "Raised because the attempted QuerySet operation is not supported after a query combinator has already been applied."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS InstanceCheckMeta
+
+# CLASS EmptyQuerySet
+
+[DEFINE_WORKER: "Prevents instantiation of EmptyQuerySet by unconditionally raising TypeError." EmptyQuerySet.__init__]
+    [INPUTS]
+        <REF> self </REF>: EmptyQuerySet instance "The instance being initialized; instantiation is disallowed."
+        <REF> *args </REF>: tuple "Positional arguments passed to __init__; ignored before raising."
+        <REF> **kwargs </REF>: dict "Keyword arguments passed to __init__; ignored before raising."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise TypeError with the exact message 'EmptyQuerySet can't be instantiated'. RESULT _exception_raised]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Every call to EmptyQuerySet.__init__ reaches this exception because the body contains only a raise statement.]
+        [LOG "TypeError: EmptyQuerySet can't be instantiated"]
+        [THROW TypeError "EmptyQuerySet can't be instantiated"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS RawQuerySet
+
+[DEFINE_WORKER: "Initializes a RawQuerySet instance by storing the raw SQL query, model, database alias, hints, params, and translations, constructing a RawQuery object when no pre-built query is supplied, and setting the initial cache and prefetch state." RawQuerySet.__init__]
+    [INPUTS]
+        <REF> raw_query </REF>: str "Raw SQL query string used for the query."
+        <REF> model </REF>: Model "Model class associated with the raw query; optional."
+        <REF> query </REF>: RawQuery "Pre-built RawQuery instance; if falsy, a new RawQuery is constructed from raw_query, self.db, and params."
+        <REF> params </REF>: tuple|list "Query parameters; if falsy, defaults to an empty tuple."
+        <REF> translations </REF>: dict "Field translations; if falsy, defaults to an empty dictionary."
+        <REF> using </REF>: str "Database alias used for the query."
+        <REF> hints </REF>: dict "Query hints; if falsy, defaults to an empty dictionary."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the raw_query argument to self.raw_query. RESULT self.raw_query]
+            [COMMAND Assign the model argument to self.model. RESULT self.model]
+            [COMMAND Assign the using argument to self._db. RESULT self._db]
+            [COMMAND Assign self._hints to hints if hints is truthy, otherwise assign a new empty dictionary. RESULT self._hints]
+            [COMMAND If query is truthy, assign self.query to query; otherwise construct a new sql.RawQuery with sql=raw_query, using=self.db, params=params and assign it to self.query. RESULT self.query]
+            [COMMAND Assign self.params to params if params is truthy, otherwise assign an empty tuple. RESULT self.params]
+            [COMMAND Assign self.translations to translations if translations is truthy, otherwise assign a new empty dictionary. RESULT self.translations]
+            [COMMAND Set self._result_cache to None. RESULT self._result_cache]
+            [COMMAND Set self._prefetch_related_lookups to an empty tuple. RESULT self._prefetch_related_lookups]
+            [COMMAND Set self._prefetch_done to False. RESULT self._prefetch_done]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolve which result columns correspond to model initialization fields, compute their attribute names and column positions, and identify the remaining annotation columns with their positions." resolve_model_init_order]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "Tuple containing model_init_names (list of model field attribute names), model_init_order (list of column indices in self.columns for each model init field), and annotation_fields (list of (column, position) pairs for non-model columns)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the identifier converter from connections[self.db].introspection.identifier_converter. RESULT converter]
+            [COMMAND Build model_init_fields by filtering self.model._meta.fields to include only fields whose converter(f.column) is present in self.columns. RESULT model_init_fields]
+            [COMMAND Build annotation_fields by enumerating self.columns and keeping (column, pos) pairs for columns that are not in self.model_fields. RESULT annotation_fields]
+            [COMMAND Build model_init_order by mapping each field in model_init_fields to the first index of converter(f.column) in self.columns using list.index(). RESULT model_init_order]
+            [COMMAND Build model_init_names by extracting attname from each field in model_init_fields. RESULT model_init_names]
+            [COMMAND Return the tuple (model_init_names, model_init_order, annotation_fields). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clones the queryset and updates the clone's prefetch lookup tuple, using (None,) as a sentinel to clear it, otherwise concatenating the supplied lookups, and returns the clone." prefetch_related]
+    [INPUTS]
+        <REF> self </REF>: QuerySet "The current QuerySet instance on which prefetch_related is called."
+        <REF> lookups </REF>: tuple "Variadic prefetch lookup arguments; the exact single-element tuple (None,) is treated as a sentinel to clear stored lookups."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: QuerySet "The cloned QuerySet with updated _prefetch_related_lookups."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._clone() and assign the returned object to clone. RESULT clone]
+            [COMMAND Evaluate whether lookups equals the single-element tuple (None,) and store the boolean result. RESULT lookups_is_none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: lookups_is_none is true, meaning lookups equals (None,)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set clone._prefetch_related_lookups to an empty tuple (). RESULT clone._prefetch_related_lookups]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lookups_is_none is false, meaning lookups does not equal (None,)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Concatenate clone._prefetch_related_lookups with lookups and assign the result to clone._prefetch_related_lookups. RESULT clone._prefetch_related_lookups]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prefetches the related objects specified by the lookups on the cached result set and marks the instance as having completed prefetching." _prefetch_related_objects]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose cached results are used to prefetch related objects."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call prefetch_related_objects with self._result_cache as the queryset argument and the unpacked self._prefetch_related_lookups as the lookup arguments. RESULT _]
+            [COMMAND Set self._prefetch_done to True. RESULT self._prefetch_done]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a new raw query set instance of the same class, copying query configuration and shallow-copying prefetch related lookups." RawQuerySet._clone]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> c </REF>: RawQuerySet or subclass "A new raw query set instance with the same raw_query, model, query, params, translations, using, and hints as self, and with prefetch_related_lookups copied into a new list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new instance of the same class as self by calling self.__class__(self.raw_query, model=self.model, query=self.query, params=self.params, translations=self.translations, using=self._db, hints=self._hints). RESULT c]
+            [COMMAND Assign to c._prefetch_related_lookups a shallow copy of self._prefetch_related_lookups using the slice expression self._prefetch_related_lookups[:], creating a new list object with the same elements. RESULT c._prefetch_related_lookups]
+            [COMMAND Return c as the cloned raw query set. RESULT c]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Lazily initializes the result cache from the iterator when it is still None, then prefetches related objects once if any prefetch lookups are configured and prefetching has not already been done." _fetch_all]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In _fetch_all, if self._result_cache is None, set self._result_cache to list(self.iterator()) to lazily materialize the results. RESULT _result_cache]
+            [COMMAND In _fetch_all, if self._prefetch_related_lookups is truthy and (short-circuit, so only when that is true) self._prefetch_done is false, call self._prefetch_related_objects() to perform the prefetch. RESULT _prefetch_done]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over raw query results, constructs a model instance for each row, sets annotation fields, yields each instance, and closes the query cursor in a finally block." iterator]
+    [INPUTS]
+        <REF> self </REF>: RawModelIterable "The iterable object providing db, query, model, columns, model_fields, and resolve_model_init_order()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> instance </REF>: Model instance "A model instance built from each raw query row, with annotation fields set before yielding."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Cache the database alias from self.db. RESULT db]
+            [COMMAND Create the SQL compiler by calling connections[db].ops.compiler('SQLCompiler') with self.query, connections[db], and db. RESULT compiler]
+            [COMMAND Create an iterator over self.query with iter(self.query). RESULT query]
+            [COMMAND Begin the try block that has a finally block for cursor cleanup. Inside the try block, call self.resolve_model_init_order() and unpack the result into model_init_names, model_init_pos, and annotation_fields. RESULT model_init_order]
+            [COMMAND Inside the try block, validate that self.model._meta.pk.attname is present in model_init_names. RESULT pk_included]
+            [COMMAND Inside the try block, assign model_cls = self.model. RESULT model_cls]
+            [COMMAND Inside the try block, build fields = [self.model_fields.get(c) for c in self.columns], using None for any column not present in model_fields. RESULT fields]
+            [COMMAND Inside the try block, build converters = compiler.get_converters([f.get_col(f.model._meta.db_table) if f else None for f in fields]). RESULT converters]
+            [COMMAND Inside the try block, if converters is truthy, reassign query = compiler.apply_converters(query, converters). RESULT query]
+            [COMMAND Inside the try block, iterate over each values in query. RESULT values]
+            [COMMAND Inside the for loop over values, build model_init_values = [values[pos] for pos in model_init_pos]. RESULT model_init_values]
+            [COMMAND Inside the for loop over values, create instance = model_cls.from_db(db, model_init_names, model_init_values). RESULT instance]
+            [COMMAND Inside the for loop over values, if annotation_fields is truthy, for each (column, pos) in annotation_fields set setattr(instance, column, values[pos]). RESULT instance]
+            [COMMAND Inside the for loop over values, yield instance. RESULT instance]
+            [COMMAND In the finally block, after the try block finishes or when an exception propagates, if self.query has the attribute 'cursor' and self.query.cursor is truthy, close it with self.query.cursor.close(). RESULT cursor_closed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The primary key attribute name self.model._meta.pk.attname is not in model_init_names.]
+        [LOG "InvalidQuery: Raw query must include the primary key"]
+        [THROW InvalidQuery "Raised when the raw query does not include the primary key field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the database used if this query is executed now, preferring self._db when truthy and otherwise delegating to router.db_for_read with the model and hints." db]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> db </REF>: database alias or connection "The database selected for reading this model, equal to self._db when truthy, otherwise the return value of router.db_for_read(self.model, **self._hints)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate self._db and test its truthiness. RESULT effective_db]
+            [COMMAND If effective_db is truthy, return effective_db; otherwise evaluate router.db_for_read(self.model, **self._hints) and return that result. RESULT db]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Selects the database alias for a RawQuerySet by forwarding the current instance's query data and a query chained to the specified alias into a new RawQuerySet." using]
+    [INPUTS]
+        <REF> alias </REF>: str "Database alias string indicating the database the RawQuerySet should execute against."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: RawQuerySet "A new RawQuerySet instance configured with the current raw query, model, params, translations, chained query, and database alias."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current instance attributes self.raw_query, self.model, self.params, self.translations, and self.query. RESULT raw_query, model, params, translations, query]
+            [COMMAND Call query.chain(using=alias) to create a new query object bound to the database alias. RESULT chained_query]
+            [COMMAND Construct RawQuerySet with positional argument raw_query and keyword arguments model=model, query=chained_query, params=params, translations=translations, and using=alias. RESULT raw_queryset]
+            [COMMAND Return raw_queryset as the result of using(alias). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the query column names translated to model field names in their original order, ignoring translation keys that do not match any existing column." columns]
+    [INPUTS]
+        <REF> self </REF>: object "The model instance that provides self.query with get_columns() and a translations mapping."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> columns </REF>: list of str "The list of model field names in the order they appear in the query result."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set columns to the list returned by calling get_columns() on self.query. RESULT columns]
+            [COMMAND For each (query_name, model_name) in self.translations.items(), attempt to locate the first occurrence of query_name in columns using list.index(query_name), which returns the first matching index. RESULT index]
+            [COMMAND In the else branch of the try/except inside the for loop, when the lookup succeeds, assign model_name to columns[index]. RESULT columns]
+            [COMMAND After the loop completes, return the updated columns list. RESULT columns]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: In the for loop, columns.index(query_name) raises ValueError because query_name is not present in columns.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the ValueError in the except branch, leave columns unchanged, and continue with the next translation pair. RESULT columns]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a dictionary that maps each model field's database column name, transformed by the connection's identifier converter, to the corresponding field object." model_fields]
+    [INPUTS]
+        <REF> self </REF>: object "The model instance or object providing db and model attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> model_fields </REF>: dict "Mapping from converted database column names to model field objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the database connection identified by self.db in the connections registry and access its introspection.identifier_converter to obtain the identifier conversion function. RESULT converter]
+            [COMMAND Initialize model_fields as an empty dictionary to accumulate column-name-to-field mappings. RESULT model_fields]
+            [COMMAND For each field in self.model._meta.fields, call field.get_attname_column() to unpack the attribute name and database column name into name and column. RESULT name, column]
+            [COMMAND Within the loop over model fields, compute converter(column) and assign field to model_fields under that key, overwriting any existing entry if the same converted column name appears more than once. RESULT model_fields]
+            [COMMAND Return model_fields as the resulting dictionary. RESULT model_fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Prefetch
+
+[DEFINE_WORKER: "Initializes a Prefetch object by setting the traversal lookup path and destination attribute, validating that any supplied queryset is not a values() queryset, and optionally rewriting the destination path to a custom attribute." Prefetch.__init__]
+    [INPUTS]
+        <REF> lookup </REF>: str "The lookup path used for prefetching; it is assigned to both prefetch_through and prefetch_to unless to_attr overrides the destination."
+        <REF> queryset </REF>: QuerySet | None "Optional queryset to use for the prefetch. If provided, its iterable class must be a subclass of ModelIterable; values() querysets are rejected."
+        <REF> to_attr </REF>: str | None "Optional custom attribute name for storing the prefetched result. If truthy, prefetch_to is rebuilt with the final lookup component replaced by this value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the lookup argument to self.prefetch_through. RESULT self.prefetch_through]
+            [COMMAND Assign the lookup argument to self.prefetch_to. RESULT self.prefetch_to]
+            [COMMAND Validate that queryset is either None or has an _iterable_class that is a subclass of ModelIterable; if validation fails, take the ValueError exception path. RESULT queryset_validation]
+            [COMMAND If to_attr is truthy, use the alternative flow to rewrite self.prefetch_to. RESULT self.prefetch_to]
+            [COMMAND Assign queryset to self.queryset. RESULT self.queryset]
+            [COMMAND Assign to_attr to self.to_attr. RESULT self.to_attr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: to_attr is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.prefetch_to to LOOKUP_SEP.join(lookup.split(LOOKUP_SEP)[:-1] + [to_attr]). RESULT self.prefetch_to]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: queryset is not None and not issubclass(queryset._iterable_class, ModelIterable)]
+        [LOG "Prefetch querysets cannot use values()."]
+        [THROW ValueError "Raised when a values() queryset is supplied to a prefetch."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepends the given prefix and LOOKUP_SEP to both prefetch_through and prefetch_to attribute values, updating them in place." add_prefix]
+    [INPUTS]
+        <REF> prefix </REF>: string "String prefix to prepend to the existing prefetch paths."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current value of self.prefetch_through, the parameter prefix, and the LOOKUP_SEP constant. Evaluate prefix + LOOKUP_SEP + old self.prefetch_through, then assign the result to self.prefetch_through. RESULT self.prefetch_through]
+            [COMMAND Read the current value of self.prefetch_to, the parameter prefix, and the LOOKUP_SEP constant. Evaluate prefix + LOOKUP_SEP + old self.prefetch_to, then assign the result to self.prefetch_to. RESULT self.prefetch_to]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the prefix of self.prefetch_to that contains the first level + 1 components when split by LOOKUP_SEP, rejoined by LOOKUP_SEP." get_current_prefetch_to]
+    [INPUTS]
+        <REF> level </REF>: int "Inclusive endpoint offset; the slice keeps the first level + 1 components, or applies Python negative-slice semantics when negative."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The resulting joined prefix string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split self.prefetch_to into a list of components using LOOKUP_SEP as the delimiter. RESULT components]
+            [COMMAND Slice components from the beginning through index level + 1 exclusive, preserving Python negative-slice semantics when level is negative. RESULT selected_components]
+            [COMMAND Join selected_components into a single string using LOOKUP_SEP as the separator. RESULT joined_result]
+            [COMMAND Return joined_result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: level is negative]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Apply Python negative-slice semantics to components using [:level + 1], which removes the last -(level) components when -(level) is less than the component count and returns all components if the endpoint is beyond the beginning. RESULT selected_components]
+            [COMMAND Join selected_components with LOOKUP_SEP and return the result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the lookup-path segment at the requested level and a flag indicating whether that segment is the final attribute, respecting the short-circuit behavior of self.to_attr." get_current_to_attr]
+    [INPUTS]
+        <REF> level </REF>: int "Index of the desired segment in the prefetch lookup path; Python negative indexing is allowed, and the index must be within the bounds of the split path."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result_tuple </REF>: tuple[str, object] "A tuple (to_attr, as_attr) where to_attr is the selected path segment and as_attr is True only when self.to_attr is truthy and level is the last segment; otherwise it preserves the falsy value of self.to_attr or is False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split self.prefetch_to into a list of path segments using the LOOKUP_SEP separator and store the list as parts. RESULT parts]
+            [COMMAND Select the path segment at the requested level from parts using Python list indexing and store it as to_attr. RESULT to_attr]
+            [COMMAND Compute as_attr by short-circuit evaluation: if self.to_attr is falsy, preserve that falsy value as as_attr; otherwise set as_attr to whether level equals len(parts) - 1. RESULT as_attr]
+            [COMMAND Return the tuple (to_attr, as_attr). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.to_attr is falsy, for example None, False, an empty string, or zero.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not evaluate the equality level == len(parts) - 1 because of short-circuiting; set as_attr to the falsy value of self.to_attr. RESULT as_attr]
+            [COMMAND Return the tuple (to_attr, as_attr). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: level is not a valid Python list index for parts, meaning it is outside the inclusive range -len(parts) <= level <= len(parts) - 1.]
+        [LOG "IndexError: list index out of range in get_current_to_attr while accessing parts[level]."]
+        [THROW IndexError "Raised by parts[level] when the requested level is outside the bounds of the split prefetch path."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the stored queryset when the current prefetch target for the given level equals the expected prefetch target; otherwise returns None." get_current_queryset]
+    [INPUTS]
+        <REF> level </REF>: any "The level used to obtain the current prefetch target from self.get_current_prefetch_to(level)."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object or None "self.queryset if the current prefetch target equals self.prefetch_to; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate self.get_current_prefetch_to(level) and compare the result with self.prefetch_to. RESULT prefetch_targets_equal]
+            [COMMAND If prefetch_targets_equal is true, execute the matching alternative flow and exit the method. RESULT self.queryset]
+            [COMMAND Return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: prefetch_targets_equal is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.queryset. RESULT self.queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS RelatedPopulator
+
+[DEFINE_WORKER: "Initializes the related-object populator by storing the database connection and precomputing field-selection, reordering, primary-key index, related populators, and setter callables from the supplied klass_info metadata." __init__]
+    [INPUTS]
+        <REF> klass_info </REF>: dict "Metadata dictionary containing 'select_fields', 'from_parent', 'model', 'local_setter', and 'remote_setter'."
+        <REF> select </REF>: list or tuple "Selected field entries where select[idx][0].target.attname provides the selected field attname."
+        <REF> db </REF>: database connection or alias "Database connection or alias used for building related populators."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the database connection in self.db. RESULT self.db]
+            [COMMAND Load select_fields from klass_info['select_fields']. RESULT select_fields]
+            [COMMAND Load from_parent from klass_info['from_parent']. RESULT from_parent]
+            [COMMAND In the not-from_parent path, set self.cols_start to select_fields[0]. RESULT self.cols_start]
+            [COMMAND In the not-from_parent path, set self.cols_end to select_fields[-1] + 1, making the later slice end exclusive. RESULT self.cols_end]
+            [COMMAND In the not-from_parent path, build self.init_list by extracting f[0].target.attname for each f in select[self.cols_start:self.cols_end]. RESULT self.init_list]
+            [COMMAND In the not-from_parent path, set self.reorder_for_init to None. RESULT self.reorder_for_init]
+            [COMMAND Set self.model_cls to klass_info['model']. RESULT self.model_cls]
+            [COMMAND Locate the first occurrence of self.model_cls._meta.pk.attname in self.init_list and assign its index to self.pk_idx. RESULT self.pk_idx]
+            [COMMAND Call get_related_populators(klass_info, select, self.db) and assign the returned related populators to self.related_populators. RESULT self.related_populators]
+            [COMMAND Store klass_info['local_setter'] in self.local_setter. RESULT self.local_setter]
+            [COMMAND Store klass_info['remote_setter'] in self.remote_setter. RESULT self.remote_setter]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When from_parent is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build attname_indexes by mapping select[idx][0].target.attname to idx for each idx in select_fields. RESULT attname_indexes]
+            [COMMAND Iterate over klass_info['model']._meta.concrete_fields in model order and build self.init_list from the field attnames that exist in attname_indexes. RESULT self.init_list]
+            [COMMAND Create self.reorder_for_init as operator.itemgetter(*[attname_indexes[attname] for attname in self.init_list]). RESULT self.reorder_for_init]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds or loads a target object from a row, optionally reorders the row first, populates related data when the object exists, and links the target object to from_obj through local and remote setters." populate]
+    [INPUTS]
+        <REF> row </REF>: object "Input row from which obj_data is obtained."
+        <REF> from_obj </REF>: object "Object used as the local endpoint for local_setter and as the remote endpoint for remote_setter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set obj_data to self.reorder_for_init(row) if self.reorder_for_init is truthy; otherwise set obj_data to the slice row[self.cols_start:self.cols_end], with self.cols_start inclusive and self.cols_end exclusive. RESULT obj_data]
+            [COMMAND Initialize obj from obj_data: if obj_data[self.pk_idx] is None, set obj to None; otherwise set obj to self.model_cls.from_db(self.db, self.init_list, obj_data) and, in that else branch, iterate over each rel_iter in self.related_populators calling rel_iter.populate(row, obj). RESULT obj]
+            [COMMAND Call self.local_setter(from_obj, obj). RESULT none]
+            [COMMAND If obj is not None, call self.remote_setter(obj, from_obj). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes each lookup in the input collection into a Prefetch object, optionally adds a shared prefix when provided, and returns the accumulated list of Prefetch objects." normalize_prefetch_lookups]
+    [INPUTS]
+        <REF> lookups </REF>: Iterable "Collection of lookup objects or values to normalize into Prefetch instances."
+        <REF> prefix </REF>: Any "Optional value, commonly a string, applied to each Prefetch via add_prefix if it is truthy."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ret </REF>: list[Prefetch] "List of normalized Prefetch objects in the original iteration order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named ret to collect normalized Prefetch objects. RESULT ret]
+            [COMMAND Iterate over each lookup in lookups, maintaining the original iteration order. RESULT lookup]
+            [COMMAND Within the for loop, if lookup is not an instance of Prefetch, wrap it by assigning lookup = Prefetch(lookup). RESULT lookup]
+            [COMMAND Within the for loop, if prefix is truthy, call lookup.add_prefix(prefix) on the current lookup. RESULT lookup]
+            [COMMAND Within the for loop, append the processed lookup to ret. RESULT ret]
+            [COMMAND After the loop completes, return ret. RESULT ret]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Populates the _prefetched_objects_cache on a list of model instances by resolving, normalizing, and traversing the requested prefetch lookups, fetching related objects level by level while avoiding duplicate work and infinite recursion." prefetch_related_objects]
+    [INPUTS]
+        <REF> model_instances </REF>: list of Model instances "The list of model instances whose prefetched object caches will be populated."
+        <REF> related_lookups </REF>: tuple of lookup strings or Prefetch objects "Variable-length prefetch lookups to resolve and apply to the model instances."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return </REF>: None "No return value. The function populates the _prefetched_objects_cache attribute on the input model instances."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If model_instances is empty, return immediately and do nothing. RESULT None]
+            [COMMAND Initialize done_queries as an empty dictionary used to cache completed prefetch paths by their prefetch_to key. RESULT done_queries]
+            [COMMAND Initialize auto_lookups as an empty set used to track automatically added lookups. RESULT auto_lookups]
+            [COMMAND Initialize followed_descriptors as an empty set used for recursion protection. RESULT followed_descriptors]
+            [COMMAND Set all_lookups to normalize_prefetch_lookups(reversed(related_lookups)). RESULT all_lookups]
+            [COMMAND While all_lookups is non-empty, pop the last element from all_lookups and assign it to lookup. RESULT lookup]
+            [COMMAND Within the while loop over all_lookups, if lookup.prefetch_to is already in done_queries: raise ValueError if lookup.queryset is not None; otherwise continue to the next lookup. RESULT None]
+            [COMMAND Within the while loop over all_lookups, set obj_list to model_instances as the initial list of objects to decorate for this lookup. RESULT obj_list]
+            [COMMAND Within the while loop over all_lookups, split lookup.prefetch_through on LOOKUP_SEP and assign the resulting list to through_attrs. RESULT through_attrs]
+            [COMMAND Within the while loop over all_lookups, for each level and through_attr in enumerate(through_attrs), process the prefetch path segment. RESULT level, through_attr]
+            [COMMAND Within the for level loop over through_attrs, if obj_list is empty, break out of the level loop. RESULT None]
+            [COMMAND Within the for level loop over through_attrs, set prefetch_to to lookup.get_current_prefetch_to(level). RESULT prefetch_to]
+            [COMMAND Within the for level loop over through_attrs, if prefetch_to is already in done_queries, set obj_list to done_queries[prefetch_to] and continue to the next level. RESULT obj_list]
+            [COMMAND Within the for level loop over through_attrs, set good_objects to True. RESULT good_objects]
+            [COMMAND Within the for level loop over through_attrs, for each obj in obj_list, if obj does not have _prefetched_objects_cache, try to set obj._prefetched_objects_cache to an empty dict; on AttributeError or TypeError, set good_objects to False and break out of the object loop. RESULT good_objects]
+            [COMMAND Within the for level loop over through_attrs, if good_objects is False, break out of the level loop. RESULT None]
+            [COMMAND Within the for level loop over through_attrs, set first_obj to obj_list[0]. RESULT first_obj]
+            [COMMAND Within the for level loop over through_attrs, set to_attr to lookup.get_current_to_attr(level)[0]. RESULT to_attr]
+            [COMMAND Within the for level loop over through_attrs, call get_prefetcher(first_obj, through_attr, to_attr) and unpack the result into prefetcher, descriptor, attr_found, and is_fetched. RESULT prefetcher, descriptor, attr_found, is_fetched]
+            [COMMAND Within the for level loop over through_attrs, if attr_found is False, raise AttributeError for an invalid prefetch attribute. RESULT None]
+            [COMMAND Within the for level loop over through_attrs, if this is the last level and prefetcher is None, raise ValueError because the lookup does not support prefetching. RESULT None]
+            [COMMAND Within the for level loop over through_attrs, if prefetcher is not None and is_fetched is False, call prefetch_one_level(obj_list, prefetcher, lookup, level) and assign the results to obj_list and additional_lookups. RESULT obj_list, additional_lookups]
+            [COMMAND Within the prefetcher branch, if it is not true that (prefetch_to in done_queries and lookup in auto_lookups and descriptor in followed_descriptors), store obj_list as done_queries[prefetch_to], create new_lookups with normalize_prefetch_lookups(reversed(additional_lookups), prefetch_to), update auto_lookups with new_lookups, and extend all_lookups with new_lookups. RESULT all_lookups]
+            [COMMAND Within the prefetcher branch, add descriptor to followed_descriptors. RESULT followed_descriptors]
+            [COMMAND Within the for level loop over through_attrs, when prefetcher is None or is_fetched is True, traverse the relation manually by initializing new_obj_list as an empty list. RESULT new_obj_list]
+            [COMMAND Within the manual traversal branch, for each obj in obj_list, if through_attr is present in obj._prefetched_objects_cache, set new_obj to list(obj._prefetched_objects_cache.get(through_attr)); otherwise get new_obj via getattr(obj, through_attr) and on exceptions.ObjectDoesNotExist skip this obj. RESULT new_obj]
+            [COMMAND Within the manual traversal branch, if new_obj is None, skip it. RESULT None]
+            [COMMAND Within the manual traversal branch, if new_obj is a list, extend new_obj_list with it; otherwise append new_obj to new_obj_list. RESULT new_obj_list]
+            [COMMAND Within the manual traversal branch, assign obj_list to new_obj_list. RESULT obj_list]
+            [COMMAND After the while loop exhausts all_lookups, finish processing; the method returns None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Within the while loop over all_lookups, lookup.prefetch_to is already in done_queries and lookup.queryset is not None.]
+        [LOG "Raised when a lookup path has already been processed with a different queryset; the lookup ordering may need to be adjusted."]
+        [THROW ValueError "ValueError raised for duplicate prefetch lookups with conflicting querysets."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the for level loop over through_attrs, attr_found is False after calling get_prefetcher.]
+        [LOG "Raised when a requested prefetch attribute does not exist on the model."]
+        [THROW AttributeError "AttributeError raised for an invalid prefetch_related attribute path."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the for level loop over through_attrs, level is the last level and prefetcher is None.]
+        [LOG "Raised when the final prefetch path does not resolve to an item that supports prefetching."]
+        [THROW ValueError "ValueError raised when the final prefetch path is not prefetchable."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines the prefetch-capable object and whether the relationship is already fetched for a given instance and attribute pair, returning a 4-tuple." get_prefetcher]
+    [INPUTS]
+        <REF> instance </REF>: object "The object whose relationship attribute is inspected."
+        <REF> through_attr </REF>: string "The name of the relationship attribute used to locate the descriptor, prefetcher, and cache state."
+        <REF> to_attr </REF>: string "The target attribute name; when different from through_attr, it is used for cached-property-aware fetch checks."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A 4-tuple (prefetcher, rel_obj_descriptor, attr_found, is_fetched) containing the prefetch-capable object or None, the relationship descriptor or None, whether through_attr was found, and whether the attribute is already fetched."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set prefetcher to None. RESULT prefetcher]
+            [COMMAND Set is_fetched to False. RESULT is_fetched]
+            [COMMAND Set rel_obj_descriptor by looking up through_attr on instance.__class__ with a default of None, avoiding an instance-level attribute lookup. RESULT rel_obj_descriptor]
+            [COMMAND Set attr_found: if rel_obj_descriptor is None, set it to whether through_attr exists on instance; otherwise set it to True. RESULT attr_found]
+            [COMMAND If rel_obj_descriptor is falsy, skip all prefetch detection and proceed to the return. RESULT branch_status]
+            [COMMAND If rel_obj_descriptor is truthy and has a get_prefetch_queryset method, set prefetcher to rel_obj_descriptor. RESULT prefetcher]
+            [COMMAND If the same truthy descriptor supports get_prefetch_queryset and rel_obj_descriptor.is_cached(instance) is true, set is_fetched to True. RESULT is_fetched]
+            [COMMAND If rel_obj_descriptor is truthy but does not have get_prefetch_queryset, retrieve rel_obj from instance using through_attr. RESULT rel_obj]
+            [COMMAND If the retrieved rel_obj has a get_prefetch_queryset method, set prefetcher to rel_obj. RESULT prefetcher]
+            [COMMAND In the branch where rel_obj_descriptor is truthy but lacks get_prefetch_queryset, if through_attr differs from to_attr and getattr(instance.__class__, to_attr, None) is a cached_property, set is_fetched to whether to_attr is present in instance.__dict__. RESULT is_fetched]
+            [COMMAND In the branch where rel_obj_descriptor is truthy but lacks get_prefetch_queryset, if through_attr differs from to_attr and getattr(instance.__class__, to_attr, None) is not a cached_property, set is_fetched to whether to_attr is present on instance. RESULT is_fetched]
+            [COMMAND In the branch where rel_obj_descriptor is truthy but lacks get_prefetch_queryset, if through_attr equals to_attr, set is_fetched to whether through_attr is present in instance._prefetched_objects_cache. RESULT is_fetched]
+            [COMMAND Return the 4-tuple (prefetcher, rel_obj_descriptor, attr_found, is_fetched). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Runs one level of prefetching for all given instances by materializing related objects, grouping them by the matching attribute value, storing them in the appropriate per-instance cache or attribute, and returning the related objects plus any additional prefetch lookups." prefetch_one_level]
+    [INPUTS]
+        <REF> instances </REF>: list of model instances "The model instances on which the prefetch operation is performed."
+        <REF> prefetcher </REF>: object "The prefetcher object whose get_prefetch_queryset(instances, queryset) method returns the tuple used to build the prefetch."
+        <REF> lookup </REF>: prefetch lookup object "The current lookup object providing get_current_queryset(level), get_current_to_attr(level), prefetch_through, and queryset attributes."
+        <REF> level </REF>: int "Current depth in the prefetch path; used to determine the queryset, to_attr, and whether this level is a leaf."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "Tuple containing the materialized list of related objects and the list of copied additional prefetch lookups."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call prefetcher.get_prefetch_queryset(instances, lookup.get_current_queryset(level)) and unpack the returned six-element tuple into rel_qs, rel_obj_attr, instance_attr, single, cache_name, and is_descriptor. RESULT prefetch_components]
+            [COMMAND Build additional_lookups by applying copy.copy to each element of getattr(rel_qs, '_prefetch_related_lookups', ()); if rel_qs has no such attribute, use the default empty tuple so additional_lookups becomes empty. RESULT additional_lookups]
+            [COMMAND If additional_lookups is truthy, clear the queryset's internal prefetch lookup list by setting rel_qs._prefetch_related_lookups = (). RESULT rel_qs]
+            [COMMAND Materialize rel_qs into a list by evaluating list(rel_qs), and assign it to all_related_objects. RESULT all_related_objects]
+            [COMMAND Initialize rel_obj_cache as an empty dictionary. RESULT rel_obj_cache]
+            [COMMAND For each rel_obj in all_related_objects, compute rel_attr_val = rel_obj_attr(rel_obj), then append rel_obj to the list stored at rel_obj_cache[rel_attr_val], creating it with rel_obj_cache.setdefault(rel_attr_val, []) when absent. RESULT rel_obj_cache]
+            [COMMAND Call lookup.get_current_to_attr(level) and unpack the returned pair into to_attr and as_attr. RESULT lookup_attrs]
+            [COMMAND If the short-circuit condition as_attr and instances is truthy, set model = instances[0].__class__ and attempt to get model._meta.get_field(to_attr); if exceptions.FieldDoesNotExist is raised, do nothing; otherwise the field exists and ValueError is raised. RESULT model]
+            [COMMAND Compute leaf as the boolean result of the expression len(lookup.prefetch_through.split(LOOKUP_SEP)) - 1 == level. RESULT leaf]
+            [COMMAND For each obj in instances, compute instance_attr_val = instance_attr(obj) and set vals = rel_obj_cache.get(instance_attr_val, []). RESULT vals]
+            [COMMAND Within the for loop over instances, if single is true, set val = vals[0] when vals is non-empty else None; then, when as_attr is true setattr(obj, to_attr, val); when as_attr is false and is_descriptor is true setattr(obj, cache_name, val); when as_attr is false and is_descriptor is false store val in obj._state.fields_cache[cache_name]. RESULT obj]
+            [COMMAND Within the for loop over instances, if single is false and as_attr is true, assign the full related-object list vals to obj's to_attr attribute via setattr(obj, to_attr, vals). RESULT obj]
+            [COMMAND Within the for loop over instances, if single is false and as_attr is false, get manager = getattr(obj, to_attr); if leaf is true and lookup.queryset is not None, build qs by calling manager._apply_rel_filters(lookup.queryset), otherwise build qs by calling manager.get_queryset(); then set qs._result_cache = vals, set qs._prefetch_done = True, and assign obj._prefetched_objects_cache[cache_name] = qs. RESULT obj]
+            [COMMAND Return the tuple (all_related_objects, additional_lookups). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During field-conflict validation, as_attr is truthy, instances is non-empty, and model._meta.get_field(to_attr) succeeds without raising exceptions.FieldDoesNotExist.]
+        [LOG "to_attr={} conflicts with a field on the {} model."]
+        [THROW ValueError "The requested to_attr name already exists as a model field, so assigning the prefetched data to that name would be ambiguous."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a list of RelatedPopulator instances from the related_klass_infos entries in klass_info, defaulting to an empty list when that key is absent." get_related_populators]
+    [INPUTS]
+        <REF> klass_info </REF>: dict-like object "Dictionary-like object containing an optional 'related_klass_infos' list value."
+        <REF> select </REF>: object "Selection specification passed to each RelatedPopulator constructor."
+        <REF> db </REF>: object "Database context passed to each RelatedPopulator constructor."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> iterators </REF>: list "List of RelatedPopulator objects created from related_klass_infos."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize iterators as an empty list. RESULT iterators]
+            [COMMAND Retrieve related_klass_infos by calling klass_info.get('related_klass_infos', []), using the stored value unchanged if the key exists and an empty list if the key is absent. RESULT related_klass_infos]
+            [COMMAND For each rel_klass_info in related_klass_infos, construct a RelatedPopulator object using RelatedPopulator(rel_klass_info, select, db). RESULT rel_cls]
+            [COMMAND Within the same for loop over related_klass_infos, append the constructed rel_cls to iterators. RESULT iterators]
+            [COMMAND Return the populated iterators list. RESULT iterators]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

@@ -1,0 +1,110 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: EmailClient
+# Fields: addr, capacity, inbox
+# Calls: clear_inbox→inbox, is_full_with_one_more_email→get_occupied_size, is_full_with_one_more_email→capacity, send_to→clear_inbox
+
+## __init__(addr: any, capacity: any)
+Summary: Initializes a new instance by storing the provided address and capacity as instance fields and creating a fresh empty inbox list owned exclusively by this object.
+#   addr: any — The address used to identify or route this instance; stored by reference with no transformation or validation.
+#   capacity: any — The maximum capacity value governing inbox bounds in future operations; stored directly with no clipping or default.
+1. Assign the parameter addr directly to the instance field self.addr, storing it by reference without transformation, validation, or copying. → self.addr
+2. Assign the parameter capacity directly to the instance field self.capacity, storing it unconditionally without clipping or applying a default. → self.capacity
+3. Create a new empty list literal and bind it to self.inbox, ensuring each instance owns an independent inbox that starts empty and has no dependency on caller input. → self.inbox
+
+## clear_inbox(self: object, size: number)
+Summary: Removes emails from the front of the inbox one at a time in FIFO order, accumulating their sizes, until the total freed space meets or exceeds the requested size or the inbox is exhausted, but exits immediately without any deletion if the address list is empty.
+#   self: object — The object instance holding the inbox list, the addr list, and associated state
+#   size: number — The minimum number of bytes that must be freed from the inbox before the operation stops
+1. Check whether self.addr is empty; if its length equals zero, return immediately without modifying the inbox → early_return_guard
+2. Initialize local variable freed_space to 0 → freed_space
+3. Begin a while loop that continues only while both conditions hold: freed_space is strictly less than size AND self.inbox is non-empty (truthy); short-circuit evaluation means the inbox emptiness check is skipped whenever freed_space >= size → loop_condition
+4. Within the while loop, read the first element of self.inbox (index 0) into local variable email → email
+5. Within the while loop, add email['size'] to freed_space, accumulating the total space recovered so far → freed_space
+6. Within the while loop, delete self.inbox[0], removing the front email from the inbox and shifting remaining emails forward → inbox_after_delete
+7. Repeat the loop condition check; exit the loop when freed_space >= size or self.inbox becomes empty, whichever occurs first → loop_exit
+   ? Return immediately without executing any inbox deletion logic
+   ? The while loop body never executes; the method completes without deleting any emails
+   ? The while loop exits early due to the inbox-empty guard without having reached the size target; no error is raised
+
+## fetch(self: object) → dict or None
+Summary: Returns the first unread message in the inbox, marks it as read in place, and returns None if the inbox is empty or all messages have already been read.
+#   self: object — Instance carrying an inbox list of message dicts, each with at least a 'state' key
+#   → result: dict or None — The first message dict whose state was 'unread' (now mutated to 'read'), or None if no such message exists
+1. Check whether the length of self.inbox equals 0; if so, return None immediately without inspecting any elements → early_exit_empty
+2. Iterate index i from 0 through len(self.inbox) - 1 inclusive using range(len(self.inbox)) → loop_index_i
+3. Within the for loop, test strict string equality: self.inbox[i]['state'] == "unread" → is_unread
+4. Within the for loop, when is_unread is true, mutate self.inbox[i]['state'] to the string "read" in place → state_mutated
+5. Within the for loop, immediately after mutation, return self.inbox[i] to the caller, exiting the method without examining any further elements → return_found_message
+6. After the for loop completes without having returned, return None implicitly (method falls through) → return_none_all_read
+   ? Return None immediately before entering the loop
+   ? Allow the for loop to exhaust all indices 0 through len(self.inbox) - 1 without entering the mutation branch, then fall through to return None
+
+## get_occupied_size(self: object) → integer
+Summary: Iterates over all emails in the inbox and returns the total size occupied by summing each email's size field.
+#   self: object — The instance containing the inbox list of email dictionaries, each with at least a 'size' key
+#   → occupied_size: integer — The total cumulative size of all emails in the inbox, starting from 0
+1. Initialize occupied_size to 0 → occupied_size
+2. For each email in self.inbox, add the value of email["size"] to occupied_size → occupied_size
+3. Return occupied_size → occupied_size
+
+## is_full_with_one_more_email(self: object, size: numeric) → boolean
+Summary: Determines whether adding an item of the given size would cause the container to exceed its capacity, returning true if the resulting occupied size would strictly exceed capacity.
+#   self: object — The container object exposing get_occupied_size() and a capacity attribute
+#   size: numeric — The size of the prospective new item to be added
+#   → result: boolean — True if occupied_size plus size strictly exceeds capacity; False otherwise
+1. Call self.get_occupied_size() and assign the returned value to occupied_size, capturing a snapshot of the container's current occupied size at this moment → occupied_size
+2. Evaluate whether occupied_size + size is strictly greater than self.capacity (exclusive upper bound: equality is not full) → overflow_check
+3. Return True if overflow_check is true, otherwise return False → result
+   ? The condition occupied_size + size > self.capacity evaluates to False; return False, meaning the container is not considered full
+
+## send_to(recv: object, content: string, size: number) → boolean
+Summary: Attempts to deliver an email to a recipient's inbox if there is sufficient capacity, returning true on success or false after clearing the sender's own inbox when the recipient is full.
+#   recv: object — The recipient email account object, expected to have an addr attribute, an inbox list, and an is_full_with_one_more_email(size) method
+#   content: string — The body content of the email to be sent
+#   size: number — The size of the email, used to check inbox capacity and to clear inbox space
+#   → result: boolean — True if the email was successfully appended to the recipient's inbox; False if the recipient's inbox was full and the send was not performed
+1. Check whether the recipient's inbox can accommodate one more email of the given size by calling recv.is_full_with_one_more_email(size) and negating the result; if there is room, proceed into the true branch → inbox_has_space
+2. Capture the current wall-clock time as a formatted string in the pattern YYYY-MM-DD HH:MM:SS → timestamp
+3. Construct an email dictionary with keys sender set to self.addr, receiver set to recv.addr, content set to the content parameter, size set to the size parameter, time set to timestamp, and state set to the literal string 'unread' → email
+4. Append the email dictionary to recv.inbox → append_result
+5. Return True to indicate the email was delivered successfully → return_value
+   ? Call self.clear_inbox(size) to clear space on the sender's own inbox (note: this operates on self, not recv, which may be a design issue worth verifying against the broader class contract)
+   ? Return False to signal that the email was not delivered
+

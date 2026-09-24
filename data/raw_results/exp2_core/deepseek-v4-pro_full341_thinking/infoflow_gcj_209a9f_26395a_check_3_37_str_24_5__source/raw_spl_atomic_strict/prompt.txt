@@ -1,0 +1,492 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include<stdio.h>
+2   char S[101],str[101];
+3   void check(const char *S)
+4   {
+5     int i,j;
+6     int top=0;
+7     for(i=0;S[i]!='\0';i++)
+8     {
+9         if(S[i]=='1')
+10        {
+11            str[top]='(';
+12            ++top;
+13            str[top]='1';
+14            ++top;
+15            str[top]=')';
+16            ++top;
+17        }
+18        else
+19        {
+20        str[top]='0';
+21        ++top;
+22        }
+23    }
+24    str[top]='\0';
+25    top=0;
+26    for(i=0;str[i]!='\0';i++)
+27    {
+28        if(str[i]==')'&& str[i+1]=='(')
+29        {
+30            for(j=i;str[j]!='\0';j++)
+31            {
+32                str[j]=str[j+2];
+33            }
+34            str[j]='\0';
+35        }
+36    }
+37  }
+38  int main(void)
+39  {
+40    int T,cnt=0;
+41    scanf("%d",&T);
+42    while (T!=0)
+43    {
+44      scanf("%s\n",S);
+45      check(S);
+46      ++cnt;
+47      printf("Case    #%d:    %s",cnt,str);
+48      --T;
+49    }
+50    return 0;
+51  }
+```
+
+
+**Question**: Which variable instances have information flow over `(str,24)` in function `check`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: check
+Target source anchor: variable=str, line=24
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: check
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within the for loop over S, if S[i] equals '1', write '(' to str[top], increment top, write '1' to str[top], increment top, write ')' to str[top], and increment top. RESULT str]
+- [COMMAND Within the for loop over S, if S[i] is not '1', write '0' to str[top] and increment top. RESULT str]
+- [COMMAND Initialize top to 0. RESULT top]
+- [COMMAND After the first for loop completes, write the null terminator to str[top], then reset top to 0. RESULT str]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 6: int top=0;
+- line 7: for(i=0;S[i]!='\0';i++)
+- line 9: if(S[i]=='1')
+- line 11: str[top]='(';
+- line 12: ++top;
+- line 13: str[top]='1';
+- line 14: ++top;
+- line 15: str[top]=')';
+- line 16: ++top;
+- line 20: str[top]='0';
+- line 21: ++top;
+- line 24: str[top]='\0';
+- line 25: top=0;
+- line 26: for(i=0;str[i]!='\0';i++)
+- line 28: if(str[i]==')'&& str[i+1]=='(')
+- line 30: for(j=i;str[j]!='\0';j++)
+- line 32: str[j]=str[j+2];
+- line 34: str[j]='\0';
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["top"], "disposition": "inspect_against_official_dependence_definition", "line": 6, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["top"], "roles": ["definition"], "source_identifiers": ["int", "top"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 7, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["S", "for", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 9, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["S", "i", "if"]}
+- {"definitions": ["str"], "disposition": "inspect_against_official_dependence_definition", "line": 11, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["str", "top"], "roles": ["definition", "use"], "source_identifiers": ["str", "top"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 12, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["top"], "roles": ["use"], "source_identifiers": ["top"]}
+- {"definitions": ["str"], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["str", "top"], "roles": ["definition", "use"], "source_identifiers": ["str", "top"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 14, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["top"], "roles": ["use"], "source_identifiers": ["top"]}
+- {"definitions": ["str"], "disposition": "inspect_against_official_dependence_definition", "line": 15, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["str", "top"], "roles": ["definition", "use"], "source_identifiers": ["str", "top"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["top"], "roles": ["use"], "source_identifiers": ["top"]}
+- {"definitions": ["str"], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["str", "top"], "roles": ["definition", "use"], "source_identifiers": ["str", "top"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["top"], "roles": ["use"], "source_identifiers": ["top"]}
+- {"definitions": ["str"], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "target", "reason": "target-chain seed", "relevant_identifiers": ["str", "top"], "roles": ["definition", "use"], "source_identifiers": ["str", "top"]}
+- {"definitions": ["top"], "disposition": "inspect_against_official_dependence_definition", "line": 25, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["top"], "roles": ["definition"], "source_identifiers": ["top"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["str"], "roles": ["use", "control"], "source_identifiers": ["for", "i", "str"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["str"], "roles": ["use", "control"], "source_identifiers": ["i", "if", "str"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["str"], "roles": ["use", "control"], "source_identifiers": ["for", "i", "j", "str"]}
+- {"definitions": ["str"], "disposition": "inspect_against_official_dependence_definition", "line": 32, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["str"], "roles": ["definition"], "source_identifiers": ["j", "str"]}
+- {"definitions": ["str"], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["str"], "roles": ["definition"], "source_identifiers": ["j", "str"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `check`
+- source lines: 3-37
+- source signature: `void check(const char *S)`
+- source content hash: `cdf5d5772282e7af25f2ff075c3c4dadac2550e369d3b9f37781a38fe3cb902d`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```cpp
+   3  void check(const char *S)
+   4  {
+   5    int i,j;
+   6    int top=0;
+   7    for(i=0;S[i]!='\0';i++)
+   8    {
+   9        if(S[i]=='1')
+  10        {
+  11            str[top]='(';
+  12            ++top;
+  13            str[top]='1';
+  14            ++top;
+  15            str[top]=')';
+  16            ++top;
+  17        }
+  18        else
+  19        {
+  20        str[top]='0';
+  21        ++top;
+  22        }
+  23    }
+  24    str[top]='\0';
+  25    top=0;
+  26    for(i=0;str[i]!='\0';i++)
+  27    {
+  28        if(str[i]==')'&& str[i+1]=='(')
+  29        {
+  30            for(j=i;str[j]!='\0';j++)
+  31            {
+  32                str[j]=str[j+2];
+  33            }
+  34            str[j]='\0';
+  35        }
+  36    }
+  37  }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Expands each '1' in the input string S into '(1)' and every non-'1' character into '0' in the global buffer str, then removes adjacent ')(' pairs by shifting the string left." check]
+    [INPUTS]
+        <REF> S </REF>: const char * "Input null-terminated string to be converted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> str </REF>: char[] "Global output buffer containing the expanded and then transformed string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare local integer variable i. RESULT i]
+            [COMMAND Declare local integer variable j. RESULT j]
+            [COMMAND Initialize top to 0. RESULT top]
+            [COMMAND For i starting at 0, while S[i] is not the null terminator, incrementing i by 1 after each iteration, examine each character of S. RESULT i]
+            [COMMAND Within the for loop over S, if S[i] equals '1', write '(' to str[top], increment top, write '1' to str[top], increment top, write ')' to str[top], and increment top. RESULT str]
+            [COMMAND Within the for loop over S, if S[i] is not '1', write '0' to str[top] and increment top. RESULT str]
+            [COMMAND After the first for loop completes, write the null terminator to str[top], then reset top to 0. RESULT str]
+            [COMMAND For i starting at 0, while str[i] is not the null terminator, incrementing i by 1 after each iteration, scan the transformed string. RESULT i]
+            [COMMAND Within the second for loop, if str[i] equals ')' and str[i+1] equals '(' using short-circuit evaluation, set j to i and, while str[j] is not the null terminator, copy str[j+2] into str[j] and increment j; after that inner loop, write the null terminator to str[j]. RESULT str]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

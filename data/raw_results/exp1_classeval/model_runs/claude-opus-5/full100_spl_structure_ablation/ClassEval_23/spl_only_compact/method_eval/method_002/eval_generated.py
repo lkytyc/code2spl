@@ -1,0 +1,80 @@
+import math
+from typing import List
+
+
+class CombinationCalculator:
+    def __init__(self, datas: List[str]):
+        self.datas = datas
+
+    def _select(self, dataIndex: int, resultList: List[str], resultIndex: int, result: List[List[str]]):
+        resultLen = len(resultList)
+        resultCount = resultIndex + 1
+
+        if resultIndex == resultLen - 1:
+            for i in range(dataIndex, len(self.datas) + resultCount - resultLen + 1):
+                resultList[resultIndex] = self.datas[i]
+                result.append(list(resultList))
+            return
+
+        for i in range(dataIndex, len(self.datas) + resultCount - resultLen + 1):
+            resultList[resultIndex] = self.datas[i]
+            self._select(i + 1, resultList, resultIndex + 1, result)
+
+    def count(self, n: int, m: int) -> int:
+        if m == 0 or n == m:
+            return 1
+        numerator = math.factorial(n)
+        factorial_n_minus_m = math.factorial(n - m)
+        factorial_m = math.factorial(m)
+        denominator = factorial_n_minus_m * factorial_m
+        result = numerator // denominator
+        return result
+
+    def count_all(self, n: int):
+        guard_triggered = n < 0 or n > 63
+        if guard_triggered:
+            return False
+        is_not_max_sentinel = n != 63
+        if is_not_max_sentinel:
+            bitmask_result = (1 << n) - 1
+            return bitmask_result
+        else:
+            return float('inf')
+
+    def select(self, m: int) -> List[List[str]]:
+        result = []
+        self._select(0, [None] * m, 0, result)
+        return result
+
+    def select_all(self) -> List[List[str]]:
+        result = []
+        for i in range(1, len(self.datas) + 1):
+            result.extend(self.select(i))
+        return result
+
+import unittest
+
+class CombinationCalculatorTestSelect(unittest.TestCase):
+    def test_select(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(4, 2), 6)
+
+    def test_select_2(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(5, 3), 10)
+
+    def test_select_3(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(6, 6), 1)
+
+    def test_select_4(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(6, 0), 1)
+
+    def test_select_5(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(6, 3), 20)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

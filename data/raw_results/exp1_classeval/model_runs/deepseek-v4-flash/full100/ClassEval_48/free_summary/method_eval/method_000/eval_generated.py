@@ -1,0 +1,52 @@
+import socket
+
+class IpUtil:
+    @staticmethod
+    def is_valid_ipv4(ip):
+        try:
+            socket.inet_pton(socket.AF_INET, ip)
+            return True
+        except (socket.error, ValueError):
+            return False
+
+    @staticmethod
+    def is_valid_ipv6(ip):
+        try:
+            socket.inet_pton(socket.AF_INET6, ip)
+            return True
+        except (socket.error, ValueError):
+            return False
+
+    @staticmethod
+    def get_hostname(ip):
+        try:
+            return socket.gethostbyaddr(ip)[0]
+        except (socket.herror, socket.gaierror, OSError):
+            return None
+
+import unittest
+
+class IpUtilTestIsValidIpv4(unittest.TestCase):
+    def test_is_valid_ipv4_1(self):
+        result = IpUtil.is_valid_ipv4('192.168.0.123')
+        self.assertEqual(result, True)
+
+    def test_is_valid_ipv4_2(self):
+        result = IpUtil.is_valid_ipv4('10.10.10.10')
+        self.assertEqual(result, True)
+
+    def test_is_valid_ipv4_3(self):
+        result = IpUtil.is_valid_ipv4('0.0.0.0')
+        self.assertEqual(result, True)
+
+    def test_is_valid_ipv4_4(self):
+        result = IpUtil.is_valid_ipv4('abc.168.0.123')
+        self.assertEqual(result, False)
+
+    def test_is_valid_ipv4_5(self):
+        result = IpUtil.is_valid_ipv4('256.0.0.0')
+        self.assertEqual(result, False)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

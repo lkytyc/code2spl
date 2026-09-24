@@ -1,0 +1,454 @@
+# FILE: sklearn/ensemble/voting.py
+# CLASS _BaseVoting
+
+[DEFINE_WORKER: "Converts self.estimators into a Bunch object by normalizing it to a dictionary and unpacking it as keyword arguments." named_estimators]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose estimators attribute is converted into a Bunch."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Bunch "A Bunch object containing the estimators as both dictionary entries and accessible attributes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the estimators stored in self.estimators. RESULT raw_estimators]
+            [COMMAND Convert raw_estimators to a dictionary with dict(raw_estimators), normalizing mappings and letting the last value win on duplicate keys. RESULT normalized_estimators]
+            [COMMAND Construct a Bunch by unpacking normalized_estimators as keyword arguments: Bunch(**normalized_estimators). RESULT bunch_result]
+            [COMMAND Return bunch_result as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the weights for estimators whose estimator is not None, or None if the weights attribute is None." _weights_not_none]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> final_result </REF>: list or None "The list of weights whose corresponding estimator is not None, or None if self.weights is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Pair self.estimators and self.weights positionally with zip, and collect w for each (est, w) pair where est[1] is not None; zip stops at the shorter iterable. RESULT filtered_weights]
+            [COMMAND Return filtered_weights. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.weights is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without building the filtered weight list. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects predictions from all fitted estimators for input X and returns them as a transposed NumPy array with samples as rows and estimators as columns." _predict]
+    [INPUTS]
+        <REF> X </REF>: array-like of shape (n_samples, n_features) "Input feature matrix for which each estimator produces predictions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numpy.ndarray of shape (n_samples, n_estimators) "Prediction matrix where each column corresponds to one estimator's predictions for all samples."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each estimator clf in self.estimators_. RESULT clf]
+            [COMMAND For each estimator clf, call clf.predict(X) and collect the prediction array into a list. RESULT predictions_list]
+            [COMMAND Convert predictions_list into a 2D NumPy array using np.asarray. RESULT prediction_array]
+            [COMMAND Transpose prediction_array so that rows correspond to samples and columns correspond to estimators. RESULT result]
+            [COMMAND Return the transposed prediction array. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fit this ensemble estimator by validating its estimator configuration, optional weights, and sample-weight support, then fitting all non-None member estimators in parallel and exposing the fitted estimators in named_estimators_." fit]
+    [INPUTS]
+        <REF> X </REF>: array-like "Training data passed to each underlying estimator."
+        <REF> y </REF>: array-like "Target values passed to each underlying estimator."
+        <REF> sample_weight </REF>: array-like or None "Optional per-sample weights; passed through to underlying estimators that support it."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: object "The fitted estimator instance with self.estimators_ and self.named_estimators_ populated."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept training data X, target values y, and optional sample_weight. RESULT X_y_sample_weight]
+            [COMMAND Validate self.estimators: if self.estimators is None or, when it is not None, len(self.estimators) == 0, the AttributeError exception flow applies. The OR condition short-circuits, so len is not evaluated when self.estimators is None. RESULT estimators_validation]
+            [COMMAND If self.weights is not None, require len(self.weights) == len(self.estimators); otherwise the ValueError exception flow applies. The AND condition short-circuits, so len(self.weights) is not evaluated when self.weights is None. RESULT weights_validation]
+            [COMMAND If sample_weight is not None, iterate in order over each (name, step) pair in self.estimators; for each pair, if has_fit_parameter(step, 'sample_weight') is False, raise ValueError immediately. RESULT sample_weight_support_validation]
+            [COMMAND Transpose self.estimators by unpacking each (name, estimator) pair with zip(*self.estimators), assigning the first elements to names and the second elements to clfs. RESULT names, clfs]
+            [COMMAND Validate the extracted names by calling self._validate_names(names). RESULT validated_names]
+            [COMMAND Compute n_isnone as np.sum([clf is None for _, clf in self.estimators]), counting how many estimators are None. RESULT n_isnone]
+            [COMMAND If n_isnone == len(self.estimators), raise ValueError because all estimators are None; otherwise continue. RESULT non_none_estimator_exists]
+            [COMMAND Fit all non-None estimators in parallel by setting self.estimators_ = Parallel(n_jobs=self.n_jobs)(delayed(_parallel_fit_estimator)(clone(clf), X, y, sample_weight=sample_weight) for clf in clfs if clf is not None). RESULT self.estimators_]
+            [COMMAND Initialize self.named_estimators_ as an empty Bunch. RESULT self.named_estimators_]
+            [COMMAND For each (k, e) pair produced by zip(self.estimators, self.estimators_), set self.named_estimators_[k[0]] = e; note that zip stops when the shorter of self.estimators and self.estimators_ is exhausted. RESULT self.named_estimators_]
+            [COMMAND Return self. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.estimators is None OR len(self.estimators) == 0, with short-circuit evaluation so len is skipped when self.estimators is None]
+        [LOG "Invalid `estimators` attribute, `estimators` should be a list of (string, estimator) tuples"]
+        [THROW AttributeError "Raised when the estimators attribute is missing or empty."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.weights is not None AND len(self.weights) != len(self.estimators), with short-circuit evaluation so len(self.weights) is skipped when self.weights is None]
+        [LOG "Number of `estimators` and weights must be equal; got <len(self.weights)> weights, <len(self.estimators)> estimators"]
+        [THROW ValueError "Raised when weights are provided but their count does not match the number of estimators."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: sample_weight is not None and, while iterating in order over (name, step) in self.estimators, has_fit_parameter(step, 'sample_weight') is False for the current step]
+        [LOG "Underlying estimator '<name>' does not support sample weights."]
+        [THROW ValueError "Raised when sample_weight is provided but an underlying estimator does not support it."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: n_isnone == len(self.estimators), meaning every estimator in the non-empty list is None]
+        [LOG "All estimators are None. At least one is required!"]
+        [THROW ValueError "Raised when no usable, non-None estimator is available."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets parameters for the ensemble estimator by delegating to _set_params with the fixed estimator group name 'estimators' and all supplied keyword arguments, returning the delegate's result." set_params]
+    [INPUTS]
+        <REF> self </REF>: object "The ensemble estimator instance on which set_params is called."
+        <REF> params </REF>: dict "Keyword arguments mapping parameter names to values; these are unpacked and passed to _set_params."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The result returned by _set_params; typically self when the delegate supports method chaining."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the keyword arguments collected in the params mapping. RESULT params]
+            [COMMAND Call self._set_params with the constant string 'estimators' as the first positional argument and all entries from params unpacked as keyword arguments; if params is empty, only 'estimators' is passed. RESULT set_params_result]
+            [COMMAND Return set_params_result to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the ensemble estimator's parameters, including nested estimator parameters when deep is True, by delegating to _get_params for the 'estimators' attribute." get_params]
+    [INPUTS]
+        <REF> deep </REF>: bool "Whether to include nested parameters of the sub-estimators as well."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Dictionary of estimator parameters, with 'estimators' mapping to the estimator list and, when deep is True, additional 'name__parameter' keys for nested estimators."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the internal _get_params helper with the constant string 'estimators' as the attribute name and the deep argument as passed in. RESULT params_dict]
+            [COMMAND Return the resulting parameters dictionary. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS VotingClassifier
+
+[DEFINE_WORKER: "Initializes the ensemble voting classifier by storing the provided estimators, voting strategy, optional weights, parallel job count, and flatten_transform flag as instance attributes." __init__]
+    [INPUTS]
+        <REF> estimators </REF>: list of (str, estimator) tuples "List of (name, estimator) pairs constituting the ensemble; stored unchanged."
+        <REF> voting </REF>: str "Voting strategy, 'hard' or 'soft'; default is 'hard'."
+        <REF> weights </REF>: list or None "Weights applied to classifiers; default is None."
+        <REF> n_jobs </REF>: int or None "Number of jobs for parallel computation; default is None."
+        <REF> flatten_transform </REF>: bool "Whether to flatten transformer output; default is True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the estimators parameter to self.estimators. RESULT self.estimators]
+            [COMMAND Assign the voting parameter to self.voting. RESULT self.voting]
+            [COMMAND Assign the weights parameter to self.weights. RESULT self.weights]
+            [COMMAND Assign the n_jobs parameter to self.n_jobs. RESULT self.n_jobs]
+            [COMMAND Assign the flatten_transform parameter to self.flatten_transform. RESULT self.flatten_transform]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fits a LabelEncoder on the target labels, validates the voting mode and target shape, encodes y, and delegates the actual fitting to the parent estimator with the transformed labels." fit]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix "Training vectors of shape (n_samples, n_features)."
+        <REF> y </REF>: array-like "Target values of shape (n_samples,). Multi-label or multi-output targets are rejected."
+        <REF> sample_weight </REF>: array-like or None "Sample weights of shape (n_samples,), or None for equally weighted samples."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: object "The fitted estimator instance with le_ and classes_ set and underlying estimators fitted by super().fit()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether y is a NumPy array with more than one column in a multi-label or multi-output format; if so, raise NotImplementedError before any fitting occurs. RESULT multilabel_check_passed]
+            [COMMAND Check whether self.voting is exactly 'soft' or 'hard'; if not, raise ValueError with the repr of self.voting in the message. RESULT voting_validation_passed]
+            [COMMAND Create a LabelEncoder, fit it on y, and assign the fitted encoder to self.le_. RESULT self.le_]
+            [COMMAND Assign self.classes_ to the classes_ attribute of the fitted LabelEncoder. RESULT self.classes_]
+            [COMMAND Transform y into encoded integer labels using self.le_.transform(y) and assign the result to transformed_y. RESULT transformed_y]
+            [COMMAND Call super().fit(X, transformed_y, sample_weight) and return its result. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: isinstance(y, np.ndarray) is True and len(y.shape) > 1 and y.shape[1] > 1, meaning y is a multi-label or multi-output target array with more than one column.]
+        [LOG "Multilabel and multi-output classification is not supported."]
+        [THROW NotImplementedError "Raised when y is a NumPy array with more than one column, indicating multi-label or multi-output classification is not supported."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.voting is not equal to 'soft' and is not equal to 'hard'.]
+        [LOG "Voting must be 'soft' or 'hard'; got (voting=%r) with the repr of self.voting substituted in place of %r."]
+        [THROW ValueError "Raised when self.voting is not exactly 'soft' or 'hard'."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Predicts class labels by verifying the fitted state, selecting the soft-vote or hard-vote class index from the estimator predictions, and inverse-transforming the selected indices into original labels." predict]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix of shape (n_samples, n_features) "The input samples for which class labels are predicted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> maj </REF>: array-like of shape (n_samples,) "Predicted class labels after inverse-transforming the selected encoded class indices."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that the estimator is fitted by calling check_is_fitted(self, 'estimators_'). RESULT fitted_ok]
+            [COMMAND Evaluate whether self.voting == 'soft' to select the voting mode. RESULT voting_is_soft]
+            [COMMAND If self.voting == 'soft', compute the soft-vote predicted class indices as maj = np.argmax(self.predict_proba(X), axis=1). RESULT maj]
+            [COMMAND After the voting branch selects maj, convert the encoded class indices to original labels with maj = self.le_.inverse_transform(maj). RESULT maj]
+            [COMMAND Return maj as the final predicted class labels. RESULT maj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If self.voting is not 'soft' (the else branch, corresponding to 'hard' voting).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain raw predictions from the underlying estimators with predictions = self._predict(X). RESULT predictions]
+            [COMMAND Compute the hard-vote predicted class indices with maj = np.apply_along_axis(lambda x: np.argmax(np.bincount(x, weights=self._weights_not_none)), axis=1, arr=predictions). RESULT maj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Aggregates class probability predictions from every fitted estimator in self.estimators_ for input X and returns them as a single NumPy array." _collect_probas]
+    [INPUTS]
+        <REF> X </REF>: array-like "Input samples for which each fitted estimator should produce class probabilities via predict_proba."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numpy.ndarray "Array of predicted class probabilities with shape (n_estimators, n_samples, n_classes) when estimator outputs are shape-compatible."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each fitted estimator clf in self.estimators_. RESULT clf]
+            [COMMAND For the current clf, call clf.predict_proba(X) to obtain that estimator's class probability array. RESULT clf_proba]
+            [COMMAND Collect all per-estimator probability arrays into a temporary Python list. RESULT proba_list]
+            [COMMAND Convert the temporary list of probability arrays to a single array with np.asarray. RESULT result_array]
+            [COMMAND Return the resulting array from the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Predicts class probabilities for input samples X by averaging the collected per-estimator probabilities along axis 0 using the stored non-none weights, after rejecting hard-voting classifiers and verifying the estimator is fitted." _predict_proba]
+    [INPUTS]
+        <REF> X </REF>: array-like "Input samples for which class probabilities are predicted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> avg </REF>: array-like or scalar "Weighted average of the collected probability estimates."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.voting equals the exact string 'hard'. If it does, branch to the exception flow for AttributeError; otherwise continue. RESULT _guard_check]
+            [COMMAND Call check_is_fitted(self, 'estimators_') to verify that the estimator has been fitted. RESULT _fitted_check]
+            [COMMAND Collect probability estimates by calling self._collect_probas(X). RESULT _probas]
+            [COMMAND Compute avg = np.average(_probas, axis=0, weights=self._weights_not_none). RESULT avg]
+            [COMMAND Return avg. RESULT avg]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.voting is equal to the exact string 'hard'.]
+        [LOG "predict_proba is not available when voting is hard; the current value of self.voting is interpolated into the error message."]
+        [THROW AttributeError "Raised because predict_proba is not available for hard-voting classifiers."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the `_predict_proba` attribute of the instance, which is documented as the weighted average class probabilities." predict_proba]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> avg </REF>: array-like "Weighted average probability for each class per sample as documented for `_predict_proba`."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of the `_predict_proba` attribute of `self`. RESULT avg]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Predicts class probabilities or hard class labels for input samples X according to the configured voting mode, flattening soft-voting probabilities when flatten_transform is enabled." transform]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix "Training vectors of shape (n_samples, n_features), where n_samples is the number of samples and n_features is the number of features."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> probabilities_or_labels </REF>: array-like "Class probabilities if voting='soft', or hard class labels predicted by each classifier if voting='hard'. If voting='soft' and flatten_transform=True, the shape is (n_classifiers, n_samples * n_classes); if flatten_transform=False, the shape is (n_classifiers, n_samples, n_classes); if voting='hard', the shape is (n_samples, n_classifiers)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Verify that the estimator has been fitted by calling check_is_fitted with attribute 'estimators_'. RESULT fitted_check]
+            [COMMAND Determine the voting mode from self.voting to decide whether to compute soft-voting probabilities or hard predictions. RESULT voting_mode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.voting == 'soft']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._collect_probas(X) to collect per-class probabilities from all estimators and assign the result to probas. RESULT probas]
+            [COMMAND Within the soft-voting branch, if self.flatten_transform is falsy, return probas immediately without flattening. RESULT probas]
+            [COMMAND Within the soft-voting branch, if self.flatten_transform is truthy, horizontally stack the collected probability arrays with np.hstack(probas) and return the flattened result. RESULT flattened_probas]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.voting != 'soft' (hard voting mode)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._predict(X) to produce hard class labels predicted by each classifier. RESULT hard_predictions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS VotingRegressor
+
+[DEFINE_WORKER: "Initializes the ensemble estimator, optional sample weights, and parallel job count by storing the constructor arguments as instance attributes." __init__]
+    [INPUTS]
+        <REF> estimators </REF>: iterable of (name, estimator) pairs "The collection of named estimators to be stored on the instance."
+        <REF> weights </REF>: array-like or None "Optional sample weights to be stored on the instance; defaults to None."
+        <REF> n_jobs </REF>: int or None "Number of parallel jobs to be stored on the instance; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the estimators argument to self.estimators. RESULT self.estimators]
+            [COMMAND Assign the weights argument to self.weights. RESULT self.weights]
+            [COMMAND Assign the n_jobs argument to self.n_jobs. RESULT self.n_jobs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fits the estimators by delegating to the parent class fit method using the provided training vectors, target values, and optional sample weights." fit]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix "Training vectors, where n_samples is the number of samples and n_features is the number of features."
+        <REF> y </REF>: array-like "Target values for the training samples."
+        <REF> sample_weight </REF>: array-like or None "Sample weights. If None, samples are equally weighted. This is supported only if all underlying estimators support sample weights."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: object "The fitted estimator instance returned by the parent fit method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the parent class fit method with X, y, and sample_weight, capturing the returned estimator as fit_result. RESULT fit_result]
+            [COMMAND Return fit_result. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Predicts regression targets for input samples by averaging the predictions of all fitted estimators, using estimator weights when provided." predict]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix of shape (n_samples, n_features) "The input samples for which to predict regression targets."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> y </REF>: array of shape (n_samples,) "The predicted regression target values, computed as the mean or weighted mean of the fitted estimators' predictions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that the estimator has been fitted by calling check_is_fitted(self, 'estimators_'). RESULT validation_state]
+            [COMMAND Call self._predict(X) to produce a 2D array P of shape (n_samples, n_estimators) holding one prediction per estimator for each sample. RESULT P]
+            [COMMAND Return np.average(P, axis=1, weights=self._weights_not_none), which collapses the estimator axis into a 1D array y of shape (n_samples,); if weights are None this is a simple mean, otherwise it is a weighted mean normalized by the sum of weights. RESULT y]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.estimators_ does not exist because the estimator has not been fitted]
+        [LOG "This estimator instance is not fitted yet. Call 'fit' with appropriate arguments before using this estimator."]
+        [THROW NotFittedError "Raised by check_is_fitted to indicate that the estimator must be fitted before predict is called."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the per-estimator predictions for input samples X after verifying that the estimator has been fitted." transform]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix of shape (n_samples, n_features) "Input samples for which each fitted estimator computes a prediction."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> predictions </REF>: array-like of shape (n_samples, n_classifiers) "Predicted values produced by each estimator for the input samples."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Verify that the estimator is fitted by checking that self has a non-None attribute named 'estimators_' through check_is_fitted. RESULT None]
+            [COMMAND Return the result of self._predict(X) directly to the caller as the prediction output. RESULT predictions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self does not have an attribute named 'estimators_' or the attribute is None]
+        [LOG "check_is_fitted(self, 'estimators_') failed because the estimator is not fitted"]
+        [THROW NotFittedError "Raised when transform is called before the estimator has been fitted."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fits an estimator on X and y, passing sample_weight to the fit call only when it is not None, and returns the fitted estimator." _parallel_fit_estimator]
+    [INPUTS]
+        <REF> estimator </REF>: estimator object "The estimator instance to be fitted."
+        <REF> X </REF>: array-like "Training feature matrix."
+        <REF> y </REF>: array-like "Target values."
+        <REF> sample_weight </REF>: array-like or None "Optional sample weights. Defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> estimator </REF>: estimator object "The same estimator object after fitting, returned to the caller."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether sample_weight is not None. RESULT has_sample_weight]
+            [COMMAND If has_sample_weight is true, call estimator.fit(X, y, sample_weight=sample_weight). RESULT estimator]
+            [COMMAND Return the estimator. RESULT estimator]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: sample_weight is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call estimator.fit(X, y) without sample_weight. RESULT estimator]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

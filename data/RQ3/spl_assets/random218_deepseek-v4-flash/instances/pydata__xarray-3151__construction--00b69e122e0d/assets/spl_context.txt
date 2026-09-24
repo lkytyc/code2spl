@@ -1,0 +1,472 @@
+# FILE: xarray/core/combine.py
+[DEFINE_WORKER: "Determines the concatenation order of tiles from their positions in a nested dataset by building an OrderedDict from inferred tile IDs." _infer_concat_order_from_positions]
+    [INPUTS]
+        <REF> datasets </REF>: nested list "Nested list structure containing tile position data."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> combined_ids </REF>: OrderedDict "Insertion-ordered mapping of inferred tile IDs, preserving traversal order and collapsing duplicate IDs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _infer_tile_ids_from_nested_list with datasets and an empty tuple seed to generate an iterable of inferred tile IDs in traversal order. RESULT inferred_ids]
+            [COMMAND Construct an OrderedDict from inferred_ids to preserve insertion order while collapsing duplicate inferred IDs, and assign it to combined_ids. RESULT combined_ids]
+            [COMMAND Return combined_ids. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively traverses a nested list in depth-first order and yields each non-list leaf value paired with its zero-based index path from the root." _infer_tile_ids_from_nested_list]
+    [INPUTS]
+        <REF> entry </REF>: list[list[obj, ...]] "Nested list structure to traverse; any non-list object is treated as a leaf value."
+        <REF> current_pos </REF>: tuple[int, ...] "Tuple of indices representing the current position in the nested list; use an empty tuple for the root call."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Iterator[tuple[tuple[int, ...], obj]] "An iterator yielding (position, leaf_value) pairs for each leaf reached; can be passed to dict to build a position-to-value dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether entry is an instance of list. RESULT entry_is_list]
+            [COMMAND If entry is a list, enumerate each item with its zero-based index i, recursively call _infer_tile_ids_from_nested_list(item, current_pos + (i,)), and yield each result returned by that recursive call. RESULT recursive_results]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: entry is not a list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Yield the base-case tuple (current_pos, entry) as a leaf result. RESULT leaf_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Infers the order in which datasets should be concatenated along shared coordinate dimensions by comparing coordinate indexes, ranking their first values, and returning an OrderedDict mapping tile-position tuples to datasets along with the ordered concat dimension names." _infer_concat_order_from_coords]
+    [INPUTS]
+        <REF> datasets </REF>: list of xarray.Dataset "Non-empty list of datasets with matching variables, used to infer the concatenation order from their coordinate indexes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> combined_ids </REF>: collections.OrderedDict "OrderedDict mapping inferred tile-position tuples to datasets."
+        <REF> concat_dims </REF>: list of str "Dimension names used to infer the ordering, in the order they were processed and deemed relevant."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize concat_dims as an empty list and tile_ids as a list of empty tuples, one per dataset in datasets. RESULT concat_dims, tile_ids]
+            [COMMAND Set ds0 to the first dataset in datasets. RESULT ds0]
+            [COMMAND For each dimension dim in ds0.dims, check whether dim is also a coordinate variable in ds0. RESULT dim]
+            [COMMAND If dim is not a coordinate variable in ds0, continue to the next dimension without changing concat_dims or tile_ids. RESULT none]
+            [COMMAND Inside the loop body for dim, build indexes = [ds.indexes.get(dim) for ds in datasets]. RESULT indexes]
+            [COMMAND Inside the loop body for dim, if any index in indexes is None, raise ValueError indicating every dimension needs a coordinate for inferring concatenation order. RESULT none]
+            [COMMAND Inside the loop body for dim, if all index values in indexes[1:] equal indexes[0] (or if there is only one dataset), continue to the next dimension because this dimension is a bystander. RESULT none]
+            [COMMAND Inside the loop body for dim, in the branch where not all indexes are equal, append dim to concat_dims. RESULT concat_dims]
+            [COMMAND Inside that branch, if every index in indexes is monotonically increasing, set ascending to True; otherwise, if every index is monotonically decreasing, set ascending to False; otherwise raise ValueError indicating the coordinate variable is neither monotonically increasing nor decreasing on all datasets. RESULT ascending]
+            [COMMAND Inside that branch, if any index in indexes has size zero, raise ValueError indicating size zero dimensions cannot be handled. RESULT none]
+            [COMMAND Inside that branch, build first_items = pd.Index([index.take([0]) for index in indexes]). RESULT first_items]
+            [COMMAND Inside that branch, create series = first_items.to_series(). RESULT series]
+            [COMMAND Inside that branch, compute rank = series.rank(method='dense', ascending=ascending). RESULT rank]
+            [COMMAND Inside that branch, convert rank to zero-based order = rank.astype(int).values - 1. RESULT order]
+            [COMMAND Inside that branch, update tile_ids = [tile_id + (position,) for tile_id, position in zip(tile_ids, order)]. RESULT tile_ids]
+            [COMMAND After the dimension loop, if len(datasets) > 1 and concat_dims is empty, raise ValueError indicating no dimension coordinates were found to order the datasets for concatenation. RESULT none]
+            [COMMAND Build combined_ids = OrderedDict(zip(tile_ids, datasets)), preserving first-insertion order for keys and using the last dataset for any duplicate tile_id. RESULT combined_ids]
+            [COMMAND Return combined_ids and concat_dims. RESULT combined_ids, concat_dims]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During a dimension iteration, any dataset has no coordinate index for dim, so indexes contains None.]
+        [LOG "Every dimension needs a coordinate for inferring concatenation order"]
+        [THROW ValueError "Raised when a dimension that is a coordinate in ds0 is missing a coordinate index in one or more datasets."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During a dimension iteration with non-identical coordinate indexes, the indexes are neither all monotonically increasing nor all monotonically decreasing.]
+        [LOG "Coordinate variable {dim} is neither monotonically increasing nor monotonically decreasing on all datasets"]
+        [THROW ValueError "Raised when coordinate values along a dimension cannot be consistently sorted across all datasets."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During a dimension iteration with non-identical coordinate indexes, after monotonicity has been determined, any index has size zero.]
+        [LOG "Cannot handle size zero dimensions"]
+        [THROW ValueError "Raised when a coordinate index with zero size would prevent reading its first value."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: After all dimensions have been processed, len(datasets) > 1 and concat_dims is empty.]
+        [LOG "Could not find any dimension coordinates to use to order the datasets for concatenation"]
+        [THROW ValueError "Raised when multiple datasets need ordering but no dimension coordinate can be used to infer an order."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines an N-dimensional structure of datasets into one dataset by validating the number of concat dimensions against the tile-ID dimensionality and sequentially applying _combine_all_along_first_dim for each concat dimension." _combine_nd]
+    [INPUTS]
+        <REF> combined_ids </REF>: Dict[Tuple[int, ...], xarray.Dataset] "Mapping from tile-ID tuples to datasets; each key specifies the position in the final combined result."
+        <REF> concat_dims </REF>: sequence of str or None "Dimensions along which datasets should be combined, in order; a dimension name means concatenate along that dimension, while None means merge. Length must equal the tile-ID dimensionality."
+        <REF> data_vars </REF>: str "Pass-through option for the combine operation; defaults to 'all'."
+        <REF> coords </REF>: str "Pass-through option for the combine operation; defaults to 'different'."
+        <REF> compat </REF>: str "Pass-through option for the combine operation; defaults to 'no_conflicts'."
+        <REF> fill_value </REF>: object "Value used to fill missing entries during combination; defaults to dtypes.NA."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> combined_ds </REF>: xarray.Dataset "The single dataset produced by merging or concatenating all input datasets along the specified dimensions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the first key from combined_ids by advancing an iterator over combined_ids.keys(); assign it to example_tile_id. If combined_ids is empty, StopIteration is raised. RESULT example_tile_id]
+            [COMMAND Compute n_dims as the length of example_tile_id. RESULT n_dims]
+            [COMMAND Check whether len(concat_dims) equals n_dims; if the lengths are not equal, raise the ValueError described in exception_flows. RESULT dimension_validation]
+            [COMMAND For each concat_dim in concat_dims in order, call _combine_all_along_first_dim(combined_ids, dim=concat_dim, data_vars=data_vars, coords=coords, compat=compat, fill_value=fill_value) and assign the returned value back to combined_ids. RESULT combined_ids]
+            [COMMAND Extract the sole value from combined_ids.values() into combined_ds via tuple unpacking; this requires combined_ids to contain exactly one value, otherwise ValueError is raised. RESULT combined_ds]
+            [COMMAND Return combined_ds. RESULT combined_ds]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: len(concat_dims) != n_dims]
+        [LOG "concat_dims has length {len(concat_dims)} but the datasets passed are nested in a {n_dims}-dimensional structure"]
+        [THROW ValueError "Raised when the number of concat_dims does not match the dimensionality of the tile-ID keys."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Groups datasets by their first-dimension tile ID, sorts each group deterministically, and combines each group into one dataset using _combine_1d." _combine_all_along_first_dim]
+    [INPUTS]
+        <REF> combined_ids </REF>: Mapping "Ordered mapping from tile IDs to the datasets to be combined."
+        <REF> dim </REF>: str "Dimension along which the datasets are combined."
+        <REF> data_vars </REF>: Collection "Data variables to include when combining the datasets."
+        <REF> coords </REF>: Collection "Coordinates to include when combining the datasets."
+        <REF> compat </REF>: str "Compatibility mode used by _combine_1d when merging dataset variables."
+        <REF> fill_value </REF>: object "Fill value for missing entries during combination; defaults to dtypes.NA."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> new_combined_ids </REF>: dict "Mapping from new tile IDs to the combined dataset produced for each group."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sort combined_ids.items() by _new_tile_id, rebuild the result as an OrderedDict, and assign it to combined_ids. RESULT combined_ids]
+            [COMMAND Create a groupby iterator over combined_ids.items() using _new_tile_id as the grouping key, and assign it to grouped. RESULT grouped]
+            [COMMAND Initialize new_combined_ids as an empty dictionary. RESULT new_combined_ids]
+            [COMMAND For each new_id and corresponding group in grouped, sort the group items into an OrderedDict and assign it to combined_ids. RESULT combined_ids]
+            [COMMAND Within the loop over new_id and group, extract the datasets from combined_ids.values() and assign them to datasets. RESULT datasets]
+            [COMMAND Within the loop over new_id and group, call _combine_1d with datasets, dim, compat, data_vars, coords, and fill_value, and store the result in new_combined_ids[new_id]. RESULT new_combined_ids]
+            [COMMAND Return the new_combined_ids mapping. RESULT new_combined_ids]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines a 1D list of xarray datasets by concatenating along concat_dim when provided, otherwise by merging, and raises a clearer ValueError when concatenation encounters an unexpected variable." _combine_1d]
+    [INPUTS]
+        <REF> datasets </REF>: list of xarray.Dataset "1D list of datasets to combine."
+        <REF> concat_dim </REF>: Hashable or None "Dimension along which to concatenate; if None, merge is used instead."
+        <REF> compat </REF>: str "Merge compatibility mode; defaults to 'no_conflicts'."
+        <REF> data_vars </REF>: str "How to handle data variables during concatenation; defaults to 'all'."
+        <REF> coords </REF>: str "How to handle coordinates during concatenation; defaults to 'different'."
+        <REF> fill_value </REF>: object "Fill value for missing entries during concatenation; defaults to dtypes.NA."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> combined </REF>: xarray.Dataset "The combined dataset returned by concat or merge."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether concat_dim is not None. RESULT concat_dim]
+            [COMMAND In the branch where concat_dim is not None, within the try block, call concat(datasets, dim=concat_dim, data_vars=data_vars, coords=coords, fill_value=fill_value) and assign the result to combined. RESULT combined]
+            [COMMAND Return combined. RESULT combined]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: concat_dim is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the else branch where concat_dim is None, call merge(datasets, compat=compat, fill_value=fill_value) and assign the result to combined. RESULT combined]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within the try block when concat_dim is not None, concat raises ValueError and the error message contains 'encountered unexpected variable'.]
+        [LOG "The ValueError from concat indicates that nested combination encountered an unexpected variable."]
+        [THROW ValueError "Raise a new ValueError chained from the original error, with message: 'These objects cannot be combined using only xarray.combine_nested, instead either use xarray.combine_by_coords, or do it manually with xarray.concat, xarray.merge and xarray.align'."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the try block when concat_dim is not None, concat raises ValueError and the error message does not contain 'encountered unexpected variable'.]
+        [LOG "The original ValueError is re-raised with its traceback preserved."]
+        [THROW ValueError "Re-raise the original ValueError using bare raise."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Unpacks the input pair and returns the tile ID string with its first character removed." _new_tile_id]
+    [INPUTS]
+        <REF> single_id_ds_pair </REF>: iterable of two elements "A pair (tile_id, ds) where tile_id is a string and ds is an arbitrary second value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The tile_id string from the input pair with its first character removed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack single_id_ds_pair into tile_id and ds. RESULT tile_id]
+            [COMMAND Return the substring of tile_id starting at index 1 through the end, discarding the first character. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines a nested collection of Datasets into a single Dataset by guarding against empty input, determining tile IDs from explicit IDs or nested positions, validating the tile shape, and applying _combine_nd along the given dimensions." _nested_combine]
+    [INPUTS]
+        <REF> datasets </REF>: list of Dataset "Nested input Datasets to combine; the nesting structure determines tile order when ids are not supplied."
+        <REF> concat_dims </REF>: list of str "Dimensions along which concatenation or merge operations are applied, matching the nesting depth of datasets."
+        <REF> compat </REF>: str "Compatibility mode used when combining variables and coordinates, such as no_conflicts, equals, identical, or override."
+        <REF> data_vars </REF>: str or list "Specifies which data variables to include in the combination."
+        <REF> coords </REF>: str or list "Specifies which coordinates to include in the combination."
+        <REF> ids </REF>: iterable of hashable "Explicit tile IDs paired positionally with datasets; if falsy, IDs are inferred from the dataset structure."
+        <REF> fill_value </REF>: object "Value used to fill missing entries after concatenation; defaults to dtypes.NA."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> combined </REF>: Dataset "The combined Dataset produced by concatenating or merging the nested input Datasets."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether datasets is empty; if len(datasets) == 0, return Dataset() immediately. RESULT guard_triggered]
+            [COMMAND Determine combined_ids from datasets and ids: if ids is falsy, set combined_ids to _infer_concat_order_from_positions(datasets); otherwise, set combined_ids to OrderedDict(zip(ids, datasets)). RESULT combined_ids]
+            [COMMAND Call _check_shape_tile_ids(combined_ids) to verify that the inferred or supplied tile ID shape is combinable. RESULT shape_check]
+            [COMMAND Call _combine_nd(combined_ids, concat_dims, compat=compat, data_vars=data_vars, coords=coords, fill_value=fill_value) and assign the returned Dataset to combined. RESULT combined]
+            [COMMAND Return combined. RESULT combined]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: len(datasets) == 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return Dataset() as the combined result for empty input. RESULT Dataset()]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Explicitly combines a nested grid of xarray Datasets into one Dataset by applying a succession of concatenate and merge operations along the specified dimensions, normalizing concat_dim to list form before delegating to _nested_combine." combine_nested]
+    [INPUTS]
+        <REF> datasets </REF>: list or nested list of xarray.Dataset "Dataset objects to combine, supplied as a list or nested list with depth equal to the length of concat_dims."
+        <REF> concat_dim </REF>: str, DataArray, Index, list, or None "Dimension or dimensions along which to concatenate variables; None entries specify dimensions along which to merge instead."
+        <REF> compat </REF>: str "String indicating how to compare variables of the same name for merge conflicts; defaults to 'no_conflicts'."
+        <REF> data_vars </REF>: str or list of str "Specifies which data variables to include; defaults to 'all'."
+        <REF> coords </REF>: str or list of str "Specifies which coordinates to include; defaults to 'different'."
+        <REF> fill_value </REF>: scalar "Value used for newly missing values; defaults to dtypes.NA."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> combined </REF>: xarray.Dataset "The combined Dataset produced by the nested concatenation and merge operations."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If concat_dim is a string, a DataArray, or None, wrap concat_dim in a single-element list; otherwise leave concat_dim unchanged. RESULT concat_dim]
+            [COMMAND Call _nested_combine with datasets as the positional argument and keyword arguments concat_dims=concat_dim, compat=compat, data_vars=data_vars, coords=coords, ids=False, fill_value=fill_value, then return the resulting Dataset immediately. RESULT combined]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sorts the elements of the provided iterable in ascending order and returns them as a tuple." vars_as_keys]
+    [INPUTS]
+        <REF> ds </REF>: iterable "The input iterable whose elements are sorted and converted into a tuple."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result_tuple </REF>: tuple "A tuple containing the elements of ds in ascending sorted order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sort the elements of ds in ascending order to produce a list. RESULT sorted_list]
+            [COMMAND Convert sorted_list into a tuple, preserving the sorted order. RESULT result_tuple]
+            [COMMAND Return result_tuple to the caller. RESULT result_tuple]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines a sequence of xarray Datasets into one Dataset by grouping them by their data variables, concatenating each group along inferred dimension coordinates with conflict-handling options, validating that resulting global coordinate indexes are monotonic, and merging the concatenated groups." combine_by_coords]
+    [INPUTS]
+        <REF> datasets </REF>: sequence of xarray.Dataset "Dataset objects to combine along shared dimension coordinates."
+        <REF> compat </REF>: string "Comparison mode for variables of the same name: 'identical', 'equals', 'broadcast_equals', or 'no_conflicts'."
+        <REF> data_vars </REF>: string or list of str "Controls which data variables to include or minimize when concatenating: 'minimal', 'different', 'all', or a list of variable names."
+        <REF> coords </REF>: string or list of str "Controls which coordinates to include or minimize when concatenating: 'minimal', 'different', 'all', or a list of coordinate names."
+        <REF> fill_value </REF>: scalar "Value to use for newly missing values after concatenation or merge."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> combined </REF>: xarray.Dataset "The resulting combined Dataset produced by concatenating groups of datasets and merging them together."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sort the input datasets list by the key function vars_as_keys so that datasets with the same data variables become adjacent. RESULT sorted_datasets]
+            [COMMAND Create a lazy itertools.groupby iterator over sorted_datasets using vars_as_keys as the grouping key. RESULT grouped_by_vars]
+            [COMMAND Initialize an empty list to collect the concatenated dataset groups after multidimensional combining. RESULT concatenated_grouped_by_data_vars]
+            [COMMAND For each group (vars, datasets_with_same_vars) yielded by grouped_by_vars, convert datasets_with_same_vars to a list and call _infer_concat_order_from_coords to infer the concatenation order and concatenation dimensions. RESULT combined_ids, concat_dims]
+            [COMMAND Within the same outer loop iteration, validate the inferred tile ids by calling _check_shape_tile_ids(combined_ids). RESULT none]
+            [COMMAND Within the same outer loop iteration, concatenate the datasets represented by combined_ids using _combine_nd(combined_ids, concat_dims=concat_dims, data_vars=data_vars, coords=coords, fill_value=fill_value) to create a single concatenated dataset. RESULT concatenated]
+            [COMMAND Within the same outer loop iteration, for each dim in concatenated.dims, if dim is present as a coordinate in concatenated, get the index from concatenated.indexes.get(dim) and check whether it is either monotonically increasing or monotonically decreasing; if dim is not present, skip the monotonicity check. RESULT indexes]
+            [COMMAND Within the same outer loop iteration, after all dimensions pass the monotonicity check, append concatenated to concatenated_grouped_by_data_vars. RESULT none]
+            [COMMAND After all groups have been processed, merge the collected concatenated datasets by calling merge(concatenated_grouped_by_data_vars, compat=compat, fill_value=fill_value) and return the merged result. RESULT combined]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Within the monotonicity check, the index for an existing coordinate dimension is neither monotonically increasing nor monotonically decreasing.]
+        [LOG "Resulting object does not have monotonic global indexes along dimension {dim}"]
+        [THROW ValueError "The concatenated result is rejected because one of its global coordinate indexes is not monotonic."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Emits deprecation warnings with migration guidance based on from_openmfds, concat_dim, and dataset properties, then combines the datasets by delegating to _old_auto_combine." auto_combine]
+    [INPUTS]
+        <REF> datasets </REF>: sequence of xarray.Dataset "Dataset objects to merge."
+        <REF> concat_dim </REF>: str or DataArray or Index, optional "Dimension along which to concatenate variables; defaults to '_not_supplied'."
+        <REF> compat </REF>: str, optional "String indicating how to compare variables of the same name for potential conflicts; one of 'identical', 'equals', 'broadcast_equals', or 'no_conflicts'. Defaults to 'no_conflicts'."
+        <REF> data_vars </REF>: str or list of str, optional "Which data variables to concatenate; 'minimal', 'different', 'all', or a list of strings. Defaults to 'all'."
+        <REF> coords </REF>: str or list of str, optional "Which coordinates to concatenate; 'minimal', 'different', 'all', or a list of strings. Defaults to 'different'."
+        <REF> fill_value </REF>: scalar, optional "Value to use for newly missing values. Defaults to dtypes.NA."
+        <REF> from_openmfds </REF>: bool, optional "Indicates whether the call originates from open_mfdataset; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> combined </REF>: xarray.Dataset "The combined dataset returned by _old_auto_combine."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If from_openmfds is falsy, build basic_msg by dedenting the text 'In xarray version 0.13 auto_combine will be deprecated...' and call warnings.warn(basic_msg, FutureWarning, stacklevel=2). RESULT basic_msg]
+            [COMMAND If concat_dim equals the string '_not_supplied', set concat_dim to _CONCAT_DIM_DEFAULT and set message to an empty string; otherwise set message to the dedented text stating that open_mfdataset will no longer accept a concat_dim argument and recommending combine_nested or combine='nested'. RESULT message]
+            [COMMAND If _dimension_coords_exist(datasets) is true, append to message the dedented text about datasets having global dimension coordinates and recommending combine_by_coords or combine='by_coords'; otherwise append the dedented text stating datasets do not have global dimension coordinates and recommending combine_nested or combine='nested'. RESULT message]
+            [COMMAND If _requires_concat_and_merge(datasets) is true, set manual_dims to the result of [concat_dim].append(None), which is None because list.append returns None, then append to message the dedented text formatted with manual_dims so the placeholder becomes 'None'. RESULT message]
+            [COMMAND Call warnings.warn(message, FutureWarning, stacklevel=2) to emit the accumulated deprecation message. RESULT warning_emitted]
+            [COMMAND Return the result of calling _old_auto_combine with datasets, concat_dim=concat_dim, compat=compat, data_vars=data_vars, coords=coords, fill_value=fill_value. RESULT combined]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a collection of datasets has consistent global dimension coordinates by grouping them by data variables and attempting to infer concatenation order for each group." _dimension_coords_exist]
+    [INPUTS]
+        <REF> datasets </REF>: iterable of dataset objects "The datasets to inspect for consistent global dimension coordinates."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if every group's concatenation order can be inferred without a ValueError; False if a ValueError is raised."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sort the input datasets using vars_as_keys as the sort key. RESULT sorted_datasets]
+            [COMMAND Group the sorted datasets with itertools.groupby using vars_as_keys as the grouping key. RESULT grouped_by_vars]
+            [COMMAND Within the try block, iterate over grouped_by_vars; for each group, convert datasets_with_same_vars to a list and call _infer_concat_order_from_coords on that list. RESULT processing_status]
+            [COMMAND If the loop completes without a ValueError, including the empty-datasets case, return True to indicate that global dimension coordinates exist. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If a ValueError is raised while processing any group during the loop.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately, indicating that the datasets do not have consistent global dimension coordinates. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the given datasets require both xarray.concat and xarray.merge by checking if they form more than one group when sorted and grouped by their data variables." _requires_concat_and_merge]
+    [INPUTS]
+        <REF> datasets </REF>: iterable of xarray.Dataset "Iterable of datasets to inspect for grouping by data variables."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "True if the datasets need both concat and merge; False if they form a single group or no datasets are provided."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sort the input datasets using vars_as_keys as the key function, producing a list named sorted_datasets. RESULT sorted_datasets]
+            [COMMAND Create a lazy itertools.groupby iterator over sorted_datasets using vars_as_keys as the key function, yielding consecutive groups with equal data-variable keys. RESULT grouped_by_vars]
+            [COMMAND Consume grouped_by_vars by converting it to a list, compute the number of groups, and return True if the group count is greater than 1; otherwise return False. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Groups datasets by their variable keys and concatenates each group separately along the supplied concat_dim before merging, or merges the original datasets directly when concat_dim is None." _old_auto_combine]
+    [INPUTS]
+        <REF> datasets </REF>: iterable of dataset objects "Datasets to combine."
+        <REF> concat_dim </REF>: hashable or None "Dimension along which to concatenate each group. The sentinel _CONCAT_DIM_DEFAULT is treated as None; when None, datasets are not grouped or concatenated."
+        <REF> compat </REF>: string "Compatibility mode passed to merge; default is 'no_conflicts'."
+        <REF> data_vars </REF>: string or collection "Specification for which data variables to concatenate; default is 'all'."
+        <REF> coords </REF>: string or collection "Specification for which coordinates to concatenate; default is 'different'."
+        <REF> fill_value </REF>: any "Value used to fill missing entries; default is dtypes.NA."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> merged </REF>: dataset "The final merged dataset produced after grouping, concatenation, and merge."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether concat_dim is not None using identity comparison. RESULT concat_dim_is_not_none]
+            [COMMAND In the branch where concat_dim is not None, set dim to None if concat_dim is the module-level sentinel _CONCAT_DIM_DEFAULT; otherwise set dim to concat_dim. RESULT dim]
+            [COMMAND In the branch where concat_dim is not None, sort the input datasets by vars_as_keys and store the sorted list. RESULT sorted_datasets]
+            [COMMAND In the branch where concat_dim is not None, create grouped by applying itertools.groupby to sorted_datasets with key vars_as_keys, so each group contains consecutive datasets sharing the same key. RESULT grouped]
+            [COMMAND In the branch where concat_dim is not None, for each key vars and group iterator group_datasets produced by grouped, convert group_datasets to a list and call _auto_concat(list(group_datasets), dim=dim, data_vars=data_vars, coords=coords, fill_value=fill_value); collect the results into concatenated. RESULT concatenated]
+            [COMMAND After the conditional branch, call merge(concatenated, compat=compat, fill_value=fill_value) and assign the result to merged. RESULT merged]
+            [COMMAND Return merged. RESULT merged]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: concat_dim is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not sort, group, or concatenate; assign the original datasets reference to concatenated. RESULT concatenated]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Concatenates a list of datasets along a supplied or inferred dimension, returning the sole dataset immediately when no concatenation dimension is supplied and only one dataset is present." _auto_concat]
+    [INPUTS]
+        <REF> datasets </REF>: list of xarray Dataset/DataArray objects "Input datasets to concatenate."
+        <REF> dim </REF>: str or None "Dimension name along which to concatenate; inferred when None."
+        <REF> data_vars </REF>: str or sequence "Specifies which data variables to concatenate; defaults to 'all'."
+        <REF> coords </REF>: str or sequence "Specifies which coordinates to concatenate; defaults to 'different'."
+        <REF> fill_value </REF>: object "Value used for filling missing entries when concatenating; defaults to dtypes.NA."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: xarray Dataset/DataArray "The concatenated dataset, or datasets[0] when the early-return path is taken."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the outer guard. If not (len(datasets) == 1 and dim is None), continue in the else path; otherwise follow the alternative early-return flow. RESULT outer_condition_handled]
+            [COMMAND Within the else path, if dim is None, infer the concatenation dimension: set ds0 to datasets[0], set ds1 to datasets[1], initialize concat_dims as set(ds0.dims); if ds0.dims != ds1.dims, remove the dimension mappings present in ds1 and keep the remaining dimension names; if more than one candidate remains, keep only dimensions d where ds0[d].equals(ds1[d]) is False; if exactly one candidate remains, unpack it into dim; otherwise follow the corresponding exception flow. RESULT dim]
+            [COMMAND Return the result of concat(datasets, dim=dim, data_vars=data_vars, coords=coords, fill_value=fill_value). RESULT concat_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: len(datasets) == 1 and dim is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return datasets[0] immediately because there is nothing to combine. RESULT datasets[0]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: After dimension inference and candidate filtering, len(concat_dims) > 1]
+        [LOG "too many different dimensions to concatenate: {concat_dims}"]
+        [THROW ValueError "Raised when more than one dimension remains as a valid concatenation dimension, making the inference ambiguous."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: After dimension inference and candidate filtering, len(concat_dims) == 0]
+        [LOG "cannot infer dimension to concatenate: supply the ``concat_dim`` argument explicitly"]
+        [THROW ValueError "Raised when no dimension can be inferred for concatenation, so concat_dim must be supplied explicitly."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

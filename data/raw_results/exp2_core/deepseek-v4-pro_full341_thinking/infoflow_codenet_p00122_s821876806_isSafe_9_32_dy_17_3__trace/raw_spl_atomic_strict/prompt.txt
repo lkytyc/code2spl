@@ -1,0 +1,595 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Is there information flow from `(varA,lineA)` to `(varB,lineB)`? If so, provide one feasible trace.", respond with a JSON object:
+
+- If information flow exists:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["varOrExpr", lineNumber            /*, "use" optional */],
+      "to":   ["varOrExpr", lineNumber            /*, "use" optional */],
+      "type": "data" | "control"
+    },
+    // … additional edges
+  ]
+}
+```
+- If no information flow exists, omit the Trace field:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+- Every trace edge must specify "from", "to" (each may include a third "use" element when the line is a conditional statement that only reads without redefining/updating the value), and "type".
+- **We do not consider loop in the trace**.
+
+
+A **trace** represents a **transitive chain of direct flows** arise from compositions of **direct** implicit or explicit flows, where each edge represents a **direct implicit flow** (through control dependence) or a **direct explicit flow** edge (through data dependence).
+
+
+You only need to provide **one** valid trace if you conclude a information flow exists, even if multiple possible chains exist. 
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Is there information flow from `(balance,4)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. Here we focus on `(status,7)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+Hence, A transitive of flow of direct implicit or explicit flows forms a information flow trace.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["balance", 4],
+      "to":   ["balance", 5],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 5],
+      "to":   ["balance", 6, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 6, "use"],
+      "to":   ["status", 7],
+      "type": "control"
+    },
+    {
+      "from": ["status", 7],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+ 
+- The edge from line 6 to `(status,7)` is through control dependence and therefore with a type of "control". 
+- Line 6 only reads the value of `balance` without defining/updating it. So it is marked with `"use"`. 
+- You only need to provide **one** valid chain if you conclude a the information flow exists. 
+
+
+#### Example Question 1.2
+
+Is there information flow from  `(flag,3)` to `(limit,9)`? If so, provide a trace.
+
+**Analysis**
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from either `(status,7)` (if line 6’s condiation evaluates to `true`) or on the original `(status,2)` (if not) to `(limit,9)`. 
+- Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 6 is treated as being evaluated to both possibly true and possibly false.
+  - If line 6 is true, `(limit,9)` depends on `(status,7)`. 
+    - Line 7: `(status,7)` doesn't have any data dependence as it is assigned with a constant number. The execution of line 7 is control-dependent on the condition in line 6.
+    - Line 6: the condition at line 6 directly reads from `(balance,5)`. 
+    - Line 5: `(balance,5)` is updated based on the previous value of `balance` in line 4.
+    - Line 4: `(balance,4)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+  - If line 6 is not true, `(limit,9)` depends on `(status,2)`. 
+    - Line 2: `(status,2)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+- Therefore, among all the possible paths, there is no transitive (indirect) chain of implicit or explicit flow from `(flag,3)` to `(limit,9)`. The information flow doesn't exist.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+#### Example Question 1.3
+
+Is there information flow from  `(status,2)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`.
+- Line 9: `(limit,9)` reads `status`, o there is a direct explicit flow from either `(status,7)`, or the original `(status,2)`, to `(limit,9)`.
+- Similar to the above example, line 6 is possibly evaluated to true or false.
+- If line 6 evaluates to `true`, there is a direct explicit flow from `(status,7)` to `(limit,9)`, which directly data-dependent on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (status,7) -> (limit,9) -> (transaction,10)`.
+- If line 6 evaluates to `false`, `(limit,9)` has a direct data dependence on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (limit,9) -> (transaction,10)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["status", 2],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Is there information flow from  `(size,2)` to `(summary,17)`? If so, provide a trace.
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. We focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`.
+- Line 2: `size` is initialized with a constant number. It is not guarded with any conditions. 
+- Therefore, there is an transitive trace of direct implicit/excplit flows from `(size,2)` to `(summary,17)`.
+
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["size", 2],
+      "to":   ["size", 9, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["size", 9, "use"],
+      "to":   ["j", 14],
+      "type": "control"
+    },
+    {
+      "from": ["j", 14],
+      "to":   ["summary", 17],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Is there information flow from  `(j,5)` to `(score,11)`? If so, provide a trace. 
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`.
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop).
+- If line 11 reads `j` from line 5, it forms a tansitive explicit flow trace: `(j,5) -> (score,11)`.
+- If line 11 reads `j` from line 14, it forms a tansitive explicit flow trace: `(j,5) -> (j,14) -> (score,11)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["j", 5],
+      "to":   ["score", 11],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+
+#### Example Question 2.3:
+Is there information flow from  `(j,1)` to `(i,15)`? If so, provide a trace.
+
+**Analysis**: 
+- Line 15: `(i,15)` updates `i` based on its previous value. So there is a direct explicit flow from either `(i,4)` (initialization) or itself (loop-carried) to `(i,15)`. But we do not consider loop-carried dependencies across iterations in this analysis. So we focus on `(i,4)`.
+- The execution of line 15 is conditional on the while loop at line 9.
+- Line 9: `while i < size` depends on `i` and `size`. It directly reads from `(i,4)` (or possibly `(i,15)`) and `(size,2)`.
+- Both `(i,4)` and `(size,2)` are initialized with constants and are not themselves control-dependent on any earlier values or branches.
+- There is no use of `(j,1)` in the computation of `(i,15)`, nor does `(j,1)` influence whether line 15 executes.
+- Therefore, there is no transitive flow, explicit or implicit, from `(j,1)` to `(i,15)`.
+
+
+**Output**: 
+```json
+{
+  "InformationFlow": false
+}
+```
+
+
+#### Example Question 2.4:
+Is there information flow from  `(val,1)` to `(last,16)`? If so, provide a trace.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8 (or by the loop updates in line 10). Under static analysis, multiple update sites may contribute. We conservatively pick one valid trace (line 8).
+- Line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7.
+- Therefore, there exists a trace from `(val,1)` to `(last,16)`, and the edge from line 7 to `(arr,8)` is through implicit and explicit flows. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["val", 1],
+      "to":   ["val", 7, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["val", 7, "use"],
+      "to":   ["arr", 8],
+      "type": "control"
+    },
+    {
+      "from": ["arr", 8],
+      "to":   ["last", 16],
+      "type": "data"
+    }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   import queue
+2   import copy
+3   def makeList(splist,n):
+4       for i in range(n):
+5           springs=[]
+6           springs.append(splist[i*2:i*2+2])
+7           springs.append(i)
+8           yield springs
+9   def isSafe(wfs,safe):
+10      while not wfs.empty():
+11          flog=wfs.get()
+12          flogArea=[]
+13          spn=flog[1]+1
+14          for i in range(-1,2):
+15              for j in [-2,2]:
+16                  dx=flog[0][0]+j
+17                  dy=flog[0][1]+i
+18                  if dx>=0 and dx<10 and dy>=0 and dy<10:
+19                      flogArea.append([[dx,dy],spn])
+20          for j in range(-1,2):
+21              for i in [-2,2]:
+22                  dx=flog[0][0]+j
+23                  dy=flog[0][1]+i
+24                  if dx>=0 and dx<10 and dy>=0 and dy<10:
+25                      flogArea.append([[dx,dy],spn])
+26          for i in range(len(safe[spn])):
+27              if safe[spn][i] in flogArea:
+28                  if spn==9:
+29                      return True
+30                  if spn<9:
+31                      wfs.put(safe[spn][i])
+32      return False
+33  while True:
+34      fx,fy=map(int,input().split())
+35      if fx==0 and fy==0:
+36          break
+37      n=int(input())
+38      splist=list(map(int,input().split()))
+39      safe=[]
+40      k=makeList(splist,n)
+41      for spring in k:
+42          temp=[]
+43          for i in range(-1,2):
+44              for j in range(-1,2):
+45                  dw=spring[0][0]+i
+46                  dh=spring[0][1]+j
+47                  if dw>=0 and dw<10 and dh>=0 and dh<10:
+48                      temp.append([[dw,dh],spring[1]])
+49          safe.append(temp)
+50      wfs=queue.Queue()
+51      first=[[fx,fy],-1]
+52      wfs.put(first)
+53      if isSafe(wfs,safe):
+54          print("OK")
+55      else:
+56          print("NA")
+```
+
+
+**Question**: Is there information flow from `(flogArea,19)` to `(dy,17)` in function `isSafe`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: isSafe
+Target source anchor: variable=dy, line=17
+Trace source anchor: variable=flogArea, line=19
+Attached SPL owners: isSafe
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Build the horizontal-distance-2 part of the neighborhood: for each i in {-1, 0, 1} and each j in {-2, 2}, compute dx = flog[0][0] + j and dy = flog[0][1] + i; if 0 <= dx < 10 and 0 <= dy < 10, append [[dx, dy], spn] to flogArea. RESULT flogArea]
+- [COMMAND Build the vertical-distance-2 part: for each j in {-1, 0, 1} and each i in {-2, 2}, compute dx = flog[0][0] + j and dy = flog[0][1] + i; if 0 <= dx < 10 and 0 <= dy < 10, append [[dx, dy], spn] to flogArea. RESULT flogArea]
+- [COMMAND While wfs is not empty, dequeue one item as flog. RESULT flog]
+- [COMMAND Set spn to flog[1] + 1 and reset flogArea to an empty list for this iteration. RESULT spn]
+- [COMMAND For each index i in range(len(safe[spn])), test whether safe[spn][i] is exactly equal to one of the entries in flogArea. RESULT matching_indices]
+- [COMMAND For each matched index i, if spn < 9, put safe[spn][i] back into wfs without deduplicating; if spn > 9, ignore that match and continue scanning. RESULT wfs_updated]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 10: while not wfs.empty():
+- line 11: flog=wfs.get()
+- line 12: flogArea=[]
+- line 13: spn=flog[1]+1
+- line 14: for i in range(-1,2):
+- line 15: for j in [-2,2]:
+- line 16: dx=flog[0][0]+j
+- line 17: dy=flog[0][1]+i
+- line 18: if dx>=0 and dx<10 and dy>=0 and dy<10:
+- line 20: for j in range(-1,2):
+- line 21: for i in [-2,2]:
+- line 22: dx=flog[0][0]+j
+- line 23: dy=flog[0][1]+i
+- line 24: if dx>=0 and dx<10 and dy>=0 and dy<10:
+- line 26: for i in range(len(safe[spn])):
+- line 27: if safe[spn][i] in flogArea:
+- line 28: if spn==9:
+- line 30: if spn<9:
+- line 31: wfs.put(safe[spn][i])
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 10, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["empty", "not", "wfs", "while"]}
+- {"definitions": ["flog"], "disposition": "inspect_against_official_dependence_definition", "line": 11, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["flog"], "roles": ["definition"], "source_identifiers": ["flog", "get", "wfs"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 12, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["flogArea"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["flog"], "roles": ["use"], "source_identifiers": ["flog", "spn"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 14, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["for", "i", "in", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 15, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "in", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["flog"], "roles": ["use"], "source_identifiers": ["dx", "flog", "j"]}
+- {"definitions": ["dy"], "disposition": "inspect_against_official_dependence_definition", "line": 17, "position": "target", "reason": "target-chain seed", "relevant_identifiers": ["dy", "flog", "i"], "roles": ["definition", "use"], "source_identifiers": ["dy", "flog", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["dy"], "roles": ["use", "control"], "source_identifiers": ["and", "dx", "dy", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "in", "j", "range"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["for", "i", "in"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["flog"], "roles": ["use"], "source_identifiers": ["dx", "flog", "j"]}
+- {"definitions": ["dy"], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["dy", "flog", "i"], "roles": ["definition", "use"], "source_identifiers": ["dy", "flog", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["dy"], "roles": ["use", "control"], "source_identifiers": ["and", "dx", "dy", "if"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["for", "i", "in", "len", "range", "safe", "spn"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 27, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i"], "roles": ["use", "control"], "source_identifiers": ["flogArea", "i", "if", "in", "safe", "spn"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "spn"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "spn"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["i"], "roles": ["use"], "source_identifiers": ["i", "put", "safe", "spn", "wfs"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `isSafe`
+- source lines: 9-32
+- source signature: `def isSafe(wfs,safe):`
+- source content hash: `d07f436fa9db04c7ea286e4536b104265b1db5623d5190ce58eafffde7c30fcf`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```python
+   9  def isSafe(wfs,safe):
+  10      while not wfs.empty():
+  11          flog=wfs.get()
+  12          flogArea=[]
+  13          spn=flog[1]+1
+  14          for i in range(-1,2):
+  15              for j in [-2,2]:
+  16                  dx=flog[0][0]+j
+  17                  dy=flog[0][1]+i
+  18                  if dx>=0 and dx<10 and dy>=0 and dy<10:
+  19                      flogArea.append([[dx,dy],spn])
+  20          for j in range(-1,2):
+  21              for i in [-2,2]:
+  22                  dx=flog[0][0]+j
+  23                  dy=flog[0][1]+i
+  24                  if dx>=0 and dx<10 and dy>=0 and dy<10:
+  25                      flogArea.append([[dx,dy],spn])
+  26          for i in range(len(safe[spn])):
+  27              if safe[spn][i] in flogArea:
+  28                  if spn==9:
+  29                      return True
+  30                  if spn<9:
+  31                      wfs.put(safe[spn][i])
+  32      return False
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Expands each dequeued safe-position entry into a fixed 12-cell stage-neighborhood on a 10x10 grid and enqueues matching stage-indexed entries until either a stage-9 entry is reached (returning True) or the worklist is exhausted (returning False)." isSafe]
+    [INPUTS]
+        <REF> wfs </REF>: worklist/queue supporting empty(), get(), and put() "Worklist of pending items; each item is [position, stage] where position is [x, y] and stage is an integer."
+        <REF> safe </REF>: stage-indexed collection "safe[spn] is a list of candidate items shaped [position, stage] for stage spn."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if a dequeued expansion reaches a matching item at stage 9; False if the outer while loop ends without reaching stage 9."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Use the initial contents of wfs as the pending worklist and keep processing while wfs is not empty. RESULT wfs]
+            [COMMAND While wfs is not empty, dequeue one item as flog. RESULT flog]
+            [COMMAND Set spn to flog[1] + 1 and reset flogArea to an empty list for this iteration. RESULT spn]
+            [COMMAND Build the horizontal-distance-2 part of the neighborhood: for each i in {-1, 0, 1} and each j in {-2, 2}, compute dx = flog[0][0] + j and dy = flog[0][1] + i; if 0 <= dx < 10 and 0 <= dy < 10, append [[dx, dy], spn] to flogArea. RESULT flogArea]
+            [COMMAND Build the vertical-distance-2 part: for each j in {-1, 0, 1} and each i in {-2, 2}, compute dx = flog[0][0] + j and dy = flog[0][1] + i; if 0 <= dx < 10 and 0 <= dy < 10, append [[dx, dy], spn] to flogArea. RESULT flogArea]
+            [COMMAND For each index i in range(len(safe[spn])), test whether safe[spn][i] is exactly equal to one of the entries in flogArea. RESULT matching_indices]
+            [COMMAND For each matched index i, if spn < 9, put safe[spn][i] back into wfs without deduplicating; if spn > 9, ignore that match and continue scanning. RESULT wfs_updated]
+            [COMMAND When wfs becomes empty and no stage-9 match has returned, return False. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: During the safe[spn] scan, a matched index i has spn exactly equal to 9.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Immediately return True, ending the function and skipping all remaining iterations. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

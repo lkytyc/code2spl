@@ -1,0 +1,642 @@
+# FILE: sympy/functions/elementary/miscellaneous.py
+# CLASS IdentityFunction
+
+# CLASS MinMaxBase
+
+[DEFINE_WORKER: "Collapses redundant arguments for Min/Max constructors by removing numerically dominated subexpressions, recursively deleting or replacing repeated symbolic terms in nested same/opposite-type functions, and factoring common elements from opposite-type argument groups." _collapse_arguments]
+    [INPUTS]
+        <REF> cls </REF>: class "The Min or Max class used as the parent context."
+        <REF> args </REF>: iterable "The arguments to collapse; typically a tuple or list of SymPy expressions."
+        <REF> assumptions </REF>: dict "Additional keyword assumptions; not used in the body of the method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> args </REF>: list "A list of collapsed arguments with redundant subexpressions removed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Guard for empty args: if args is empty, return the original args unchanged; otherwise keep the non-empty args for normalization. RESULT args]
+            [COMMAND Normalize argument order: call ordered(args) and convert the result to a list, rebinding args to that list. RESULT args]
+            [COMMAND Choose the opposite class: set other to Max when cls is Min, otherwise set other to Min. RESULT other]
+            [COMMAND Evaluate whether the first normalized argument is numeric by setting numeric_guard to args[0].is_number; the subsequent numeric-redundancy operations are guarded by numeric_guard. RESULT numeric_guard]
+            [COMMAND If numeric_guard is true, initialize mins and maxs as fresh empty lists and set sifted to the tuple (mins, maxs). RESULT sifted]
+            [COMMAND If numeric_guard is true, for each argument i and for each Min/Max node v produced by walking i with walk(i, Min, Max), when v.args[0].is_comparable is true, append v to mins when v is a Min instance and to maxs when v is a Max instance, equivalently using the boolean result of isinstance(v, Max) as the index into sifted. RESULT sifted]
+            [COMMAND If numeric_guard is true, set small to Min.identity, then for every collected Min node i, if i.args[0] is a number and the strict comparison (i.args[0] < small) is literally True, update small to i.args[0]. RESULT small]
+            [COMMAND If numeric_guard is true, set big to Max.identity, then for every collected Max node i, if i.args[0] is a number and the strict comparison (i.args[0] > big) is literally True, update big to i.args[0]. RESULT big]
+            [COMMAND If numeric_guard is true, scan the leading numeric prefix of args: when cls is Min, stop at the first non-number and update small to args[i] whenever (args[i] < small) is literally True; when cls is Max, stop at the first non-number and update big to args[i] whenever (args[i] > big) is literally True. RESULT small_or_big]
+            [COMMAND If numeric_guard is true, initialize T to None; if cls is Min and small differs from Min.identity, set other to Max and T to small; otherwise if cls is Max and big differs from Max.identity, set other to Min and T to big. RESULT T]
+            [COMMAND If numeric_guard is true and T is not None, iterate over each argument a in args; when a is an instance of other and the strict condition ((a.args[0] > T) when other is Max, or (a.args[0] < T) when other is Min) is literally True, replace that argument a with cls.identity. RESULT args]
+            [COMMAND Define the recursive helper do(ai, a): return ai unchanged if ai is not a Min or Max node; if a is absent from ai.args, rebuild ai.func from recursively processed arguments with evaluate=False; if a is present and ai is an instance of cls, rebuild ai.func from recursively processed arguments excluding a with evaluate=False; otherwise, when ai is the opposite-type node containing a, return a. RESULT do]
+            [COMMAND For each index i and argument a in the enumerated args, replace the later tail args[i+1:] with the list produced by applying do(ai, a) to every ai in that tail, so each earlier argument is recursively removed or replaced in all following subexpressions. RESULT args]
+            [COMMAND If len(args) > 1, scan for a common factor among arguments that are instances of other: initialize common to None, remove to [], and sets to []; for each other instance a, compute s=set(a.args), set common to s when it is None otherwise intersect common with s, and break before appending if common becomes empty; if common is empty or len(args) <= 1, leave args unchanged for this section. RESULT common_scan]
+            [COMMAND If common is non-empty, remove the common elements from every recorded set, discard empty remainder sets, rebuild each remaining set as other(*s, evaluate=False), remove the original participating other arguments from args in reverse index order using reversed(remove), then build oargs starting with cls(*sets) when sets is non-empty, extend oargs with the common elements, and append other(*oargs, evaluate=False) to args. RESULT args]
+            [COMMAND Return the final collapsed args list. RESULT args]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Lazily filters and normalizes an argument sequence by rejecting non-comparable arguments, aborting on the zero element, skipping identity elements, and flattening one level of same-class expressions." _new_args_filter]
+    [INPUTS]
+        <REF> cls </REF>: class "The algebraic class providing the zero, identity, and func attributes used for filtering."
+        <REF> arg_sequence </REF>: Iterable[Expr] "The sequence of expression arguments to be filtered, normalized, and yielded."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: Generator[Expr, None, None] "A lazy generator yielding validated, non-zero, non-identity arguments, with same-class arguments flattened one level."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a lazy generator state over arg_sequence so each arg is processed only when requested. RESULT generator_state]
+            [COMMAND For each arg in arg_sequence, apply the pre-filter validity guard: reject if arg is not an instance of Expr, or arg.is_real is exactly False, or arg.is_number is truthy and arg.is_comparable is falsy, using Python short-circuit evaluation. RESULT validation_check]
+            [COMMAND If validation fails, route to the ValueError exception flow and stop the generator. RESULT value_error]
+            [COMMAND For each validated arg, check whether arg equals cls.zero; if equal, route to the ShortCircuit exception flow and stop the entire iteration. RESULT zero_check]
+            [COMMAND For each validated nonzero arg, determine which alternative branch applies: identity skip, same-class flattening, or ordinary yield. RESULT arg_category]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After validation and zero check, arg equals cls.identity.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the outer for loop over arg_sequence, continue to the next arg without yielding anything. RESULT next_arg]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After validation and zero check, arg is not cls.identity and arg.func equals cls.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the outer for loop over arg_sequence, iterate over arg.args and yield each inner x without re-running the pre-filter, zero, identity, or flattening checks. RESULT flattened_args]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After validation and zero check, arg is not cls.identity and arg.func does not equal cls.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the outer for loop over arg_sequence, yield arg unchanged. RESULT normal_arg]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: arg is not an instance of Expr, or arg.is_real is exactly False, or both arg.is_number is truthy and arg.is_comparable is falsy.]
+        [LOG "ValueError: The argument '%s' is not comparable."]
+        [THROW ValueError "Raised to reject a non-comparable argument and stop the generator."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: arg equals cls.zero after validation.]
+        [LOG "ShortCircuit raised with the zero argument to abort the iteration."]
+        [THROW ShortCircuit "Raised to abort the entire loop immediately when the zero/absorbing element is encountered."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sequentially builds the set of representative local zero values by comparing each new value to existing zeros using object identity and cls._is_connected, replacing an existing zero when the connection is True or equals cls, and otherwise adding the value only when no connection was found." _find_localzeros]
+    [INPUTS]
+        <REF> cls </REF>: class "Class object that exposes the _is_connected method used for connection checks."
+        <REF> values </REF>: iterable "Iterable of candidate values to be allocated into localzeros."
+        <REF> options </REF>: dict "Arbitrary keyword options accepted by the method but not used in its logic."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> localzeros </REF>: set "Set of representative local zero values after processing all input values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize localzeros as an empty set. RESULT localzeros]
+            [COMMAND For each value v in the input values, process v against the current localzeros collection. RESULT v]
+            [COMMAND Within the outer loop for each v, set is_newzero to True. RESULT is_newzero]
+            [COMMAND Within the outer loop for each v, create a stable snapshot localzeros_ = list(localzeros) for iteration. RESULT localzeros_]
+            [COMMAND Within the outer loop for each v, for each z in localzeros_, process the identity and connection checks. RESULT z]
+            [COMMAND Within the inner loop for each z, if id(v) == id(z), set is_newzero to False. RESULT is_newzero]
+            [COMMAND Within the inner loop for each z, when id(v) != id(z), compute con = cls._is_connected(v, z). RESULT con]
+            [COMMAND Within the inner loop for each z, if con is truthy, set is_newzero to False. RESULT is_newzero]
+            [COMMAND Within the inner loop for each z, if con is truthy and (con is True or con == cls), remove z from localzeros and add v to localzeros, replacing the existing zero. RESULT localzeros]
+            [COMMAND Within the inner loop for each z, if con is truthy but is neither True nor cls, leave localzeros unchanged and keep is_newzero as False. RESULT localzeros]
+            [COMMAND After the inner loop for each v, if is_newzero is still True, add v to localzeros. RESULT localzeros]
+            [COMMAND After processing all values, return localzeros. RESULT localzeros]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether x and y are connected by testing equality and relational comparisons with Max and Min, then conservatively simplifying x-y to zero and retrying once." _is_connected]
+    [INPUTS]
+        <REF> cls </REF>: class "The class on which this classmethod is invoked; it is not used directly in the comparison logic."
+        <REF> x </REF>: object "First SymPy expression or value to test for connection."
+        <REF> y </REF>: object "Second SymPy expression or value to test for connection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Returns True if x and y are equal, returns a Max or Min object when a decisive relational result is found, or returns False after two unresolved iterations."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import factor_terms from sympy.core.exprtools for use in simplification. RESULT factor_terms]
+            [COMMAND Define the inner helper hit(v, t, f), which returns t when v is truthy, f when v is falsy, and None when v is a relational expression. RESULT hit]
+            [COMMAND Enter a for loop over i in range(2), allowing at most two attempts; the loop counter i is unused. RESULT loop]
+            [COMMAND Within the for loop, if x equals y, return True immediately. RESULT true_result]
+            [COMMAND Within the for loop, call hit(x >= y, Max, Min); if the returned value is not None, return it immediately. RESULT r1]
+            [COMMAND Within the for loop, call hit(y <= x, Max, Min); if the returned value is not None, return it immediately. RESULT r2]
+            [COMMAND Within the for loop, call hit(x <= y, Min, Max); if the returned value is not None, return it immediately. RESULT r3]
+            [COMMAND Within the for loop, call hit(y >= x, Min, Max); if the returned value is not None, return it immediately. RESULT r4]
+            [COMMAND Within the for loop, if none of the above returned, conservatively simplify by setting x to factor_terms(x - y) and y to S.Zero, then start the next iteration. RESULT simplified_state]
+            [COMMAND After completing two iterations without an early return, return False. RESULT false_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the derivative of a SymPy function with respect to s by applying the chain rule to its arguments, summing self.fdiff(i) times each nonzero argument derivative." _eval_derivative]
+    [INPUTS]
+        <REF> self </REF>: object "The SymPy function instance whose arguments are stored in self.args and whose partial derivative with respect to the i-th argument is obtained through fdiff."
+        <REF> s </REF>: Symbol "The variable with respect to which the derivative is computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Add "A SymPy Add expression equal to the sum of self.fdiff(i) * a.diff(s) over arguments a with nonzero derivative; returns S.Zero when l is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize i to 0. RESULT i]
+            [COMMAND Initialize l to an empty list. RESULT l]
+            [COMMAND For each argument a in self.args in order, increment i by 1 so that i is the current 1-based argument index. RESULT i]
+            [COMMAND Within the for loop over a in self.args, compute da as a.diff(s), the derivative of a with respect to s. RESULT da]
+            [COMMAND Within the for loop over a in self.args, if da is S.Zero (identity comparison), continue to the next argument, skipping the fdiff call and the append operation. RESULT none]
+            [COMMAND Within the for loop over a in self.args, when da is not S.Zero, attempt to obtain df by calling self.fdiff(i). RESULT df]
+            [COMMAND Within the for loop over a in self.args, if self.fdiff(i) raises ArgumentIndexError, set df to Function.fdiff(self, i) instead. RESULT df]
+            [COMMAND Within the for loop over a in self.args, when da is not S.Zero, append df * da to l. RESULT l]
+            [COMMAND After the loop, return Add(*l), summing all collected terms (Add() if l is empty, which yields S.Zero). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rewrites a Max or Min expression as an Abs-based expression by taking the average of args[0] and self.func(*args[1:]) and adding or subtracting half their absolute difference depending on whether self is Max." _eval_rewrite_as_Abs]
+    [INPUTS]
+        <REF> self </REF>: Max or Min instance "The expression on which the rewrite method is called; its type selects whether the Abs-based form is a sum or a difference."
+        <REF> args </REF>: tuple "Positional arguments for the rewrite; args[0] is the first operand and args[1:] are passed to self.func."
+        <REF> kwargs </REF>: dict "Unused keyword arguments accepted for compatibility with the rewrite protocol."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: SymPy expression "The original Max or Min expression rewritten in terms of Abs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import Abs from sympy.functions.elementary.complexes and bind it to the local name Abs. RESULT Abs]
+            [COMMAND Evaluate s = (args[0] + self.func(*args[1:])) / 2, calling self.func with the remaining positional arguments. RESULT s]
+            [COMMAND Evaluate d = abs(args[0] - self.func(*args[1:])) / 2, making a new independent call to self.func with the remaining positional arguments. RESULT d]
+            [COMMAND For the Max branch (isinstance(self, Max) is true), set rewrite_candidate to s + d. RESULT rewrite_candidate]
+            [COMMAND Return rewrite_candidate.rewrite(Abs). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: isinstance(self, Max) is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set rewrite_candidate to s - d. RESULT rewrite_candidate]
+            [COMMAND Return rewrite_candidate.rewrite(Abs). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Evaluates each argument in self.args using evalf(prec, **options), then invokes self.func with the evaluated arguments as positional arguments and returns the invocation result." evalf]
+    [INPUTS]
+        <REF> self </REF>: object "Bound method instance providing self.args as an iterable of argument objects and self.func as the callable to invoke."
+        <REF> prec </REF>: int/None "Precision value forwarded to each argument's evalf method; defaults to None."
+        <REF> options </REF>: dict "Keyword options forwarded to each argument's evalf method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The result returned by self.func."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extract self.args from the current instance and treat it as an iterable of argument objects. RESULT args_iterable]
+            [COMMAND For each element a in args_iterable, call a.evalf(prec, **options) and accumulate the return values in order into evaluated_args; if args_iterable is empty, evaluated_args is empty. RESULT evaluated_args]
+            [COMMAND Call self.func with evaluated_args unpacked as positional arguments. RESULT func_result]
+            [COMMAND Return func_result as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Max
+
+[DEFINE_WORKER: "Computes a Heaviside-based derivative indicator by returning Heaviside(selected argument minus the maximum of the remaining arguments), with a direct special case for exactly two arguments and an ArgumentIndexError for invalid 1-based argument indices." fdiff]
+    [INPUTS]
+        <REF> self </REF>: object "The object whose args tuple is used as the list of arguments."
+        <REF> argindex </REF>: int "The 1-based index of the argument for which the derivative indicator is computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result_expr </REF>: SymPy expression "Heaviside(selected - Max(remaining arguments)) when n != 2, or Heaviside(selected - the other argument) when n == 2."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import Heaviside from sympy. RESULT Heaviside]
+            [COMMAND Set n equal to the number of elements in self.args. RESULT n]
+            [COMMAND Check whether argindex is in the valid 1-based inclusive range (0 < argindex and argindex <= n). If it is not, enter the ArgumentIndexError exception flow. RESULT index_valid]
+            [COMMAND Decrement argindex by 1 to convert it from a 1-based index to a 0-based index. RESULT argindex]
+            [COMMAND After index conversion, check whether n is exactly 2; if so, follow the corresponding alternative flow; otherwise continue with the general n != 2 case. RESULT n_is_two]
+            [COMMAND For the general n != 2 case, build newargs as a tuple containing every self.args[i] for i in range(n) except i == argindex. RESULT newargs]
+            [COMMAND For the general n != 2 case, return Heaviside(self.args[argindex] - Max(*newargs)). RESULT heaviside_expression]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: n == 2 after argindex has been converted to a 0-based index]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return Heaviside(self.args[argindex] - self.args[1 - argindex]). RESULT heaviside_expression]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: argindex is not in the inclusive 1-based range from 1 to n, i.e. not (0 < argindex and argindex <= n)]
+        [LOG "ArgumentIndexError(self, argindex) is raised because the supplied argindex is outside the valid range."]
+        [THROW ArgumentIndexError "Raised when the supplied argindex is not within the valid 1-based inclusive range from 1 to n."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rewrites a function by summing, for each argument j, j times the product of Heaviside step functions evaluated at differences from all other arguments i, so that with distinct arguments the result equals the maximum argument." _eval_rewrite_as_Heaviside]
+    [INPUTS]
+        <REF> self </REF>: object "The instance of the class on which the rewrite method is invoked."
+        <REF> args </REF>: tuple "The arguments used to evaluate the rewrite expression; each element is a symbolic or numeric value."
+        <REF> kwargs </REF>: dict "Additional keyword arguments, accepted for compatibility but unused in this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: sympy expression "The rewritten expression: Add over every j of j times the product of Heaviside(j - i) for all i in args where i != j."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import Heaviside from sympy. RESULT heaviside_func]
+            [COMMAND For each j in args, build the inner list of Heaviside(j - i) for every i in args where i is not equal to j. RESULT heaviside_terms_by_j]
+            [COMMAND Within the outer comprehension over j, multiply all elements of the corresponding heaviside_terms_by_j using Mul. RESULT heaviside_products_by_j]
+            [COMMAND Within the same outer comprehension over j, multiply the corresponding heaviside_product by j. RESULT weighted_terms_by_j]
+            [COMMAND Collect all weighted_term values from the outer comprehension into a single list. RESULT weighted_terms]
+            [COMMAND Pass the collected weighted_terms to Add to form the sum. RESULT sum_expression]
+            [COMMAND Return sum_expression. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If args is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of Add() with no arguments, which is the additive identity 0. RESULT empty_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If args contains exactly one element x]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return x, since the inner product over zero non-equal elements evaluates to the multiplicative identity 1. RESULT single_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether all arguments are real and, if so, rewrites the min/max expression as a Piecewise via _minmax_as_Piecewise('>=', *args), otherwise returns None." _eval_rewrite_as_Piecewise]
+    [INPUTS]
+        <REF> self </REF>: object "The class instance on which this method is called."
+        <REF> args </REF>: tuple "The arguments whose realness is checked and which are passed to _minmax_as_Piecewise."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted by the method signature; not used by the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Piecewise or None "A Piecewise expression if all args are real, otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute is_real by evaluating all(i.is_real for i in args), reading the is_real attribute of each argument and short-circuiting at the first falsey value; if args is empty, all() returns True. RESULT is_real]
+            [COMMAND If is_real is True, return the result of calling _minmax_as_Piecewise('>=', *args), preserving the original argument order and the '>=' comparison relation. RESULT piecewise_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_real is False, meaning at least one argument is not real]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the conditional return and complete the method without returning an explicit value, producing None as the implicit result. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the fuzzy OR of the is_positive values of all elements in self.args, indicating whether at least one element is considered positive." _eval_is_positive]
+    [INPUTS]
+        <REF> self </REF>: object "Object containing the args collection to be iterated; each element is expected to expose an is_positive attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: fuzzy_boolean "Fuzzy disjunction of the is_positive values of all elements in self.args; usually the maximum truth value, or False/0 if self.args is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each element a in self.args in order. RESULT a]
+            [COMMAND For each a, read a.is_positive as a fuzzy truth value and produce it lazily for the generator expression. RESULT fuzzy_values]
+            [COMMAND Aggregate all produced fuzzy truth values with fuzzy_or; if the generator yields no values, use the identity value for fuzzy OR, usually False or 0, otherwise return the maximum truth value. RESULT aggregated_result]
+            [COMMAND Return the aggregated_result as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the fuzzy OR of the is_nonnegative flags of all elements in self.args, yielding True if any is nonnegative, False if all are negative, and None if some flag is unknown and none is True." _eval_is_nonnegative]
+    [INPUTS]
+        <REF> self </REF>: object "Instance whose args iterable provides the elements to test."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool_or_None "Fuzzy OR result: True if any argument is nonnegative, False if all are negative, None if at least one is unknown and none is True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a generator over each element a in self.args yielding a.is_nonnegative. RESULT flags]
+            [COMMAND Call fuzzy_or with the generated flags, applying three-valued OR semantics: return True if any flag is True, otherwise return None if any flag is None, otherwise return False. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether all arguments are negative by applying fuzzy tri-state AND logic to the is_negative flag of each element in self.args, returning True when self.args is empty." _eval_is_negative]
+    [INPUTS]
+        <REF> self </REF>: object "Object that exposes an args iterable; each element in args must provide an is_negative attribute that is True, False, or None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean or null "True if every is_negative value is True or the iterable is empty; False if any is_negative value is False; None if no value is False but at least one value is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a lazy generator that yields a.is_negative for each a in self.args, reading each attribute only as the generator is consumed. RESULT is_negative_values]
+            [COMMAND Return the result of applying fuzzy_and to is_negative_values; fuzzy_and returns True if all yielded values are True, False if any yielded value is False, None if no yielded value is False and at least one is None, and True if is_negative_values is empty. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Min
+
+[DEFINE_WORKER: "Computes a Heaviside step-function expression that indicates whether the selected argument is strictly smaller than every other argument, with a special ordered comparison when there are exactly two arguments." fdiff]
+    [INPUTS]
+        <REF> self </REF>: object "Object whose args attribute holds the ordered arguments used for length, indexing, and the ArgumentIndexError constructor."
+        <REF> argindex </REF>: int "One-based index of the argument to differentiate with respect to; valid range is 1 through len(self.args) inclusive."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: sympy expression "Heaviside expression: for n == 2, Heaviside(self.args[1 - argindex] - self.args[argindex]); otherwise, Heaviside(Min(*newargs) - self.args[argindex]), where argindex is zero-based and newargs excludes that argument."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the Heaviside function from sympy. RESULT Heaviside]
+            [COMMAND Set n to the number of elements in self.args. RESULT n]
+            [COMMAND Check the outer guard 0 < argindex and argindex <= n; if it is true, continue with the valid argindex path, otherwise branch to the invalid-index exception flow. RESULT argindex_valid]
+            [COMMAND In the valid argindex path, decrement argindex by 1 to convert it to a zero-based index. RESULT argindex]
+            [COMMAND In the valid argindex path, when n is not 2, build newargs as a tuple containing self.args[i] for i in range(n) whenever i != argindex. RESULT newargs]
+            [COMMAND In the valid argindex path, when n is not 2, return Heaviside(Min(*newargs) - self.args[argindex]) and stop. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The valid argindex path is active and n == 2.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return Heaviside(self.args[1 - argindex] - self.args[argindex]) and stop, using the already decremented zero-based argindex. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The outer guard 0 < argindex and argindex <= n is false.]
+        [LOG "Raising ArgumentIndexError for the out-of-range argindex."]
+        [THROW ArgumentIndexError "Indicates that argindex is not in the inclusive 1-based range [1, len(self.args)]."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rewrites the current expression as a sum over its positional arguments, where each argument j is multiplied by the product of Heaviside(i - j) for every other argument i, thereby encoding the original expression using Heaviside step functions." _eval_rewrite_as_Heaviside]
+    [INPUTS]
+        <REF> self </REF>: object "The SymPy expression instance on which the rewrite is invoked."
+        <REF> args </REF>: tuple "Positional arguments collected into a tuple; these are the values bound to the loop variables j and i in the returned expression."
+        <REF> kwargs </REF>: dict "Keyword arguments accepted for rewrite dispatch compatibility; not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: SymPy expression "An Add expression whose terms are j * Mul(Heaviside(i - j) for i in args if i != j). Empty Add evaluates to 0 and empty Mul evaluates to 1."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the Heaviside function from sympy into the local scope. RESULT heaviside_func]
+            [COMMAND For each element j in the tuple args, build an inner list by iterating over each element i in args and including Heaviside(i - j) only when i != j. RESULT inner_factors_for_j]
+            [COMMAND Multiply all elements of the inner list with sympy Mul; if the inner list is empty, Mul with no arguments evaluates to 1. RESULT product_for_j]
+            [COMMAND Multiply the sympy product_for_j by the corresponding element j to form the term j * product_for_j. RESULT term_for_j]
+            [COMMAND Collect all generated terms term_for_j into one list and sum them with sympy Add; if the list is empty, Add with no arguments evaluates to 0. Preserve any Heaviside(0) instances that arise from duplicate equal values according to the active Heaviside convention. RESULT rewritten_expression]
+            [COMMAND Return the rewritten_expression as the result of the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether every positional argument is real and, if so, rewrites the operation as a Piecewise expression using _minmax_as_Piecewise with '<='; otherwise returns None." _eval_rewrite_as_Piecewise]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is called; used for method binding but not explicitly referenced in the body."
+        <REF> args </REF>: tuple "Positional arguments whose is_real attributes are checked and which are unpacked into the _minmax_as_Piecewise call when all are real."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted by the signature; unused by the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Piecewise or None "The result of _minmax_as_Piecewise('<=', *args) if all positional arguments have a truthy is_real attribute; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate all(i.is_real for i in args), short-circuiting on the first falsey is_real attribute and returning True vacuously if args is empty; assign the resulting boolean to is_real. RESULT is_real]
+            [COMMAND If is_real is True, call _minmax_as_Piecewise('<=', *args) and return its result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_real is False, meaning at least one element of args has a falsey is_real attribute.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the _minmax_as_Piecewise call and return None implicitly. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Aggregates the is_positive flags of all elements in self.args using fuzzy_and and returns the combined truthy or fuzzy result." _eval_is_positive]
+    [INPUTS]
+        <REF> self </REF>: object "Instance that provides the iterable attribute args."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean-like "The aggregated result of fuzzy_and over the is_positive values of self.args."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the iterable attribute self.args from the current instance. RESULT args_iterable]
+            [COMMAND For each element a in args_iterable, evaluate a.is_positive and yield the boolean-like value as a generator sequence. RESULT positive_flags]
+            [COMMAND Call fuzzy_and with positive_flags as its iterable argument, allowing fuzzy_and to aggregate the values into a single truthy or fuzzy result, and return that result to the caller. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the fuzzy conjunction of the is_nonnegative flags of every element in self.args, with an empty args sequence yielding True." _eval_is_nonnegative]
+    [INPUTS]
+        <REF> self </REF>: object "Object instance exposing the args iterable attribute, whose elements are tested for nonnegativity."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: fuzzy_truth_value "Fuzzy logical AND of all a.is_nonnegative flags: True if all are true, False if any is false, None if no false but some flag is unknown, and True for an empty self.args."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a lazy generator by iterating over each element a in self.args and evaluating a.is_nonnegative for that element. RESULT nonnegative_flags]
+            [COMMAND Apply fuzzy_and to nonnegative_flags and return the resulting fuzzy conjunction, treating an empty generator as the identity value True. RESULT result_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether any argument is known to be negative by applying fuzzy OR to the is_negative flags of all arguments in self.args." _eval_is_negative]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose args attribute is inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool or None "True if any argument is known to be negative, False if all are not negative, or None if the result is unknown under fuzzy three-valued logic."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.args to obtain the collection of arguments. RESULT args_collection]
+            [COMMAND Iterate over each argument a in args_collection. RESULT argument]
+            [COMMAND Evaluate a.is_negative for the current argument and yield the resulting flag. RESULT negative_flag]
+            [COMMAND Collect all yielded negative_flag values into a generator sequence. RESULT negative_flag_sequence]
+            [COMMAND Call fuzzy_or with negative_flag_sequence, combining the flags with fuzzy three-valued OR semantics: returns True if any flag is True, False if all flags are False, and None if any flag is None with no True flag. RESULT fuzzy_or_result]
+            [COMMAND Return fuzzy_or_result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a SymPy Piecewise expression for the minimum or maximum of a set of arguments by pairing each argument with the conjunction of its relational comparisons against all later arguments." _minmax_as_Piecewise]
+    [INPUTS]
+        <REF> op </REF>: symbol or string "The relational operator used for comparisons, such as '<=' for minimum or '>=' for maximum."
+        <REF> args </REF>: tuple "The variadic tuple of expressions over which the min or max piecewise expression is constructed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Piecewise "A SymPy Piecewise expression that evaluates to the minimum or maximum of the supplied arguments."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the Piecewise class from sympy.functions.elementary.piecewise, binding it locally as Piecewise. RESULT Piecewise]
+            [COMMAND Initialize an empty list ec to hold tuples that will be passed to Piecewise. RESULT ec]
+            [COMMAND For each index i and argument a in enumerate(args) starting from index 0, execute the outer loop body over the arguments in order. RESULT outer_loop]
+            [COMMAND Within the outer loop over i and a, initialize a new empty list c to collect relational comparisons for the current argument a. RESULT c]
+            [COMMAND Within the outer loop over i and a, for each j from i+1 to len(args)-1 inclusive, append Relational(a, args[j], op) to c. RESULT c]
+            [COMMAND After the inner loop completes, append the tuple (a, And(*c)) to ec. If c is empty, And() is the vacuous conjunction and is logically true. RESULT ec]
+            [COMMAND After the outer loop completes, return Piecewise(*ec) as the constructed piecewise expression. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the principal square root of arg by constructing a SymPy Pow expression with exponent one half, respecting the evaluate flag for evaluated or unevaluated output." sqrt]
+    [INPUTS]
+        <REF> arg </REF>: Any SymPy expression or numeric value "The expression whose principal square root is to be computed; no explicit sympify is performed because Pow handles it."
+        <REF> evaluate </REF>: bool or None "Whether to evaluate or simplify the resulting Pow expression. If None, the value is taken from global_evaluate."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sqrt_result </REF>: SymPy expression (Pow) "The principal square root of arg, represented as Pow(arg, S.Half), either evaluated or unevaluated depending on evaluate."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a SymPy Pow expression with base arg, exponent S.Half, and evaluation flag evaluate to compute the principal square root of arg; SymPy applies automatic simplifications when evaluate is true and returns an unevaluated Pow when evaluate is false. RESULT sqrt_result]
+            [COMMAND Return sqrt_result as the function result. RESULT sqrt_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the principal cube root of arg as arg raised to the rational power 1/3, respecting the evaluate flag for automatic evaluation." cbrt]
+    [INPUTS]
+        <REF> arg </REF>: Any SymPy expression or number "The input value whose principal cube root is computed."
+        <REF> evaluate </REF>: Optional[bool] "Controls whether the generated Pow expression is evaluated; if None, the global evaluation setting is used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Pow (SymPy expression) "The principal cube root of arg, represented as Pow(arg, Rational(1, 3), evaluate=evaluate)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct the principal cube root by creating a Pow expression with base arg, rational exponent 1/3, and evaluation flag set to evaluate; if evaluate is None, use the global evaluation setting to determine whether automatic evaluation occurs. RESULT cube_root_expr]
+            [COMMAND Return the constructed Pow expression as the result of cbrt. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the k-th n-th root of arg, defaulting to the principal root when k is zero, using SymPy's Pow and Mul with optional evaluation control." root]
+    [INPUTS]
+        <REF> arg </REF>: Any "Base of the root; a SymPy expression, number, or other value acceptable to Pow."
+        <REF> n </REF>: Any "Root index or degree; sympified before use, so it may be an integer, rational, symbol, string, or SymPy expression."
+        <REF> k </REF>: int "Zero-based index selecting the k-th n-th root; defaults to 0, which selects the principal root."
+        <REF> evaluate </REF>: bool or None "Whether to evaluate the resulting expression; None defers to global_evaluate."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: SymPy expression "The requested root: Pow(arg, 1/n) when k is zero, otherwise Mul(Pow(arg, S.One/n), S.NegativeOne**(2*k/n))."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sympify n by assigning n = sympify(n), replacing the original argument with its SymPy representation. RESULT n]
+            [COMMAND When k is false in Python's boolean context, return the principal n-th root as Pow(arg, 1/n, evaluate=evaluate), passing evaluate through to preserve evaluation behavior. RESULT principal_root]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: k is truthy in Python's boolean context, meaning the k-th n-th root is requested instead of the principal root.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the k-th n-th root as Mul(Pow(arg, S.One/n, evaluate=evaluate), S.NegativeOne**(2*k/n), evaluate=evaluate). RESULT kth_root]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the real nth root of arg when n is supplied by choosing the standard root for n = 1 or n = -1, a sign-preserving real root for real arg with odd n, and otherwise the default root; when n is omitted, it rewrites every power of a negative base with exponent 1/odd in the sympified arg into the corresponding negative root." real_root]
+    [INPUTS]
+        <REF> arg </REF>: SymPy expression or sympifyable object "Expression whose real nth root is requested, or which is normalized when n is omitted."
+        <REF> n </REF>: optional integer, SymPy expression, or None "Root order. If None, the function skips the piecewise branch and applies the n1pow transformation to the sympified arg."
+        <REF> evaluate </REF>: optional bool or None "Whether evaluation should be performed on root and multiplication expressions; None defers to global evaluation behavior."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: SymPy expression "The piecewise real-root expression for a supplied n, or the transformed expression rv.xreplace(n1pow) when n is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import Abs, im, and sign from sympy.functions.elementary.complexes and Piecewise from sympy.functions.elementary.piecewise. RESULT imports_available]
+            [COMMAND In the default path where n is None, sympify arg and assign the resulting expression to rv. RESULT rv]
+            [COMMAND Define n1pow as a Transform whose replacement lambda maps each matching power x to -(-x.base)**x.exp, and whose predicate is: x is a Pow, x.base is negative, x.exp is Rational, x.exp.p == 1, and x.exp.q is odd, evaluated with short-circuit and. RESULT n1pow_rule]
+            [COMMAND Apply the n1pow transformation to rv with rv.xreplace(n1pow) and return the resulting expression. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: n is not None (Python identity check, not equality with None)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a Piecewise with three ordered cases: first, when Eq(n, 1) or Eq(n, -1), use root(arg, n, evaluate=evaluate); second, when And(Eq(im(arg), 0), Eq(Mod(n, 2), 1)), use Mul(sign(arg), root(Abs(arg), n, evaluate=evaluate), evaluate=evaluate); third, as the default True case, use root(arg, n, evaluate=evaluate). RESULT piecewise_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

@@ -1,0 +1,132 @@
+class MetricsCalculator:
+    """
+    The class calculates precision, recall, F1 score, and accuracy based on predicted and true labels.
+    """
+
+    def __init__(self):
+        """
+        Initialize the number of all four samples to 0
+        """
+        self.true_positives = 0
+        self.false_positives = 0
+        self.false_negatives = 0
+        self.true_negatives = 0
+
+    def update(self, predicted_labels, true_labels):
+        """
+        Update the number of all four samples(true_positives, false_positives, false_negatives, true_negatives)
+        :param predicted_labels: list, predicted results
+        :param true_labels: list, true labels
+        :return: None, change the number of corresponding samples
+        >>> mc = MetricsCalculator()
+        >>> mc.update([1, 1, 0, 0], [1, 0, 0, 1])
+        (self.true_positives, self.false_positives, self.false_negatives, self.true_negatives) = (1, 1, 1, 1)
+        """
+        tp = fp = fn = tn = 0
+        for pred, true in zip(predicted_labels, true_labels):
+            if pred == 1 and true == 1:
+                tp += 1
+            elif pred == 1 and true == 0:
+                fp += 1
+            elif pred == 0 and true == 1:
+                fn += 1
+            else:
+                tn += 1
+        self.true_positives = tp
+        self.false_positives = fp
+        self.false_negatives = fn
+        self.true_negatives = tn
+
+    def precision(self, predicted_labels, true_labels):
+        """
+        Calculate precision
+        :param predicted_labels: list, predicted results
+        :param true_labels: list, true labels
+        :return: float
+        >>> mc = MetricsCalculator()
+        >>> mc.precision([1, 1, 0, 0], [1, 0, 0, 1])
+        0.5
+        """
+        self.update(predicted_labels, true_labels)
+        denom = self.true_positives + self.false_positives
+        return self.true_positives / denom if denom != 0 else 0.0
+
+    def recall(self, predicted_labels, true_labels):
+        """
+        Calculate recall
+        :param predicted_labels: list, predicted results
+        :param true_labels: list, true labels
+        :return: float
+        >>> mc = MetricsCalculator()
+        >>> mc.recall([1, 1, 0, 0], [1, 0, 0, 1])
+        0.5
+        """
+        self.update(predicted_labels, true_labels)
+        denom = self.true_positives + self.false_negatives
+        return self.true_positives / denom if denom != 0 else 0.0
+
+    def f1_score(self, predicted_labels, true_labels):
+        """
+        Calculate f1 score, which is the harmonic mean of precision and recall
+        :param predicted_labels: list, predicted results
+        :param true_labels: list, true labels
+        :return: float
+        >>> mc = MetricsCalculator()
+        >>> mc.f1_score([1, 1, 0, 0], [1, 0, 0, 1])
+        0.5
+        """
+        p = self.precision(predicted_labels, true_labels)
+        r = self.recall(predicted_labels, true_labels)
+        denom = p + r
+        return 2 * p * r / denom if denom != 0 else 0.0
+
+    def accuracy(self, predicted_labels, true_labels):
+        """
+        Calculate accuracy
+        :param predicted_labels: list, predicted results
+        :param true_labels: list, true labels
+        :return: float
+        >>> mc = MetricsCalculator()
+        >>>mc.accuracy([1, 1, 0, 0], [1, 0, 0, 1])
+        0.5
+        """
+        self.update(predicted_labels, true_labels)
+        total = self.true_positives + self.false_positives + self.false_negatives + self.true_negatives
+        return (self.true_positives + self.true_negatives) / total if total != 0 else 0.0
+
+import unittest
+
+class MetricsCalculatorTestAccuracy(unittest.TestCase):
+    def test_accuracy_1(self):
+        mc = MetricsCalculator()
+        temp = mc.accuracy([1, 1, 0, 0], [1, 0, 0, 1])
+        self.assertEqual(temp, 0.5)
+
+    def test_accuracy_2(self):
+        mc = MetricsCalculator()
+        temp = mc.accuracy([1, 1, 2, 0], [1, 0, 0, 1])
+        self.assertAlmostEqual(temp, 0.3333333333333333)
+
+    def test_accuracy_3(self):
+        mc = MetricsCalculator()
+        temp = mc.accuracy([1, 1, 0, 1], [1, 0, 0, 1])
+        self.assertEqual(temp, 0.75)
+
+    def test_accuracy_4(self):
+        mc = MetricsCalculator()
+        temp = mc.accuracy([1, 1, 0, 0], [1, 1, 0, 1])
+        self.assertEqual(temp, 0.75)
+
+    def test_accuracy_5(self):
+        mc = MetricsCalculator()
+        temp = mc.accuracy([1, 1, 0, 0], [1, 0, 1, 1])
+        self.assertEqual(temp, 0.25)
+
+    def test_accuracy_6(self):
+        mc = MetricsCalculator()
+        temp = mc.accuracy([], [])
+        self.assertEqual(temp, 0.0)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

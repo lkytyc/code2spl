@@ -1,0 +1,65 @@
+# FILE: django/db/backends/postgresql/client.py
+# CLASS DatabaseClient
+
+[DEFINE_WORKER: "Runs the database shell client by building a command from connection parameters, creating a temporary .pgpass file when a password is provided, and managing SIGINT around subprocess execution." runshell_db]
+    [INPUTS]
+        <REF> cls </REF>: class "Class object whose executable_name attribute provides the database client executable path."
+        <REF> conn_params </REF>: dict "Connection parameter mapping with optional keys host, port, database, user, and password."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize args as a list containing cls.executable_name, and extract host, port, dbname, user, and passwd from conn_params using .get with an empty-string default for each missing key. RESULT args, host, port, dbname, user, passwd]
+            [COMMAND If user is truthy, append '-U' and user to args. RESULT args]
+            [COMMAND If host is truthy, append '-h' and host to args. RESULT args]
+            [COMMAND If port is truthy, append '-p' and str(port) to args. RESULT args]
+            [COMMAND Append dbname to args. RESULT args]
+            [COMMAND Set temp_pgpass to None and store the current SIGINT handler in sigint_handler. RESULT temp_pgpass, sigint_handler]
+            [COMMAND Within the try block, if passwd is truthy, create a NamedTemporaryFile(mode='w+') and write the pgpass fields _escape_pgpass(host) or '*', str(port) or '*', _escape_pgpass(dbname) or '*', _escape_pgpass(user) or '*', and _escape_pgpass(passwd), separated by ':' and flushed, then set os.environ['PGPASSFILE'] to temp_pgpass.name. RESULT temp_pgpass, PGPASSFILE]
+            [COMMAND Within the nested try around the pgpass write, if UnicodeEncodeError is raised, catch and ignore it, leaving PGPASSFILE unset and continuing execution. RESULT none]
+            [COMMAND Within the outer try block, after password handling, set SIGINT to SIG_IGN and run subprocess.check_call(args); if it raises, allow the exception to propagate after the finally block executes. RESULT none]
+            [COMMAND In the finally block, restore the original SIGINT handler from sigint_handler, close temp_pgpass if it is not None, and delete os.environ['PGPASSFILE'] if it is present. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Runs the database shell by invoking DatabaseClient.runshell_db with the current connection's parameters." runshell]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance; provides the connection object whose parameters are used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve connection parameters from the current connection object via self.connection.get_connection_params(). RESULT connection_params]
+            [COMMAND Invoke DatabaseClient.runshell_db with connection_params and ignore any returned value. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Escapes a PostgreSQL .pgpass fragment by doubling each backslash and replacing each colon with a backslash followed by a colon." _escape_pgpass]
+    [INPUTS]
+        <REF> txt </REF>: string "Input string fragment to escape for a PostgreSQL .pgpass file."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Escaped string fragment with original backslashes doubled and original colons preceded by a backslash."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Take the input string txt as the current value. RESULT current_value]
+            [COMMAND Replace every single backslash in current_value with two backslashes. RESULT backslash_doubled]
+            [COMMAND Replace every colon in backslash_doubled with a backslash followed by a colon, without re-escaping that inserted backslash. RESULT escaped_value]
+            [COMMAND Return escaped_value as the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

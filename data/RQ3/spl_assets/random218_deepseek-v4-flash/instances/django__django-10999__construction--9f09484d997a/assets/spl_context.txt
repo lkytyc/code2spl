@@ -1,0 +1,142 @@
+# FILE: django/utils/dateparse.py
+[DEFINE_WORKER: "Parses a date string by matching date_re at the start of value, returning a datetime.date for valid matches and None for non-matching input, while invalid calendar components raise ValueError." parse_date]
+    [INPUTS]
+        <REF> value </REF>: str "Input string to parse into a date."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: datetime.date or None "The parsed date when value matches the regex and contains valid calendar components; otherwise None if the string is not well formatted."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Match value at the beginning of the string using the compiled regular expression date_re and store the result in match. RESULT match]
+            [COMMAND If match is truthy, build kw by iterating over match.groupdict().items() and converting each captured string value v to an integer under the same keyword k. RESULT kw]
+            [COMMAND Within the if match branch, construct datetime.date(**kw) and immediately return it as the parsed date. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: match is falsy, meaning date_re did not match value at the beginning of the string.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not enter the if branch; reach the end of parse_date and implicitly return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: value is not a string or bytes-like object compatible with date_re, so date_re.match(value) raises TypeError before matching.]
+        [LOG "TypeError: date_re.match() expected string or bytes-like object"]
+        [THROW TypeError "Raised when date_re.match is called with a value of an unsupported type."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: date_re matches value and the captured groups convert to integers, but datetime.date(**kw) receives date components that do not form a valid calendar date.]
+        [LOG "ValueError: invalid date components from regex match"]
+        [THROW ValueError "Raised when the parsed year, month, or day is out of range for a valid datetime.date."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a string into a datetime.time object when it matches the expected time pattern, returns None for non-well-formed input, and raises ValueError when a well-formed input contains invalid time values." parse_time]
+    [INPUTS]
+        <REF> value </REF>: str "The string to parse into a datetime.time object using the time_re pattern."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: datetime.time | None "The parsed datetime.time object if the string matches the pattern and is valid; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Match the beginning of value against the time_re regular expression using re.match, assigning the resulting Match object or None to match. RESULT match]
+            [COMMAND Within the if match: block, extract the named group dictionary from match via groupdict(). RESULT kw]
+            [COMMAND Within the same if block, normalize kw['microsecond'] using short-circuit `and`: if it is falsy keep it as-is, otherwise pad it on the right with '0' to exactly 6 digits. RESULT kw]
+            [COMMAND Within the same if block, rebuild kw by filtering out None values and converting every remaining value to an integer using a dictionary comprehension. RESULT kw]
+            [COMMAND Within the same if block, construct datetime.time(**kw) and return the resulting time object. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If match is falsy, meaning value is not well formatted according to time_re, including when it contains a time zone offset.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the if block and return None implicitly. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The input matches time_re but the extracted numeric components are invalid for datetime.time, for example hour outside 0-23, minute outside 0-59, second outside 0-59, or microsecond outside 0-999999.]
+        [LOG "datetime.time raises ValueError when constructing the time from invalid components."]
+        [THROW ValueError "Raised when a well-formatted time string contains values outside the valid range."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses an input string into a datetime.datetime by matching datetime_re, converting matched numeric groups, and applying timezone offsets; returns None when the input does not match." parse_datetime]
+    [INPUTS]
+        <REF> value </REF>: string "Input string to parse into a datetime.datetime."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: datetime.datetime or None "Parsed datetime.datetime for a matching input, or None when datetime_re does not match value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Match value against the compiled regex datetime_re and store the match object or None in match. RESULT match]
+            [COMMAND If match is truthy, extract the named captured groups from match.groupdict() into kw; otherwise skip the parsing block and fall through to the implicit None return. RESULT kw]
+            [COMMAND Within the if match block, assign to kw['microsecond'] the result of the short-circuit expression kw['microsecond'] and kw['microsecond'].ljust(6, '0'), preserving a falsy microsecond value without padding. RESULT kw['microsecond']]
+            [COMMAND Within the if match block, pop 'tzinfo' from kw and store it in tzinfo. RESULT tzinfo]
+            [COMMAND Within the if match block, if tzinfo equals 'Z', set tzinfo to utc. RESULT tzinfo]
+            [COMMAND Within the if match block, if tzinfo is not None and not 'Z', set offset_mins to int(tzinfo[-2:]) when len(tzinfo) > 3, otherwise set offset_mins to 0. RESULT offset_mins]
+            [COMMAND Within the if match block and the elif tzinfo is not None branch, set offset to 60 * int(tzinfo[1:3]) + offset_mins. RESULT offset]
+            [COMMAND Within the if match block and the elif tzinfo is not None branch, if tzinfo[0] is '-', negate offset. RESULT offset]
+            [COMMAND Within the if match block and the elif tzinfo is not None branch, set tzinfo to get_fixed_timezone(offset). RESULT tzinfo]
+            [COMMAND Within the if match block, rebuild kw by keeping only keys whose values are not None and converting each kept value to an integer with int(v). RESULT kw]
+            [COMMAND Within the if match block, set kw['tzinfo'] to tzinfo, which may be utc, a fixed timezone, or None. RESULT kw]
+            [COMMAND Within the if match block, return datetime.datetime(**kw). RESULT datetime_object]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: datetime_re.match(value) returns None or a falsy match, indicating the input is not well formatted.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fall through after the if match block and return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: When match is truthy and the captured groups represent a well-formatted but invalid datetime, such as month 13 or day 32, so datetime.datetime(**kw) cannot construct a valid datetime.]
+        [LOG "datetime.datetime(**kw) raises ValueError for invalid calendar values."]
+        [THROW ValueError "Raised because the matched input is well formatted but is not a valid datetime."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: When a captured numeric group is an empty string rather than None, causing int(v) to fail during the kw reconstruction.]
+        [LOG "int(v) raises ValueError because the empty string cannot be converted to an integer."]
+        [THROW ValueError "Raised by int conversion when a matched numeric group is empty."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a duration string by trying the standard, ISO 8601, and PostgreSQL interval regex patterns, then builds and returns a datetime.timedelta from the matched components, or None if no pattern matches." parse_duration]
+    [INPUTS]
+        <REF> value </REF>: str "The duration string to parse."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: datetime.timedelta | None "The parsed duration as a datetime.timedelta when a regex match succeeds; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Try standard_duration_re.match(value), then iso8601_duration_re.match(value), then postgres_interval_re.match(value), using short-circuit or evaluation so the first successful match object is assigned to match. RESULT match]
+            [COMMAND Check whether match is truthy; if it is false, follow the no-match alternative flow; otherwise continue inside the if match block. RESULT match_is_truthy]
+            [COMMAND Within the if match block, extract the named regex groups from match into kw using match.groupdict(). RESULT kw]
+            [COMMAND Within the if match block, pop 'days' from kw with default 0, treat None or empty as 0 using or 0, convert the result to float, and create days as datetime.timedelta of that float. RESULT days]
+            [COMMAND Within the if match block, pop 'sign' from kw with default '+', and set sign to -1 if the popped value equals '-', otherwise set sign to 1. RESULT sign]
+            [COMMAND Within the if match block, if kw has a truthy 'microseconds' value, replace it with kw['microseconds'].ljust(6, '0') so the string is left-justified to length 6 and padded on the right with zeros. RESULT kw]
+            [COMMAND Within the if match block, if kw has truthy 'seconds' and truthy 'microseconds' and kw['seconds'] starts with '-', replace kw['microseconds'] with '-' + kw['microseconds']. RESULT kw]
+            [COMMAND Within the if match block, convert each remaining non-None value in kw to float, omit keys with None values, and rebuild kw from the converted values. RESULT kw]
+            [COMMAND Within the if match block, return days + sign * datetime.timedelta(**kw). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: No regex pattern matches value, so match is falsy (None)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fall through to the end of the function and return None implicitly. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

@@ -1,0 +1,481 @@
+# FILE: sklearn/base.py
+# CLASS BaseEstimator
+
+[DEFINE_WORKER: "Returns the sorted constructor parameter names for a scikit-learn estimator class by introspecting its effective __init__ signature, excluding self and **kwargs while rejecting *args." _get_param_names]
+    [INPUTS]
+        <REF> cls </REF>: type "Estimator class whose effective __init__ parameters should be introspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return </REF>: List[str] "Alphabetically sorted parameter names of the constructor, excluding 'self' and '**kwargs'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the effective constructor: set init to getattr(cls.__init__, 'deprecated_original', cls.__init__), using cls.__init__.deprecated_original when that attribute exists and cls.__init__ otherwise. RESULT init]
+            [COMMAND Test whether init is exactly object.__init__ using an identity check; if true, take the alternative empty-return flow and do not execute the remaining introspection steps. RESULT is_default_init]
+            [COMMAND Compute init_signature = signature(init) to obtain the inspect.Signature object for the effective constructor. RESULT init_signature]
+            [COMMAND Build parameters from init_signature.parameters.values() by keeping only parameter objects whose name is not 'self' and whose kind is not VAR_KEYWORD; note that *args remains included at this stage. RESULT parameters]
+            [COMMAND For each parameter p in parameters, check whether p.kind equals p.VAR_POSITIONAL; if it does, trigger the RuntimeError exception flow for forbidden varargs. RESULT parameters_validated]
+            [COMMAND Return sorted([p.name for p in parameters]), producing the final alphabetically sorted list of constructor parameter names. RESULT sorted_param_names]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The resolved init is exactly object.__init__.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately because there is no explicit constructor to introspect. RESULT []]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: While iterating over parameters, a parameter p has p.kind equal to p.VAR_POSITIONAL, meaning the constructor accepts *args.]
+        [LOG "scikit-learn estimators should always specify their parameters in the signature of their __init__ (no varargs). %s with constructor %s doesn't follow this convention."]
+        [THROW RuntimeError "Raised to reject estimator constructors that declare variadic positional arguments (*args)."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects the estimator's parameters into a dictionary, and when deep is true, recursively flattens nested estimator parameters under parent__child keys." get_params]
+    [INPUTS]
+        <REF> self </REF>: object "The estimator instance whose parameters are collected."
+        <REF> deep </REF>: boolean "If True, recursively include parameters of nested estimator objects that have a get_params method; if False, return only top-level parameter attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> params </REF>: mapping "Dictionary containing parameter names mapped to their values, with nested parameters keyed as parent__child when deep is True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary named out. RESULT out]
+            [COMMAND Evaluate self._get_param_names() once and iterate over each key in the returned iterable. RESULT key]
+            [COMMAND Within the outer loop over key, assign value = getattr(self, key, None). RESULT value]
+            [COMMAND Within the outer loop over key, if deep is truthy and value has a get_params attribute (using short-circuit evaluation, so hasattr is not called when deep is false), assign deep_items = value.get_params().items(). RESULT deep_items]
+            [COMMAND Within the outer loop over key and inside the deep-and-get_params branch, update out with each (key + '__' + k, val) entry for every (k, val) in deep_items. RESULT out]
+            [COMMAND After the if branch, unconditionally set out[key] = value. RESULT out]
+            [COMMAND After completing the loop, return out as params. RESULT params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates and applies estimator parameters, supporting both direct attribute updates and nested component updates using '__' prefixed keys, then returns self." set_params]
+    [INPUTS]
+        <REF> params </REF>: dict "Keyword parameters to set. Keys may contain '<component>__<parameter>' for nested estimator parameters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: object "The estimator instance with updated parameters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the current validated parameter dictionary by calling self.get_params(deep=True). RESULT valid_params]
+            [COMMAND Initialize nested_params as a defaultdict(dict) to group nested parameter updates by their prefix. RESULT nested_params]
+            [COMMAND For each key, value pair in params.items(), split key at the first occurrence of '__' into base key, delimiter, and sub_key. RESULT key, delim, sub_key]
+            [COMMAND Within the loop over params.items(), validate that the base key is present in valid_params; if validation fails, raise ValueError as described in exception_flows. RESULT valid_params]
+            [COMMAND Within the loop over params.items(), when the key contains a '__' delimiter, store value in nested_params[base_key][sub_key]. RESULT nested_params]
+            [COMMAND Within the loop over params.items(), when the key contains no '__' delimiter, set the attribute self.base_key to value and update valid_params[base_key] with value. RESULT self]
+            [COMMAND After processing all params, for each key, sub_params in nested_params.items(), apply the nested updates by calling valid_params[key].set_params(**sub_params). RESULT valid_params]
+            [COMMAND Return self. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: params is empty (no keyword arguments were supplied)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self immediately, skipping all parameter processing. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: During the loop over params.items(), the base key after splitting is not present in valid_params.]
+        [LOG "Invalid parameter {key} for estimator {self}. Check the list of available parameters with `estimator.get_params().keys()`."]
+        [THROW ValueError "Raised when an unknown parameter name is requested for the estimator."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS ClassifierMixin
+
+[DEFINE_WORKER: "Returns the mean accuracy of the model's predictions on the provided test samples and true labels, using per-sample weights when supplied." score]
+    [INPUTS]
+        <REF> X </REF>: array-like, shape = (n_samples, n_features) "Test samples."
+        <REF> y </REF>: array-like, shape = (n_samples) or (n_samples, n_outputs) "True labels for X."
+        <REF> sample_weight </REF>: array-like, shape = [n_samples], optional "Sample weights. If None, uniform weights are used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> score </REF>: float "Mean accuracy of self.predict(X) with respect to y."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the accuracy_score function from the metrics submodule. RESULT accuracy_score]
+            [COMMAND Compute predicted labels by calling self.predict(X). RESULT y_pred]
+            [COMMAND Calculate accuracy_score with y_true=y, y_pred=y_pred, and sample_weight=sample_weight. RESULT score]
+            [COMMAND Return the computed score. RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS RegressorMixin
+
+[DEFINE_WORKER: "Computes the coefficient of determination R^2 between true target values y and predictions from self.predict(X), using optional sample weights and variance-weighted multioutput aggregation." score]
+    [INPUTS]
+        <REF> X </REF>: array-like "Test samples used to generate predictions via self.predict."
+        <REF> y </REF>: array-like "True target values corresponding to X."
+        <REF> sample_weight </REF>: array-like or None "Optional per-sample weights. If None, unweighted scoring is used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> score </REF>: float "R^2 of self.predict(X) with respect to y."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import r2_score from the internal metrics module .metrics. RESULT r2_score]
+            [COMMAND Compute predicted values y_pred by calling self.predict(X). RESULT y_pred]
+            [COMMAND Compute the R^2 score as r2_score(y, y_pred, sample_weight=sample_weight, multioutput='variance_weighted'). RESULT score]
+            [COMMAND Return the computed R^2 score. RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS ClusterMixin
+
+[DEFINE_WORKER: "Fits the clustering model to X and returns the computed cluster labels." fit_predict]
+    [INPUTS]
+        <REF> X </REF>: ndarray, shape (n_samples, n_features) "Input data to cluster."
+        <REF> y </REF>: Ignored "Not used, present for API consistency by convention."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> labels </REF>: ndarray, shape (n_samples,) "Cluster labels for each sample in X."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Receive input data X and optional parameter y, which is ignored for API consistency. RESULT X]
+            [COMMAND Call self.fit(X) to perform clustering on X and store the resulting cluster labels in self.labels_. RESULT self.labels_]
+            [COMMAND Return the stored cluster labels self.labels_. RESULT labels]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS BiclusterMixin
+
+[DEFINE_WORKER: "Returns the current row and column indicators together as a tuple." biclusters_]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> biclusters_tuple </REF>: tuple "Tuple containing row indicators (self.rows_) and column indicators (self.columns_)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the instance attributes self.rows_ and self.columns_ and return them as a tuple. RESULT biclusters_tuple]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the nonzero row and column indices for the i-th bicluster from the stored rows_ and columns_ boolean masks." get_indices]
+    [INPUTS]
+        <REF> i </REF>: int "The index of the cluster."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> row_ind </REF>: np.array, dtype=np.intp "Indices of rows in the dataset that belong to the bicluster."
+        <REF> col_ind </REF>: np.array, dtype=np.intp "Indices of columns in the dataset that belong to the bicluster."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the element at index i from the rows_ attribute and assign it to the local variable rows. RESULT rows]
+            [COMMAND Retrieve the element at index i from the columns_ attribute and assign it to the local variable columns. RESULT columns]
+            [COMMAND Compute the zero-based indices of nonzero entries in rows by calling np.nonzero(rows) and taking element 0; assign to row_ind. RESULT row_ind]
+            [COMMAND Compute the zero-based indices of nonzero entries in columns by calling np.nonzero(columns) and taking element 0; assign to col_ind. RESULT col_ind]
+            [COMMAND Return the tuple (row_ind, col_ind) as the result of get_indices. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Gets the indices for a bicluster and returns a tuple containing the numbers of rows and columns as the lengths of the index arrays." get_shape]
+    [INPUTS]
+        <REF> i </REF>: int "Index of the bicluster."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> shape </REF>: (int, int) "Number of rows and columns in the bicluster."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_indices(i) with the given bicluster index i to obtain the row index array and the column index array. RESULT indices]
+            [COMMAND Create a tuple by iterating over each element in indices, naming the loop variable i, and computing len(i) for each element to get the row count and column count. RESULT shape]
+            [COMMAND Return the resulting tuple of lengths as the method output. RESULT shape]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the submatrix corresponding to bicluster i by validating data with check_array, obtaining row/column indices from get_indices, and indexing data with the resulting row and column index vectors." get_submatrix]
+    [INPUTS]
+        <REF> i </REF>: int "Index of the bicluster for which the submatrix is requested."
+        <REF> data </REF>: array "Input data array; may be sparse, and is validated and converted to CSR format when sparse."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> submatrix </REF>: array "Submatrix corresponding to bicluster i, obtained by advanced indexing with the stored row and column indices."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import check_array from .utils.validation. RESULT check_array]
+            [COMMAND Validate and convert data using check_array with accept_sparse='csr'; assign the validated array back to data. RESULT data]
+            [COMMAND Call self.get_indices(i) and unpack the two-element result into row_ind and col_ind. RESULT row_ind, col_ind]
+            [COMMAND Return the submatrix data[row_ind[:, np.newaxis], col_ind] built by advanced indexing with the row and column indices. RESULT submatrix]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS TransformerMixin
+
+[DEFINE_WORKER: "Fits the transformer to X and y with optional fit parameters and returns the transformed version of X." fit_transform]
+    [INPUTS]
+        <REF> X </REF>: numpy array "Training set of shape [n_samples, n_features]."
+        <REF> y </REF>: numpy array or None "Target values of shape [n_samples]. Defaults to None for unsupervised transformation."
+        <REF> fit_params </REF>: dict "Additional keyword parameters passed to the fit method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X_new </REF>: numpy array "Transformed array of shape [n_samples, n_features_new]."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether y is None using identity comparison. RESULT is_unsupervised]
+            [COMMAND If y is None, call self.fit(X, **fit_params) to fit the transformer with the unsupervised arity-1 fit method. RESULT fitted_transformer]
+            [COMMAND Call fitted_transformer.transform(X) to compute the transformed training set. RESULT X_new]
+            [COMMAND Return X_new immediately. RESULT X_new]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If y is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.fit(X, y, **fit_params) to fit the transformer with the supervised arity-2 fit method. RESULT fitted_transformer]
+            [COMMAND Call fitted_transformer.transform(X) to compute the transformed training set. RESULT X_new]
+            [COMMAND Return X_new immediately. RESULT X_new]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS DensityMixin
+
+[DEFINE_WORKER: "Computes the model score on the data X as documented, but the current implementation is an empty stub that performs no operation and returns None." score]
+    [INPUTS]
+        <REF> X </REF>: array-like "Input data of shape (n_samples, n_features) on which the model score is evaluated."
+        <REF> y </REF>: array-like or None "Optional target values. The parameter defaults to None and is not used in the current empty implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> score </REF>: None "The method returns None because the body only contains pass; no float score is actually returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept X and optional y as the method arguments; the body contains only pass, so perform no operation and return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS OutlierMixin
+
+[DEFINE_WORKER: "Fits the model on X and returns the outlier detection labels for X, where 1 indicates inliers and -1 indicates outliers, while ignoring y." fit_predict]
+    [INPUTS]
+        <REF> X </REF>: ndarray "Input data of shape (n_samples, n_features) used for both fitting the model and generating predictions."
+        <REF> y </REF>: Ignored "Ignored parameter, not used in the computation, present for API consistency by convention."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ndarray "Outlier prediction labels of shape (n_samples,), with 1 for inliers and -1 for outliers."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fit the model to X by calling self.fit(X), which updates the model state and returns the fitted estimator. RESULT fitted_estimator]
+            [COMMAND Generate predictions for X by calling predict(X) on the fitted estimator returned by fit. RESULT predictions]
+            [COMMAND Return the predictions as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS MetaEstimatorMixin
+
+[DEFINE_WORKER: "Returns the first and last elements of a numpy array or sparse matrix, using the .data flat view when available and direct coordinate indexing for sparse matrices without .data." _first_and_last_element]
+    [INPUTS]
+        <REF> arr </REF>: numpy.ndarray or scipy.sparse.spmatrix "Array-like object whose first and last elements are to be returned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> first_last_tuple </REF>: tuple "Tuple containing the first and last elements of arr."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether arr is a numpy ndarray or, if not, has a data attribute, using short-circuit evaluation. RESULT is_array_or_has_data]
+            [COMMAND When is_array_or_has_data is true, set data to arr.data if sparse.issparse(arr) is true; otherwise set data to arr itself. RESULT data]
+            [COMMAND Return a tuple of data.flat[0] and data.flat[-1]. RESULT first_last_tuple]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: arr is not a numpy ndarray and does not have a data attribute]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a tuple of arr[0, 0] and arr[-1, -1]. RESULT first_last_tuple]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a new unfitted estimator with the same parameters as the original estimator, recursively cloning parameters and collection elements, and deep-copying non-estimators only when safe is false." clone]
+    [INPUTS]
+        <REF> estimator </REF>: object "The estimator object, or a list, tuple, set, or frozenset of objects to be cloned."
+        <REF> safe </REF>: boolean "If false, cloning falls back to a deep copy for objects that are not estimators. If true, non-estimator objects without get_params raise a TypeError."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "A newly constructed unfitted estimator, or a recursively cloned container/deep-copied object on the corresponding alternative branches."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute estimator_type = type(estimator). RESULT estimator_type]
+            [COMMAND Compute is_collection = estimator_type in (list, tuple, set, frozenset). If is_collection is true, follow the collection alternative; otherwise continue to the estimator check. RESULT is_collection]
+            [COMMAND Compute has_get_params = hasattr(estimator, 'get_params'). If has_get_params is false, follow the non-estimator deep-copy alternative or the TypeError exception; otherwise continue with the estimator cloning path. RESULT has_get_params]
+            [COMMAND Set klass = estimator.__class__. RESULT klass]
+            [COMMAND Retrieve the estimator's own parameters with new_object_params = estimator.get_params(deep=False). RESULT new_object_params]
+            [COMMAND For each name, param in six.iteritems(new_object_params), replace new_object_params[name] with clone(param, safe=False). RESULT new_object_params]
+            [COMMAND Construct a new estimator instance with new_object = klass(**new_object_params). RESULT new_object]
+            [COMMAND Retrieve the new estimator's own parameters with params_set = new_object.get_params(deep=False). RESULT params_set]
+            [COMMAND For each name in new_object_params, set param1 = new_object_params[name] and param2 = params_set[name]; if param1 is not param2, raise RuntimeError (see exception_flows). RESULT sanity_check]
+            [COMMAND Return new_object. RESULT new_object]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_collection is true, meaning estimator_type is exactly list, tuple, set, or frozenset.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each element e in estimator, recursively call clone(e, safe=safe) and collect the cloned elements. RESULT cloned_elements]
+            [COMMAND Return a new container of the same type using estimator_type(cloned_elements). RESULT cloned_container]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: is_collection is false, has_get_params is false, and safe is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return copy.deepcopy(estimator). RESULT deep_copied_estimator]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: is_collection is false, has_get_params is false, and safe is true.]
+        [LOG "Cannot clone object '%s' (type %s): it does not seem to be a scikit-learn estimator as it does not implement a 'get_params' methods."]
+        [THROW TypeError "Raised when cloning a non-estimator object that lacks get_params with safe=True."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the estimator cloning path, for some name in new_object_params, param1 = new_object_params[name] is not the same object as param2 = params_set[name].]
+        [LOG "Cannot clone object %s, as the constructor either does not set or modifies parameter %s."]
+        [THROW RuntimeError "Raised when a cloned estimator's constructor does not preserve the exact parameter object for a parameter."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Pretty-prints a dictionary as a deterministic, sorted 'key=value' string, using str() for floats and the supplied printer for other values, with line wrapping, long-value truncation, and a temporary NumPy print-option override." _pprint]
+    [INPUTS]
+        <REF> params </REF>: dict "The dictionary to pretty print."
+        <REF> offset </REF>: int "Initial character offset (default 0); also controls the number of spaces in continuation line separators."
+        <REF> printer </REF>: callable "Function used to convert non-float values to strings; defaults to repr."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> lines </REF>: str "The pretty-printed multi-line string representation of params."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Save the current NumPy print options into options by calling np.get_printoptions(). RESULT options]
+            [COMMAND Temporarily set NumPy print options to precision=5, threshold=64, and edgeitems=2 by calling np.set_printoptions(precision=5, threshold=64, edgeitems=2). RESULT None]
+            [COMMAND Initialize params_list as an empty list. RESULT params_list]
+            [COMMAND Set this_line_length equal to offset. RESULT this_line_length]
+            [COMMAND Set line_sep to a comma followed by a newline character, followed by (1 + offset // 2) spaces. RESULT line_sep]
+            [COMMAND For each i, (k, v) in enumerate(sorted(six.iteritems(params))), if type(v) is float then set this_repr to '%s=%s' % (k, str(v)); otherwise set this_repr to '%s=%s' % (k, printer(v)). RESULT this_repr]
+            [COMMAND Within the same loop, if len(this_repr) > 500, truncate this_repr to this_repr[:300] + '...' + this_repr[-100:]. RESULT this_repr]
+            [COMMAND Within the same loop, append the separator: if i == 0, append nothing; if i > 0 and (this_line_length + len(this_repr) >= 75 or this_repr contains a newline), append line_sep to params_list; otherwise, if i > 0, append ', ' to params_list. RESULT params_list]
+            [COMMAND Within the same loop, update this_line_length for the separator: if i == 0, leave it unchanged; if line_sep was appended, set this_line_length to len(line_sep); otherwise, after appending ', ', add 2 to this_line_length. RESULT this_line_length]
+            [COMMAND Within the same loop, append this_repr to params_list. RESULT params_list]
+            [COMMAND Within the same loop, add len(this_repr) to this_line_length. RESULT this_line_length]
+            [COMMAND Restore the previous NumPy print options by calling np.set_printoptions(**options). RESULT None]
+            [COMMAND Set lines to the concatenation of all strings in params_list using ''.join(params_list). RESULT lines]
+            [COMMAND Strip trailing space characters from each line by splitting lines on newline characters, applying rstrip(' ') to each line, and rejoining the lines with newline characters. RESULT lines]
+            [COMMAND Return lines. RESULT lines]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the given estimator is a classifier by checking whether its _estimator_type attribute equals the string 'classifier'." is_classifier]
+    [INPUTS]
+        <REF> estimator </REF>: object "Estimator object to test."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> out </REF>: bool "True if estimator is a classifier and False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the _estimator_type attribute of the estimator object, using None as the default value when the attribute is missing. RESULT estimator_type]
+            [COMMAND Compare estimator_type with the string 'classifier'; if they are equal, return True, otherwise return False. RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the given estimator has an attribute '_estimator_type' equal to the string 'regressor', indicating it is probably a regressor." is_regressor]
+    [INPUTS]
+        <REF> estimator </REF>: object "Estimator object to test."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> out </REF>: bool "True if estimator is a regressor and False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the value of the attribute '_estimator_type' from estimator using getattr, using None as the default if the attribute does not exist. RESULT attr_value]
+            [COMMAND Compare the retrieved attribute value to the string 'regressor' and return whether they are equal. RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether an estimator is an outlier detector by checking if its _estimator_type attribute equals 'outlier_detector'." is_outlier_detector]
+    [INPUTS]
+        <REF> estimator </REF>: object "Estimator object to test for outlier detector type."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> out </REF>: bool "True if estimator is an outlier detector; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the _estimator_type attribute of estimator, defaulting to None if absent, and return whether the resulting value equals 'outlier_detector'. RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

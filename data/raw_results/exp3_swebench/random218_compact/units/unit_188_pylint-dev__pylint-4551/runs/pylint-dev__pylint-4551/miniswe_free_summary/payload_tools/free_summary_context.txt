@@ -1,0 +1,46 @@
+# FILE: pylint/pyreverse/diagrams.py
+The code defines data structures for representing UML-style diagrams (class and package diagrams) based on `astroid` parsed Python code. It is used by Pyreverse to extract and store structural information about classes, modules, their attributes, methods, and relationships.
+
+- `Figure` is a trivial base class for all diagram elements.
+- `Relationship` represents a named or typed link between two diagram objects, storing source, target, relation type, and an optional name.
+- `DiagramEntity` associates a title with an underlying `astroid` node, serving as a label for a class or module in a diagram.
+- `ClassDiagram` manages a class diagram. It holds collections of diagram entities, relationships (grouped by type), and a mapping from AST nodes to entities. It supports filtering via `FilterMixIn`. Key behaviors:
+  - Add objects (`add_object`) and track them by node.
+  - Retrieve objects from nodes, test membership, and get classes or a specific class by name.
+  - Compute visible attributes (`get_attrs`), including instance attributes, local type annotations, and properties, optionally appending type names from referenced classes.
+  - Compute visible methods (`get_methods`), excluding property decorators.
+  - Extract relationships (`extract_relationships`) for each class: sets attribute/method lists and shape (`class` or `interface`), then adds inheritance edges as `specialization`, implementation edges as `implements`, and association edges from attribute types to the owning class.
+  - Query relationships sorted by endpoint IDs for predictable output.
+- `PackageDiagram` extends `ClassDiagram` for package-level diagrams. It adds:
+  - Access to module entities (`modules`, `module`, `get_module`), with support for resolving relative import names.
+  - Recording dependencies from `from` imports into module nodes (`add_from_depend`).
+  - Extending relationship extraction with ownership links from classes to their containing module and `depends` links between modules.
+
+Overall, the code builds an in-memory model of classes, modules, and their relationships that can be consumed by diagram generators.
+
+# FILE: pylint/pyreverse/inspector.py
+This code provides utilities for postprocessing an Abstract Syntax Tree (AST) built by the `astroid` library, primarily to support `pylint`’s `pyreverse` diagram generator. It defines a visitor-based `Linker` class that walks over a project’s modules and classes, resolving relationships and augmenting nodes with extra metadata.
+
+The main helper functions are:
+
+- `interfaces(node, herited, handler_func)`: Yields interfaces implemented by a class node, discovered via the `__implements__` attribute. It can optionally ignore inherited interfaces, deduplicates results, uses a handler to filter nodes, and raises an `InferenceError` if some interfaces cannot be inferred.
+- `_astroid_wrapper(func, modname)`: Calls a parsing function while printing progress and catching known AST-building errors and unexpected exceptions, returning `None` on failure.
+- `project_from_files(files, func_wrapper, project_name, black_list)`: Builds a `Project` from file paths or module names. It parses each entry with an `AstroidManager`, skips failed parses, recurses into packages (skipping explicitly given `__init__.py` and blacklisted directories), and adds the resulting module nodes to the returned `Project`.
+
+The `Linker` class combines ID generation and a visitor pattern:
+
+- `IdGeneratorMixIn` supplies incrementing integer IDs.
+- The `Linker` visits project, package, module, class, function, assignment, import, and import-from nodes.
+- Depending on options, it may tag nodes with a unique `uid`, populate a `locals_type` mapping from local names to inferred values, populate `instance_attrs_type` for class attributes, record implemented interfaces in `implements`, and collect module dependencies in `depends`.
+- It also links base classes to their subclasses via a `specializations` list on the base nodes.
+- The visitor avoids reprocessing already-handled nodes and handles name resolution even when names are defined in outer scopes.
+
+The `Project` class is a simple container holding a project name, path, and a list of module nodes, with mapping-style access to modules by name.
+
+# FILE: pylint/pyreverse/utils.py
+This module provides configuration handling, naming/visibility helpers, and AST traversal utilities for the pyreverse tool. It reads optional default options from a `.pyreverserc` file in the user’s home directory, returning them as a list of strings, and can insert those options into `sys.argv` so they act as command-line defaults. It defines regex-based functions to classify a name’s visibility as `public`, `protected`, `private`, or `special`, and helper predicates to detect abstract classes, final definitions, interfaces, and exceptions from AST node objects. A `FilterMixIn` class builds a bitmask from mode names (such as `ALL`, `PUB_ONLY`, `SPECIAL`, `OTHER`) combined with `+`, and its `show_attr` method decides whether a node should be displayed based on the node’s visibility and the active mode. The `ASTWalker` class performs a preorder traversal of an AST, calling handler methods named `visit_<classname>` and `leave_<classname>` (or `visit_default`/`leave_default`) as it enters and leaves each node; it caches callback lookups and uses a visited set to detect cyclic or duplicate traversal. `LocalsVisitor` extends `ASTWalker` to traverse a project by iterating over each node’s `locals` dictionary, skipping already visited nodes, and calling the same type of enter/leave callbacks while using itself as the handler.
+
+# FILE: pylint/pyreverse/writer.py
+This module provides utilities for generating UML-style diagrams from analysis definitions, supporting two output formats: Graphviz DOT and VCG. The main abstraction is the `DiagramWriter` base class, which controls the overall workflow: for each diagram definition, it computes an output filename from the diagram title and configured format, opens a printer via `set_printer`, dispatches to either class-diagram or package-diagram rendering, and finally closes the graph. The base class also defines the rendering steps: sorted nodes are emitted first and assigned stable IDs, then edges are emitted for the relevant relationship types (dependencies, inheritance, implementation, association) with predefined style dictionaries. The actual details of node labels, shapes, graph setup, and file output are left to subclasses.
+
+`DotWriter` implements the DOT format using a `DotBackend`. It configures a bottom-to-top layout, renders classes as record-shaped nodes with attributes and methods optionally included, marks interfaces and exceptions specially, and writes the generated graph to the output file. `VCGWriter` implements the VCG format using a `VCGPrinter`. It opens a graph with custom layout options, uses boxes or ellipses for class/interface nodes, formats labels with font and color controls, and writes the graph to an opened file. Both subclasses supply the four edge-style dictionaries expected by the base class to distinguish package dependencies, inheritance, implementation, and association links.

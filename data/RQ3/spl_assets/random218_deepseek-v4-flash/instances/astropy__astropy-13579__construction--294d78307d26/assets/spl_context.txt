@@ -1,0 +1,427 @@
+# FILE: astropy/wcs/wcsapi/wrappers/sliced_wcs.py
+# CLASS SlicedLowLevelWCS
+
+[DEFINE_WORKER: "Initializes a sliced WCS by sanitizing the input slice specification, merging slices with the original WCS when the input is already sliced, and computing which pixel and world dimensions remain, raising ValueError if none remain." __init__]
+    [INPUTS]
+        <REF> wcs </REF>: LowLevelWCS | SlicedLowLevelWCS "WCS object to slice. If it is already a SlicedLowLevelWCS, its existing slice array is combined with the new slices."
+        <REF> slices </REF>: tuple or slice-like "Slice specification for the pixel dimensions of the WCS; normalized by sanitize_slices before use."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sanitize the input slice specification by calling sanitize_slices(slices, wcs.pixel_n_dim) and assign the normalized result back to slices. RESULT slices]
+            [COMMAND If wcs is an instance of SlicedLowLevelWCS, execute alternative_flows[0] to unwrap and merge slices; otherwise assign self._wcs = wcs and self._slices_array = slices. RESULT self._wcs, self._slices_array]
+            [COMMAND Reverse self._slices_array and assign the reversed array to self._slices_pixel. RESULT self._slices_pixel]
+            [COMMAND For each pixel-axis index ip from 0 to self._wcs.pixel_n_dim - 1 inclusive, determine whether self._slices_pixel[ip] is not an instance of numbers.Integral; apply np.nonzero(...)[0] to the resulting boolean list and assign the kept pixel-axis indices to self._pixel_keep. RESULT self._pixel_keep]
+            [COMMAND Select the columns of self._wcs.axis_correlation_matrix given by self._pixel_keep, reduce with any(axis=1), apply np.nonzero(...)[0], and assign the resulting kept world-axis indices to self._world_keep. RESULT self._world_keep]
+            [COMMAND Validate that at least one pixel dimension and one world dimension remain; if len(self._pixel_keep) == 0 or len(self._world_keep) == 0, raise ValueError as described in exception_flows[0]. RESULT exception_flows[0]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: wcs is an instance of SlicedLowLevelWCS]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unwrap the underlying WCS by assigning self._wcs = wcs._wcs. RESULT self._wcs]
+            [COMMAND Copy wcs._slices_array into slices_original so the original sliced WCS is not mutated. RESULT slices_original]
+            [COMMAND Within the wcs-is-SlicedLowLevelWCS branch, for each ipixel from 0 to wcs.pixel_n_dim - 1 inclusive, compute ipixel_orig = wcs._wcs.pixel_n_dim - 1 - wcs._pixel_keep[ipixel] and ipixel_new = wcs.pixel_n_dim - 1 - ipixel, then set slices_original[ipixel_orig] = combine_slices(slices_original[ipixel_orig], slices[ipixel_new]). RESULT slices_original]
+            [COMMAND Assign self._slices_array = slices_original. RESULT self._slices_array]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: len(self._pixel_keep) == 0 or len(self._world_keep) == 0, using short-circuit or evaluation]
+        [LOG "Cannot slice WCS: the resulting WCS should have at least one pixel and one world dimension."]
+        [THROW ValueError "Raised when the sliced WCS would have no kept pixel dimension or no correlated world dimension."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes and returns a plain dictionary describing all world dimensions that are not kept, using zeroed pixel coordinates and WCS axis metadata." dropped_world_dimensions]
+    [INPUTS]
+        <REF> self </REF>: object "The object containing pixel-keep and world-keep metadata, WCS information, and serialized classes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: dict "A dictionary with keys value, world_axis_names, world_axis_physical_types, world_axis_units, world_axis_object_components, world_axis_object_classes, and serialized_classes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize world_coords by calling self._pixel_to_world_values_all with one zero positional argument for each element in self._pixel_keep. RESULT world_coords]
+            [COMMAND Initialize dropped_info as a defaultdict(list). RESULT dropped_info]
+            [COMMAND For each world axis index i from 0 to self._wcs.world_n_dim - 1, if i is in self._world_keep, skip to the next iteration; otherwise continue processing the dropped axis. RESULT i]
+            [COMMAND Within the loop, if 'world_axis_object_classes' is not already a key in dropped_info, initialize it as an empty dictionary. RESULT dropped_info]
+            [COMMAND Within the loop, read wao_classes from self._wcs.world_axis_object_classes and wao_components from self._wcs.world_axis_object_components. RESULT wao_classes, wao_components]
+            [COMMAND Within the loop over non-kept axes i, append world_coords[i], self._wcs.world_axis_names[i], self._wcs.world_axis_physical_types[i], self._wcs.world_axis_units[i], and wao_components[i] to dropped_info['value'], dropped_info['world_axis_names'], dropped_info['world_axis_physical_types'], dropped_info['world_axis_units'], and dropped_info['world_axis_object_components'] respectively. RESULT dropped_info]
+            [COMMAND Within the loop over non-kept axes i, update dropped_info['world_axis_object_classes'] with all entries from wao_classes whose key equals wao_components[i][0]. RESULT dropped_info]
+            [COMMAND Within the loop over non-kept axes i, set dropped_info['serialized_classes'] to self.serialized_classes, overwriting any previous value. RESULT dropped_info]
+            [COMMAND After the loop completes, return dict(dropped_info). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the number of pixels currently retained in the instance's _pixel_keep collection." pixel_n_dim]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: int "The number of elements in self._pixel_keep, always a non-negative integer."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate len(self._pixel_keep) to obtain the number of elements currently stored in the _pixel_keep attribute. RESULT pixel_count]
+            [COMMAND Return pixel_count to the caller as the method's result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the number of elements stored in the internal world keep collection and returns it as an integer." world_n_dim]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: integer "The number of elements in self._world_keep."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the collection stored in self._world_keep and compute its length using the built-in len() function. RESULT world_size]
+            [COMMAND Return world_size as the result of the method. RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the physical types for the world axes selected by self._world_keep, preserving the selection order and duplicate indices." world_axis_physical_types]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list[str] "Physical type strings for the selected world axes, in the exact order given by self._world_keep."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty result list. RESULT result]
+            [COMMAND For each index i in self._world_keep in iteration order, including duplicate indices, read self._wcs.world_axis_physical_types[i] and append it to result. RESULT result]
+            [COMMAND Return the result list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a list of world axis unit values selected from self._wcs.world_axis_units using the indices stored in self._world_keep, preserving the order of self._world_keep." world_axis_units]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "World axis unit values selected from self._wcs.world_axis_units, ordered according to self._world_keep."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the return list by iterating over each index i in self._world_keep and fetching self._wcs.world_axis_units[i] in iteration order; return the resulting list, which is empty when self._world_keep is empty. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new list containing the WCS pixel axis names selected by the indices in self._pixel_keep, preserving the iteration order of self._pixel_keep." pixel_axis_names]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "A new list of pixel axis names from self._wcs.pixel_axis_names selected by self._pixel_keep, preserving the iteration order of self._pixel_keep."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new empty result list to collect the selected pixel axis names. RESULT result_list]
+            [COMMAND Iterate in order over each index i in self._pixel_keep; if self._pixel_keep yields no values, the result list remains empty. RESULT i]
+            [COMMAND For each index i, access self._wcs.pixel_axis_names[i] using Python indexing semantics, permitting negative indices and returning None values unchanged. RESULT name]
+            [COMMAND Append name to result_list; duplicate indices in self._pixel_keep create duplicate entries in the same order. RESULT result_list]
+            [COMMAND Return result_list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: An index i in self._pixel_keep is outside the valid bounds of self._wcs.pixel_axis_names.]
+        [LOG "IndexError raised while accessing self._wcs.pixel_axis_names with an out-of-range index."]
+        [THROW IndexError "One of the indices in self._pixel_keep is not a valid index for self._wcs.pixel_axis_names."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a new list of axis names selected from self._wcs.world_axis_names using the indices in self._world_keep, preserving the order of self._world_keep." world_axis_names]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> selected_axis_names </REF>: list of strings "A new list containing the elements of self._wcs.world_axis_names at the indices specified by self._world_keep, in the same order as self._world_keep."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each index i in self._world_keep, read self._wcs.world_axis_names[i] and append that value to a new list. RESULT selected_axis_names]
+            [COMMAND Return the constructed list of selected axis names. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Any index i in self._world_keep is less than 0 or greater than or equal to len(self._wcs.world_axis_names).]
+        [LOG "IndexError caused by an out-of-range index into self._wcs.world_axis_names."]
+        [THROW IndexError "Raised when self._world_keep contains an index that is not a valid position in self._wcs.world_axis_names."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts variadic pixel-coordinate array arguments into broadcast arrays aligned with all WCS pixel dimensions, applying scalar slice selections and slice start offsets, then returns the world values computed by the WCS transformation." _pixel_to_world_values_all]
+    [INPUTS]
+        <REF> pixel_arrays </REF>: variadic array-like sequence "One or more pixel coordinate arrays or array-like objects, one for each non-scalar slice dimension in self._slices_pixel."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> world_values </REF>: object returned by self._wcs.pixel_to_world_values "World coordinate values corresponding to the broadcast pixel coordinate arrays."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert every input value in pixel_arrays with np.asanyarray and store the converted values as a tuple in pixel_arrays. RESULT pixel_arrays]
+            [COMMAND Initialize pixel_arrays_new as an empty list to accumulate the final pixel selection values. RESULT pixel_arrays_new]
+            [COMMAND Initialize ipix_curr to -1 as a sentinel index that tracks consumed non-scalar pixel inputs. RESULT ipix_curr]
+            [COMMAND For each index ipix from 0 to self._wcs.pixel_n_dim - 1 inclusive, process self._slices_pixel[ipix] and append exactly one corresponding entry to pixel_arrays_new. RESULT pixel_arrays_new]
+            [COMMAND Within that loop, when self._slices_pixel[ipix] is an instance of numbers.Integral, append that integral value directly to pixel_arrays_new without incrementing ipix_curr. RESULT pixel_arrays_new]
+            [COMMAND Within that loop, when self._slices_pixel[ipix] is not integral, first increment ipix_curr; then, if self._slices_pixel[ipix].start is not None, append pixel_arrays[ipix_curr] plus self._slices_pixel[ipix].start to pixel_arrays_new. RESULT pixel_arrays_new]
+            [COMMAND Within that loop, when self._slices_pixel[ipix] is not integral and self._slices_pixel[ipix].start is None, append pixel_arrays[ipix_curr] unchanged to pixel_arrays_new. RESULT pixel_arrays_new]
+            [COMMAND After the loop completes, reassign pixel_arrays_new to the result of np.broadcast_arrays(*pixel_arrays_new), broadcasting all collected arrays to a common shape. RESULT pixel_arrays_new]
+            [COMMAND Return self._wcs.pixel_to_world_values(*pixel_arrays_new), passing the broadcast pixel arrays as positional arguments. RESULT world_values]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts pixel coordinate arrays into world coordinate values by delegating to _pixel_to_world_values_all, returning zero-dimensional numpy arrays unchanged, and otherwise reducing the result to only the configured kept world dimensions while unwrapping a single remaining world dimension." pixel_to_world_values]
+    [INPUTS]
+        <REF> pixel_arrays </REF>: tuple "Variable-length positional pixel coordinate arrays; each element is passed as an individual argument to _pixel_to_world_values_all."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> world_arrays </REF>: numpy.ndarray or list of numpy.ndarray "World coordinate result: a zero-dimensional numpy array when the early-return condition is met, a single numpy array when only one world dimension is kept, or a list of numpy arrays for multiple kept world dimensions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _pixel_to_world_values_all on self with each element of pixel_arrays passed as an individual positional argument, and assign the returned value to world_arrays. RESULT world_arrays]
+            [COMMAND If world_arrays is a numpy ndarray and its shape is empty (zero-dimensional array), return world_arrays immediately. RESULT world_arrays]
+            [COMMAND If self._wcs.world_n_dim > 1, build a filtered list of the kept world dimensions by iterating over each index iw in self._world_keep, selecting world_arrays[iw], and rebinding world_arrays to that filtered list. RESULT world_arrays]
+            [COMMAND Within the if self._wcs.world_n_dim > 1 block, if self.world_n_dim == 1, unwrap the one-element filtered list by rebinding world_arrays to world_arrays[0]. RESULT world_arrays]
+            [COMMAND Return world_arrays as the final result. RESULT world_arrays]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts world-coordinate arrays to pixel coordinates by normalizing and broadcasting the selected world axes, applying the WCS transformation, subtracting pixel slice starts, and returning the selected pixel axes as a tuple or unwrapped value." world_to_pixel_values]
+    [INPUTS]
+        <REF> world_arrays </REF>: tuple of array_like "World-coordinate arrays passed as positional arguments; each is converted to a NumPy array with np.asanyarray."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> pixel </REF>: tuple, ndarray, or scalar "Return value of world_to_pixel_values: normally a tuple of selected pixel arrays, or pixel[0] when one pixel dimension is requested from a multi-pixel WCS; if the early-return condition is true, the original pixel_arrays ndarray is returned directly."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert all input world_arrays elements to NumPy arrays using np.asanyarray, collect them into a tuple, and assign that tuple back to world_arrays. RESULT world_arrays]
+            [COMMAND Initialize world_arrays_new as an empty list and set iworld_curr to -1. RESULT world_arrays_new, iworld_curr]
+            [COMMAND For each iworld in range(self._wcs.world_n_dim) with exclusive upper bound, if iworld is in self._world_keep then increment iworld_curr and append world_arrays[iworld_curr] to world_arrays_new; otherwise append the constant 1.0 to world_arrays_new. RESULT world_arrays_new, iworld_curr]
+            [COMMAND Call np.broadcast_arrays(*world_arrays_new) to broadcast the coordinate arrays to a common shape, and assign the returned arrays back to world_arrays_new. RESULT world_arrays_new]
+            [COMMAND Call self._wcs.world_to_pixel_values(*world_arrays_new), convert the result to a list, and assign that list to pixel_arrays. RESULT pixel_arrays]
+            [COMMAND For each ipixel in range(self._wcs.pixel_n_dim) with exclusive upper bound, using short-circuit evaluation check whether self._slices_pixel[ipixel] is a slice and its start is not None; if true, subtract self._slices_pixel[ipixel].start from pixel_arrays[ipixel]. RESULT pixel_arrays]
+            [COMMAND After the early-return check is not triggered, build pixel as a tuple containing pixel_arrays[ip] for each ip in self._pixel_keep, preserving the iteration order of self._pixel_keep. RESULT pixel]
+            [COMMAND If self.pixel_n_dim equals 1 and self._wcs.pixel_n_dim is greater than 1, replace pixel with pixel[0] to unwrap the single kept pixel dimension. RESULT pixel]
+            [COMMAND Return pixel as the final result. RESULT pixel]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After the slice-offset loop, the short-circuit source check isinstance(pixel_arrays, np.ndarray) and not pixel_arrays.shape is true, meaning pixel_arrays is an ndarray with an empty shape tuple.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return pixel_arrays immediately without building the pixel tuple. RESULT pixel_arrays]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the world axis object components for the world axes selected by self._world_keep, preserving their original order." world_axis_object_components]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "A new list of world axis object components selected by self._world_keep, in the same order as the indices in self._world_keep."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the iterable of axis indices from self._world_keep. RESULT world_keep_indices]
+            [COMMAND For each idx in world_keep_indices in iteration order, index into self._wcs.world_axis_object_components[idx] and collect each selected component into a new list. RESULT selected_components]
+            [COMMAND Return selected_components. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the keys to keep from world_axis_object_components and returns a filtered dictionary containing only the matching entries from self._wcs.world_axis_object_classes." world_axis_object_classes]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: dict "A new dictionary containing only the world axis object classes whose keys are present in keys_keep."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extract keys_keep as a list of the first element of every item in self.world_axis_object_components, preserving iteration order. RESULT keys_keep]
+            [COMMAND Build and return a new dictionary from the items of self._wcs.world_axis_object_classes, retaining only those items whose key appears in keys_keep. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the shape of the WCS data array after applying the stored slice selection when a WCS array shape is present, and otherwise falls through without returning a value." array_shape]
+    [INPUTS]
+        <REF> self </REF>: object "Object that provides the WCS array shape via _wcs.array_shape and the slice selection via _slices_array."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple or None "The shape resulting from broadcasting a zero-filled array to the WCS shape and applying the stored slice tuple, or None when the WCS array shape is falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self._wcs.array_shape is truthy. RESULT has_array_shape]
+            [COMMAND If has_array_shape is true, create a zero-filled array broadcast to self._wcs.array_shape, apply the slice tuple self._slices_array, and compute the resulting shape. RESULT shape_after_slice]
+            [COMMAND Return shape_after_slice immediately as the method result. RESULT returned_shape]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If self._wcs.array_shape is falsy, as when it is None, an empty tuple, or an empty list, the return branch is skipped.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not return a value; continue past the if block and allow the method to end, producing an implicit None return. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the reversed array shape as a tuple when array_shape is truthy, otherwise implicitly returns None." pixel_shape]
+    [INPUTS]
+        <REF> array_shape </REF>: tuple/list/iterable or None "The shape attribute; when truthy, it is reversed and returned as a tuple."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> pixel_shape_result </REF>: tuple or None "A reversed copy of array_shape as a tuple when array_shape is truthy; otherwise an implicit None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.array_shape is truthy, evaluate self.array_shape[::-1], convert it to a tuple, and immediately return that tuple as pixel_shape_result. RESULT pixel_shape_result]
+            [COMMAND If self.array_shape is falsy, reach the end of the function without an explicit return value, producing None. RESULT implicit_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts WCS pixel bounds from original array coordinates to slice-relative coordinates by subtracting each retained slice start when defined, preserving original bounds when slice start is None, and returning the resulting tuple or None if no WCS pixel bounds are available." pixel_bounds]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple or None "Tuple of slice-relative WCS pixel bounds for each retained index, or None if self._wcs.pixel_bounds is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self._wcs.pixel_bounds is None; if it is, return None immediately. RESULT early_return]
+            [COMMAND Initialize bounds = []. RESULT bounds]
+            [COMMAND Iterate over each idx in self._pixel_keep. RESULT idx]
+            [COMMAND Within the loop over idx, if self._slices_pixel[idx].start is None, append self._wcs.pixel_bounds[idx] directly to bounds; this is the if-branch. RESULT bounds]
+            [COMMAND Within the loop over idx, for the else-branch where self._slices_pixel[idx].start is not None, unpack imin, imax = self._wcs.pixel_bounds[idx], set start = self._slices_pixel[idx].start, and append (imin - start, imax - start) to bounds. RESULT bounds]
+            [COMMAND After the loop completes, convert the collected bounds list to a tuple and return it. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the axis correlation submatrix containing only the rows for kept world axes and columns for kept pixel axes from the WCS correlation matrix." axis_correlation_matrix]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> correlation_submatrix </REF>: 2-D array-like "Submatrix of self._wcs.axis_correlation_matrix selected by self._world_keep on rows and self._pixel_keep on columns."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the submatrix of self._wcs.axis_correlation_matrix obtained by applying self._world_keep as the row indexer and then self._pixel_keep as the column indexer. RESULT correlation_submatrix]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sanitizes a WCS slice specification by validating its dimensionality and index types, expanding any ellipsis, padding missing dimensions with full slices, and returning a list of exactly ndim slice or integer entries." sanitize_slices]
+    [INPUTS]
+        <REF> slices </REF>: tuple | list | int | slice | Ellipsis "User-provided slice specification: a single index or a tuple/list of indexes."
+        <REF> ndim </REF>: int "Dimensionality of the WCS object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> slices </REF>: list "A list of length ndim containing slice objects and integers accepted for WCS indexing."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the input slices: if it is not already a tuple or list, wrap it in a one-element tuple. RESULT slices]
+            [COMMAND Validate dimensionality: if len(slices) is greater than ndim, raise ValueError; otherwise continue with the same slices. RESULT slices]
+            [COMMAND Validate iterable components: if any element of slices is iterable, raise IndexError; otherwise continue. RESULT slices]
+            [COMMAND Convert slices to a mutable list using list(slices), making a shallow copy if slices is already a list. RESULT slices]
+            [COMMAND Check whether Ellipsis is present in slices. If it is present, execute the ellipsis-expansion alternative; if it is not present, skip that alternative and proceed to the final normalization loop. RESULT slices]
+            [COMMAND For each i from 0 to ndim-1, if i is less than the current length of slices, let slc = slices[i]; if slc is a slice, reject it when slc.step is truthy and slc.step != 1; if slc is not a slice, reject it when it is not an instance of numbers.Integral. If i is not less than the current length of slices, append slice(None) to slices. RESULT slices]
+            [COMMAND Return the resulting slices list. RESULT slices]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Ellipsis is present in slices after the list conversion.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that slices contains at most one Ellipsis; if it contains more than one, raise IndexError. RESULT slices]
+            [COMMAND Record e_ind = slices.index(Ellipsis), remove that Ellipsis from slices, and compute n_e = ndim - len(slices). RESULT slices]
+            [COMMAND For i from 0 to n_e-1, insert slice(None) into slices at position e_ind + i, replacing the ellipsis by the required number of full slices. RESULT slices]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: After initial normalization, len(slices) > ndim.]
+        [LOG "The number of entries in the provided slice is greater than the WCS dimensionality."]
+        [THROW ValueError "The dimensionality of the specified slice cannot be greater than the dimensionality of the wcs."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: After the dimensionality check, any element in slices is iterable.]
+        [LOG "A slice entry is iterable instead of being an integer or a range slice."]
+        [THROW IndexError "This slice is invalid; only integer or range slices are supported."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the ellipsis branch, slices.count(Ellipsis) > 1.]
+        [LOG "An index can only contain a single ellipsis."]
+        [THROW IndexError "An index can only have a single ellipsis ('...')."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the final loop, when i < len(slices), slices[i] is a slice and its step is truthy and not equal to 1.]
+        [LOG "A slice entry specifies a step other than the default or 1."]
+        [THROW IndexError "Slicing WCS with a step is not supported."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the final loop, when i < len(slices), slices[i] is not a slice and is not an instance of numbers.Integral.]
+        [LOG "A slice entry is neither a range slice nor an integer."]
+        [THROW IndexError "Only integer or range slices are accepted."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

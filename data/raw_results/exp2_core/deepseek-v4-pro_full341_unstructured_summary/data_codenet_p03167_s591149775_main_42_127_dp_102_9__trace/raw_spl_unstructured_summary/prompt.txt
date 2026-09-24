@@ -1,0 +1,374 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include <stdio.h>
+2   #include <string.h>
+3   #include <stdlib.h>
+4   #define lli long long int
+5   #define BIG 1000000007
+6   void debug_c(char **dp, int h, int w)
+7   {
+8   	printf("----debug\n");
+9   	int i = 0;
+10  	int j = 0;
+11  	while (i < h)
+12  	{
+13  		j = 0;
+14  		while (j < w)
+15  		{
+16  			printf("%d,",dp[i][j]);
+17  			j++;
+18  		}
+19  		printf("\n");
+20  		i++;
+21  	}
+22  	printf("----debug\n");
+23  }
+24  void debug(int **dp, int h, int w)
+25  {
+26  	printf("----debug\n");
+27  	int i = 0;
+28  	int j = 0;
+29  	while (i < h)
+30  	{
+31  		j = 0;
+32  		while (j < w)
+33  		{
+34  			printf("%d",dp[j][i]);
+35  			j++;
+36  		}
+37  		printf("\n");
+38  		i++;
+39  	}
+40  	printf("----debug\n");
+41  }
+42  int main(void)
+43  {	
+44  	int h, w;
+45  	scanf("%d %d", &h, &w);
+46  	int i = 0;
+47  	int j = 0;
+48  	char **a;
+49  	int **dp;
+50  	a = (char **)malloc(sizeof(char *)*(h));
+51  	dp = (int **)malloc(sizeof(int *)*(w));
+52  	while (i < w)
+53  	{
+54  		dp[i] = (int *)malloc(sizeof(int)*(h));
+55  		i++;
+56  	}
+57  	while (j < h)
+58  	{
+59  		a[j] = (char *)malloc(sizeof(char)*(w));
+60  		j++;
+61  	}
+62  	i = 0;
+63  	j = 0;
+64  	while (i < h)
+65  	{
+66  		j = 0;
+67  		scanf("%s",a[i]);
+68  		while (j < w)
+69  		{
+70  			dp[j][i] = 0;
+71  			if(a[i][j] == '#')
+72  			{
+73  				dp[j][i] = -1;
+74  			}
+75  			j++;
+76  		}
+77  		i++;
+78  	}
+79  	dp[0][0] = 1;
+80  	i = 1;
+81  	j = 1;
+82  	while (i < h)
+83  	{
+84  		if(dp[0][i] == -1)
+85  		{
+86  			dp[0][i] = 0;
+87  		}
+88  		else
+89  		{
+90  			dp[0][i] = dp[0][i-1];
+91  		}
+92  		i++;
+93  	}
+94  	while (j < w)
+95  	{
+96  		if(dp[j][0] == -1)
+97  		{
+98  			dp[j][0] = 0;
+99  		}
+100  		else
+101  		{
+102  			dp[j][0] = dp[j-1][0];
+103  		}
+104  		j++;
+105  	}
+106  	i = 1;
+107  	j = 1;
+108  	while (i< h)
+109  	{
+110  		j = 1;
+111  		while (j < w)
+112  		{
+113  			if(dp[j][i] == -1)
+114  			{
+115  				dp[j][i] = 0;
+116  			}
+117  			else
+118  			{
+119  				dp[j][i] = (dp[j-1][i]+dp[j][i-1])%BIG;
+120  			}
+121  			j++;
+122  		}
+123  		i++;
+124  	}
+125  	printf("%d\n",dp[w-1][h-1]);
+126  	return (0);
+127  }
+```
+
+
+**Question**: Does `(a,59)` have data dependence over `(dp,102)` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function main: Reads a grid of height h and width w, counts the number of paths from the top-left cell to the bottom-right cell while treating '#' cells as blocked, and prints the count modulo BIG.
+The behaviour proceeds in this order:
+1. Read two integers from standard input into h and w using scanf. This produces h, w.
+2. Initialize i to 0 and j to 0, allocate a as an array of h char* pointers, and allocate dp as an array of w int* pointers. This produces a, dp, i, j.
+3. While i is less than w, allocate dp[i] as an array of h int values and increment i. This produces dp.
+4. While j is less than h, allocate a[j] as an array of w char values and increment j. This produces a.
+5. Reset i to 0 and j to 0. This produces i, j.
+6. While i is less than h, reset j to 0, read a string into a[i] using scanf with format string %s, then while j is less than w set dp[j][i] to 0; if a[i][j] equals '#' set dp[j][i] to -1; increment j after each column; increment i after each row. This produces a, dp, i, j.
+7. Set dp[0][0] to 1, then set i to 1 and j to 1. This produces dp, i, j.
+8. While i is less than h, if dp[0][i] equals -1 set dp[0][i] to 0, otherwise set dp[0][i] to dp[0][i-1]; increment i after each iteration. This produces dp.
+9. While j is less than w, if dp[j][0] equals -1 set dp[j][0] to 0, otherwise set dp[j][0] to dp[j-1][0]; increment j after each iteration. This produces dp.
+10. Set i to 1 and j to 1. This produces i, j.
+11. While i is less than h, reset j to 1; while j is less than w, if dp[j][i] equals -1 set dp[j][i] to 0, otherwise set dp[j][i] to (dp[j-1][i] + dp[j][i-1]) % BIG; increment j after each inner iteration; increment i after each outer iteration. This produces dp.
+12. Print dp[w-1][h-1] followed by a newline using printf. This produces printed_value.
+13. Return 0 from main. This produces exit_code.

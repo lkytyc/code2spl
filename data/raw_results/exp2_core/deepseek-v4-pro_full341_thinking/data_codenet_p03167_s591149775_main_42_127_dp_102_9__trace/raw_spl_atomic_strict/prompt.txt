@@ -1,0 +1,560 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include <stdio.h>
+2   #include <string.h>
+3   #include <stdlib.h>
+4   #define lli long long int
+5   #define BIG 1000000007
+6   void debug_c(char **dp, int h, int w)
+7   {
+8   	printf("----debug\n");
+9   	int i = 0;
+10  	int j = 0;
+11  	while (i < h)
+12  	{
+13  		j = 0;
+14  		while (j < w)
+15  		{
+16  			printf("%d,",dp[i][j]);
+17  			j++;
+18  		}
+19  		printf("\n");
+20  		i++;
+21  	}
+22  	printf("----debug\n");
+23  }
+24  void debug(int **dp, int h, int w)
+25  {
+26  	printf("----debug\n");
+27  	int i = 0;
+28  	int j = 0;
+29  	while (i < h)
+30  	{
+31  		j = 0;
+32  		while (j < w)
+33  		{
+34  			printf("%d",dp[j][i]);
+35  			j++;
+36  		}
+37  		printf("\n");
+38  		i++;
+39  	}
+40  	printf("----debug\n");
+41  }
+42  int main(void)
+43  {	
+44  	int h, w;
+45  	scanf("%d %d", &h, &w);
+46  	int i = 0;
+47  	int j = 0;
+48  	char **a;
+49  	int **dp;
+50  	a = (char **)malloc(sizeof(char *)*(h));
+51  	dp = (int **)malloc(sizeof(int *)*(w));
+52  	while (i < w)
+53  	{
+54  		dp[i] = (int *)malloc(sizeof(int)*(h));
+55  		i++;
+56  	}
+57  	while (j < h)
+58  	{
+59  		a[j] = (char *)malloc(sizeof(char)*(w));
+60  		j++;
+61  	}
+62  	i = 0;
+63  	j = 0;
+64  	while (i < h)
+65  	{
+66  		j = 0;
+67  		scanf("%s",a[i]);
+68  		while (j < w)
+69  		{
+70  			dp[j][i] = 0;
+71  			if(a[i][j] == '#')
+72  			{
+73  				dp[j][i] = -1;
+74  			}
+75  			j++;
+76  		}
+77  		i++;
+78  	}
+79  	dp[0][0] = 1;
+80  	i = 1;
+81  	j = 1;
+82  	while (i < h)
+83  	{
+84  		if(dp[0][i] == -1)
+85  		{
+86  			dp[0][i] = 0;
+87  		}
+88  		else
+89  		{
+90  			dp[0][i] = dp[0][i-1];
+91  		}
+92  		i++;
+93  	}
+94  	while (j < w)
+95  	{
+96  		if(dp[j][0] == -1)
+97  		{
+98  			dp[j][0] = 0;
+99  		}
+100  		else
+101  		{
+102  			dp[j][0] = dp[j-1][0];
+103  		}
+104  		j++;
+105  	}
+106  	i = 1;
+107  	j = 1;
+108  	while (i< h)
+109  	{
+110  		j = 1;
+111  		while (j < w)
+112  		{
+113  			if(dp[j][i] == -1)
+114  			{
+115  				dp[j][i] = 0;
+116  			}
+117  			else
+118  			{
+119  				dp[j][i] = (dp[j-1][i]+dp[j][i-1])%BIG;
+120  			}
+121  			j++;
+122  		}
+123  		i++;
+124  	}
+125  	printf("%d\n",dp[w-1][h-1]);
+126  	return (0);
+127  }
+```
+
+
+**Question**: Does `(a,59)` have data dependence over `(dp,102)` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: main
+Target source anchor: variable=dp, line=102
+Trace source anchor: variable=a, line=59
+Attached SPL owners: main
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Initialize i to 0 and j to 0, allocate a as an array of h char* pointers, and allocate dp as an array of w int* pointers. RESULT a, dp, i, j]
+- [COMMAND While i is less than w, allocate dp[i] as an array of h int values and increment i. RESULT dp]
+- [COMMAND While j is less than h, allocate a[j] as an array of w char values and increment j. RESULT a]
+- [COMMAND Reset i to 0 and j to 0. RESULT i, j]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 46: int i = 0;
+- line 47: int j = 0;
+- line 51: dp = (int **)malloc(sizeof(int *)*(w));
+- line 54: dp[i] = (int *)malloc(sizeof(int)*(h));
+- line 55: i++;
+- line 60: j++;
+- line 62: i = 0;
+- line 63: j = 0;
+- line 66: j = 0;
+- line 75: j++;
+- line 77: i++;
+- line 80: i = 1;
+- line 81: j = 1;
+- line 92: i++;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 46, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i", "int"]}
+- {"definitions": ["j"], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "before_target", "reason": "j", "relevant_identifiers": ["j"], "roles": ["definition"], "source_identifiers": ["int", "j"]}
+- {"definitions": ["dp"], "disposition": "inspect_against_official_dependence_definition", "line": 51, "position": "before_target", "reason": "dp", "relevant_identifiers": ["dp"], "roles": ["definition"], "source_identifiers": ["dp", "int", "malloc", "sizeof", "w"]}
+- {"definitions": ["dp"], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "before_target", "reason": "dp", "relevant_identifiers": ["dp"], "roles": ["definition"], "source_identifiers": ["dp", "h", "i", "int", "malloc", "sizeof"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i"]}
+- {"definitions": ["j"], "disposition": "inspect_against_official_dependence_definition", "line": 60, "position": "before_target", "reason": "j", "relevant_identifiers": ["j"], "roles": ["definition"], "source_identifiers": ["j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 62, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i"]}
+- {"definitions": ["j"], "disposition": "inspect_against_official_dependence_definition", "line": 63, "position": "before_target", "reason": "j", "relevant_identifiers": ["j"], "roles": ["definition"], "source_identifiers": ["j"]}
+- {"definitions": ["j"], "disposition": "inspect_against_official_dependence_definition", "line": 66, "position": "before_target", "reason": "j", "relevant_identifiers": ["j"], "roles": ["definition"], "source_identifiers": ["j"]}
+- {"definitions": ["j"], "disposition": "inspect_against_official_dependence_definition", "line": 75, "position": "before_target", "reason": "j", "relevant_identifiers": ["j"], "roles": ["definition"], "source_identifiers": ["j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 77, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 80, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i"]}
+- {"definitions": ["j"], "disposition": "inspect_against_official_dependence_definition", "line": 81, "position": "before_target", "reason": "j", "relevant_identifiers": ["j"], "roles": ["definition"], "source_identifiers": ["j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 92, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 42-127
+- source signature: `int main(void)`
+- source content hash: `05661e81bd13f8de8ba34d63c6959841646ca2270d84720085e6c6dfdea0dd9c`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```cpp
+  42  int main(void)
+  43  {	
+  44   int h, w;
+  45   scanf("%d %d", &h, &w);
+  46   int i = 0;
+  47   int j = 0;
+  48   char **a;
+  49   int **dp;
+  50   a = (char **)malloc(sizeof(char *)*(h));
+  51   dp = (int **)malloc(sizeof(int *)*(w));
+  52   while (i < w)
+  53   {
+  54    dp[i] = (int *)malloc(sizeof(int)*(h));
+  55    i++;
+  56   }
+  57   while (j < h)
+  58   {
+  59    a[j] = (char *)malloc(sizeof(char)*(w));
+  60    j++;
+  61   }
+  62   i = 0;
+  63   j = 0;
+  64   while (i < h)
+  65   {
+  66    j = 0;
+  67    scanf("%s",a[i]);
+  68    while (j < w)
+  69    {
+  70     dp[j][i] = 0;
+  71     if(a[i][j] == '#')
+  72     {
+  73      dp[j][i] = -1;
+  74     }
+  75     j++;
+  76    }
+  77    i++;
+  78   }
+  79   dp[0][0] = 1;
+  80   i = 1;
+  81   j = 1;
+  82   while (i < h)
+  83   {
+  84    if(dp[0][i] == -1)
+  85    {
+  86     dp[0][i] = 0;
+  87    }
+  88    else
+  89    {
+  90     dp[0][i] = dp[0][i-1];
+  91    }
+  92    i++;
+  93   }
+  94   while (j < w)
+  95   {
+  96    if(dp[j][0] == -1)
+  97    {
+  98     dp[j][0] = 0;
+  99    }
+ 100    else
+ 101    {
+ 102     dp[j][0] = dp[j-1][0];
+ 103    }
+ 104    j++;
+ 105   }
+ 106   i = 1;
+ 107   j = 1;
+ 108   while (i< h)
+ 109   {
+ 110    j = 1;
+ 111    while (j < w)
+ 112    {
+ 113     if(dp[j][i] == -1)
+ 114     {
+ 115      dp[j][i] = 0;
+ 116     }
+ 117     else
+ 118     {
+ 119      dp[j][i] = (dp[j-1][i]+dp[j][i-1])%BIG;
+ 120     }
+ 121     j++;
+ 122    }
+ 123    i++;
+ 124   }
+ 125   printf("%d\n",dp[w-1][h-1]);
+ 126   return (0);
+ 127  }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads a grid of height h and width w, counts the number of paths from the top-left cell to the bottom-right cell while treating '#' cells as blocked, and prints the count modulo BIG." main]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read two integers from standard input into h and w using scanf. RESULT h, w]
+            [COMMAND Initialize i to 0 and j to 0, allocate a as an array of h char* pointers, and allocate dp as an array of w int* pointers. RESULT a, dp, i, j]
+            [COMMAND While i is less than w, allocate dp[i] as an array of h int values and increment i. RESULT dp]
+            [COMMAND While j is less than h, allocate a[j] as an array of w char values and increment j. RESULT a]
+            [COMMAND Reset i to 0 and j to 0. RESULT i, j]
+            [COMMAND While i is less than h, reset j to 0, read a string into a[i] using scanf with format string %s, then while j is less than w set dp[j][i] to 0; if a[i][j] equals '#' set dp[j][i] to -1; increment j after each column; increment i after each row. RESULT a, dp, i, j]
+            [COMMAND Set dp[0][0] to 1, then set i to 1 and j to 1. RESULT dp, i, j]
+            [COMMAND While i is less than h, if dp[0][i] equals -1 set dp[0][i] to 0, otherwise set dp[0][i] to dp[0][i-1]; increment i after each iteration. RESULT dp]
+            [COMMAND While j is less than w, if dp[j][0] equals -1 set dp[j][0] to 0, otherwise set dp[j][0] to dp[j-1][0]; increment j after each iteration. RESULT dp]
+            [COMMAND Set i to 1 and j to 1. RESULT i, j]
+            [COMMAND While i is less than h, reset j to 1; while j is less than w, if dp[j][i] equals -1 set dp[j][i] to 0, otherwise set dp[j][i] to (dp[j-1][i] + dp[j][i-1]) % BIG; increment j after each inner iteration; increment i after each outer iteration. RESULT dp]
+            [COMMAND Print dp[w-1][h-1] followed by a newline using printf. RESULT printed_value]
+            [COMMAND Return 0 from main. RESULT exit_code]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

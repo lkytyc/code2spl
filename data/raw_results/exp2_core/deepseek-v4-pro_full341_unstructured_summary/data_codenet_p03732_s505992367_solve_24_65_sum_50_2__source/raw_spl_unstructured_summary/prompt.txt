@@ -1,0 +1,331 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.OutputStream;
+2   import java.io.IOException;
+3   import java.io.InputStream;
+4   import java.io.PrintWriter;
+5   import java.io.IOException;
+6   import java.util.InputMismatchException;
+7   import java.io.InputStreamReader;
+8   import java.util.ArrayList;
+9   import java.util.StringTokenizer;
+10  import java.io.BufferedReader;
+11  import java.util.Collections;
+12  import java.io.InputStream;
+13  public class Main {
+14      public static void main(String[] args) {
+15          InputStream inputStream = System.in;
+16          OutputStream outputStream = System.out;
+17          InputReader in = new InputReader(inputStream);
+18          PrintWriter out = new PrintWriter(outputStream);
+19          TaskD solver = new TaskD();
+20          solver.solve(1, in, out);
+21          out.close();
+22      }
+23      static class TaskD {
+24          public void solve(int testNumber, InputReader in, PrintWriter out) {
+25              int n = in.nextInt();
+26              long W = in.nextLong();
+27              ArrayList<Long>[] lists = new ArrayList[4];
+28              for (int i = 0; i < 4; i++) {
+29                  lists[i] = new ArrayList<>();
+30              }
+31              long w1 = in.nextLong();
+32              long v1 = in.nextLong();
+33              lists[0].add(v1);
+34              for (int i = 1; i < n; i++) {
+35                  long w = in.nextLong();
+36                  long v = in.nextLong();
+37                  lists[(int) (w - w1)].add(v);
+38              }
+39              for (int i = 0; i < 4; i++) {
+40                  lists[i].sort(Collections.reverseOrder());
+41              }
+42              long[][] sum = new long[4][];
+43              for (int i = 0; i < 4; i++) {
+44                  int m = lists[i].size();
+45                  sum[i] = new long[m + 1];
+46                  for (int j = 0; j < m; j++) {
+47                      sum[i][j + 1] = lists[i].get(j);
+48                  }
+49                  for (int j = 0; j < m; j++) {
+50                      sum[i][j + 1] += sum[i][j];
+51                  }
+52              }
+53              long ans = 0;
+54              for (int i = 0; i <= lists[0].size(); i++) {
+55                  for (int j = 0; j <= lists[1].size(); j++) {
+56                      for (int k = 0; k <= lists[2].size(); k++) {
+57                          for (int l = 0; l <= lists[3].size(); l++) {
+58                              if (w1 * i + (w1 + 1) * j + (w1 + 2) * k + (w1 + 3) * l > W) continue;
+59                              ans = Math.max(ans, sum[0][i] + sum[1][j] + sum[2][k] + sum[3][l]);
+60                          }
+61                      }
+62                  }
+63              }
+64              out.println(ans);
+65          }
+66      }
+67      static class InputReader {
+68          BufferedReader in;
+69          StringTokenizer tok;
+70          public String nextString() {
+71              while (!tok.hasMoreTokens()) {
+72                  try {
+73                      tok = new StringTokenizer(in.readLine(), " ");
+74                  } catch (IOException e) {
+75                      throw new InputMismatchException();
+76                  }
+77              }
+78              return tok.nextToken();
+79          }
+80          public int nextInt() {
+81              return Integer.parseInt(nextString());
+82          }
+83          public long nextLong() {
+84              return Long.parseLong(nextString());
+85          }
+86          public InputReader(InputStream inputStream) {
+87              in = new BufferedReader(new InputStreamReader(inputStream));
+88              tok = new StringTokenizer("");
+89          }
+90      }
+91  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(sum,50)` in function `solve`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function solve: Reads items whose weights are w1 plus an offset from 0 to 3, groups them by offset, sorts each group by descending value, builds prefix-sum rows, then enumerates count combinations to find and print the maximum total value with total weight not exceeding W.
+It takes testNumber (int) — The test case number; passed by the caller and not used in the method body.; in (InputReader) — Input reader used to read n, W, the first item weight w1 and value v1, and each remaining item weight w and value v.; out (PrintWriter) — Output writer used to print the computed maximum total value ans.
+The behaviour proceeds in this order:
+1. Read the integer n from input reader in. This produces n.
+2. Read the long W from input reader in. This produces W.
+3. Create an ArrayList<Long> array named lists with length 4; each element is initially null. This produces lists.
+4. For i from 0 while i < 4, assign lists[i] to a new empty ArrayList<Long>. This produces lists.
+5. Read the long w1 from input reader in. This produces w1.
+6. Read the long v1 from input reader in. This produces v1.
+7. Add v1 to lists[0]. This produces lists.
+8. For i from 1 while i < n, read long w and long v from input reader in, compute groupIndex = (int)(w - w1), and add v to lists[groupIndex]. This produces lists.
+9. For i from 0 while i < 4, sort lists[i] in descending order using Collections.reverseOrder(). This produces lists.
+10. Create a long[][] array named sum with length 4; all rows are initially null. This produces sum.
+11. For i from 0 while i < 4, let m = lists[i].size(). This produces m.
+12. For each such i, allocate sum[i] as a new long[m + 1] array, so every entry is initially 0. This produces sum.
+13. For each such i, for j from 0 while j < m, copy lists[i].get(j) into sum[i][j + 1]. This produces sum.
+14. For each such i, for j from 0 while j < m, add sum[i][j] to sum[i][j + 1] to transform each row into prefix sums, leaving sum[i][0] = 0. This produces sum.
+15. Initialize ans to 0 as a long. This produces ans.
+16. For i from 0 while i <= lists[0].size(), for j from 0 while j <= lists[1].size(), for k from 0 while k <= lists[2].size(), for l from 0 while l <= lists[3].size(), compute candidateWeight = w1 * i + (w1 + 1) * j + (w1 + 2) * k + (w1 + 3) * l. This produces candidateWeight.
+17. Within these nested loops, if candidateWeight > W, continue to the next l value without changing ans. This produces none.
+18. Within these nested loops, if candidateWeight <= W, compute candidateValue = sum[0][i] + sum[1][j] + sum[2][k] + sum[3][l] and set ans = Math.max(ans, candidateValue). This produces ans.
+19. Write the final ans to output writer out using out.println(ans). This produces ans.

@@ -1,0 +1,353 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   from collections import deque
+2   def search(tx, ty, kx, ky, mp):
+3     direct = ((-1, 0, 1, 0), (1, 0, -1, 0), (0, -1, 0, 1), (0, 1, 0, -1))
+4     dic = {}
+5     dic[(tx, ty, kx, ky)] = 0
+6     que = deque()
+7     que.append((0, (tx, ty, kx, ky)))
+8     while que:
+9       dist, p = que.popleft()
+10      tx, ty, kx, ky = p
+11      for dtx, dty, dkx, dky in direct:
+12        if mp[ty + dty][tx + dtx] == 0:
+13          ntx = tx + dtx, 
+14          nty = ty + dty
+15        else:
+16          ntx = tx
+17          nty = ty
+18        if mp[ky + dky][kx + dkx] == 0:
+19          nkx = kx + dkx
+20          nky = ky + dky
+21        else:
+22          nkx = kx
+23          nky = ky
+24        if (ntx, nty, nkx, nky) not in dic:
+25          if (ntx, nty) == (nkx, nky):
+26            if dist + 1 >= 100:
+27              print("NA")
+28            else:
+29              print(dist + 1)
+30            return
+31          dic[(ntx, nty, nkx, nky)] = True
+32          que.append((dist + 1, (ntx, nty, nkx, nky)))
+33    else:
+34      print("NA")
+35  def main():
+36    while True:
+37      w, h = map(int, input().split())
+38      if w == 0:
+39        break
+40      tx, ty = map(int, input().split())
+41      kx, ky = map(int, input().split())
+42      mp = [[1] + list(map(int, input().split())) + [1] for _ in range(h)]
+43      mp.insert(0, [1] * (w + 2))
+44      mp.append([1] * (w + 2))
+45      search(tx, ty, kx, ky, mp)
+46  main()
+```
+
+
+**Question**: Which variable instances have information flow over `(que,32)` in function `search`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function search: Performs a breadth-first search from the initial positions of two objects on a grid, moving both objects according to the direction table unless blocked, and prints the minimum number of simultaneous moves until they meet, or 'NA' if they never meet within fewer than 100 moves.
+It takes tx (int) — Initial x-coordinate of the first object.; ty (int) — Initial y-coordinate of the first object.; kx (int) — Initial x-coordinate of the second object.; ky (int) — Initial y-coordinate of the second object.; mp (list of list of int) — 2D grid indexed as mp[y][x]; 0 denotes an open cell and any non-zero value denotes a blocked cell. The method assumes all accessed indices are valid and performs no bounds checking.
+The behaviour proceeds in this order:
+1. Define direct as the constant tuple of four movement tuples: ((-1, 0, 1, 0), (1, 0, -1, 0), (0, -1, 0, 1), (0, 1, 0, -1)), where each tuple contains deltas for the first object's x, first object's y, second object's x, and second object's y. This produces direct.
+2. Initialize dic as an empty dictionary and set dic[(tx, ty, kx, ky)] = 0 to record the initial combined state as visited with distance 0. This produces dic.
+3. Initialize que as an empty deque and append the initial queue item (0, (tx, ty, kx, ky)). This produces que.
+4. While que is not empty, pop the leftmost item as (dist, p), then unpack p into tx, ty, kx, ky. This produces current_state.
+5. Within the while loop, iterate over each direction tuple (dtx, dty, dkx, dky) in direct. This produces direction.
+6. For each direction, if mp[ty + dty][tx + dtx] == 0 then set ntx = (tx + dtx,) (a one-element tuple, due to the trailing comma in the source) and set nty = ty + dty; otherwise set ntx = tx and nty = ty. This produces first_object_next.
+7. For each direction, if mp[ky + dky][kx + dkx] == 0 then set nkx = kx + dkx and nky = ky + dky; otherwise set nkx = kx and nky = ky. This produces second_object_next.
+8. For each direction, if the combined state (ntx, nty, nkx, nky) is not already a key in dic, process the state as new; otherwise skip the remaining body for this direction. This produces is_new_state.
+9. If the combined state is new and (ntx, nty) == (nkx, nky), then print 'NA' if dist + 1 >= 100, otherwise print dist + 1, and return immediately from the function. This produces meeting_print.
+10. If the combined state is new and the two positions do not meet, set dic[(ntx, nty, nkx, nky)] = True and append (dist + 1, (ntx, nty, nkx, nky)) to que. This produces enqueued_state.
+11. If the while loop finishes normally because que becomes empty and no return was executed, run the while-else clause and print 'NA'. This produces no_path_print.

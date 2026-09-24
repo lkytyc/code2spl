@@ -1,0 +1,57 @@
+# FILE: django/contrib/admin/filters.py
+The code implements Django admin’s list filter system, which renders sidebar filters for the change list page and narrows the displayed queryset based on user-selected query parameters.
+
+It defines a base `ListFilter` class with a required human-readable `title`, a template path, and an interface every subclass must implement: `has_output()` (whether any filter options exist), `choices(changelist)` (yields filter link data for the template), `queryset(request, queryset)` (applies the filter to a queryset), and `expected_parameters()` (which query-string parameter names it uses). Its constructor receives the request, current query parameters, the model, and the model admin, and it must be configured with a title.
+
+`SimpleListFilter` is a subclass for easily defined custom filters. It requires a `parameter_name`, reads that parameter from the URL query string, and calls a user-overridden `lookups()` method to obtain `(value, display)` choices. Its `choices()` method yields an “All” option plus one option per lookup, and it tracks which option is currently selected.
+
+`FieldListFilter` is the base for filters tied to model fields. It stores the field and field path, extracts any expected parameters from the request, and filters the queryset by using those parameters as lookup keyword arguments. It also provides a registration system: subclasses are registered with a predicate (a function of the field), and `create()` picks the first registered filter whose predicate matches the field. This allows field type–specific filter classes to be selected automatically.
+
+Concrete field filters include:
+
+- `RelatedFieldListFilter` for relation fields such as ForeignKey and ManyToManyField. It offers choices from the related model’s objects, supports an “All” option, individual related-object choices, and an “empty” choice if the field allows null or is a many-to-many relation (shows “None”).
+- `BooleanFieldListFilter` for boolean fields, showing “All”, “Yes”, “No”, and, if the field is nullable, an “Unknown” option for null values.
+- `ChoicesFieldListFilter` for fields with predefined `choices`, listing each choice plus an “All” option and, if a `None` choice exists, a choice representing null.
+- `DateFieldListFilter` for date and datetime fields, providing quick links such as “Any date”, “Today”, “Past 7 days”, “This month”, “This year”, and, for nullable fields, “No date”/“Has date”. It computes the relevant date boundaries in the current timezone.
+- `AllValuesFieldListFilter` is the fallback filter for all other fields. It shows all distinct existing values of that field from the relevant queryset, plus an option for null values if any exist.
+- `RelatedOnlyFieldListFilter` extends `RelatedFieldListFilter` to limit related options to only those values actually present in the admin’s current queryset.
+
+Each filter’s `choices()` uses the changelist’s `get_query_string()` helper to build URLs that add, remove, or replace the specific query parameters the filter controls. The chosen filter parameters are removed from the shared parameter dictionary so other parts of the admin do not misinterpret them, and invalid lookup values can raise `IncorrectLookupParameters`.
+
+# FILE: django/db/models/fields/__init__.py
+This code defines Django’s model field system: a base `Field` class and a collection of concrete field types used to describe how data is stored, validated, converted, and rendered in forms.
+
+At the core, `Field` stores configuration options such as `null`, `blank`, `default`, `choices`, `max_length`, `unique`, `primary_key`, `editable`, and `db_column`. It tracks field ordering with a creation counter, supports comparison, copying, cloning, deconstruction for migrations, and pickling. When a field is attached to a model, it sets its attribute name and database column, registers itself with the model’s metadata, and installs a descriptor on the model class; for choice fields it also adds a `get_<field>_display` helper method.
+
+The base class implements a pipeline for data handling: `to_python` converts raw values to Python objects, `validate` and `run_validators` check choices, null/blank constraints, and custom validators, and `clean` combines these steps. It also provides methods to prepare values for database storage (`get_prep_value`, `get_db_prep_value`), decide the SQL column type (`db_type`, `db_parameters`, `cast_db_type`), and convert values when reading from the database (`get_db_converters`). It integrates with Django’s system checks to catch invalid field definitions, and it can generate a corresponding `django.forms.Field` via `formfield`, including special handling for choices.
+
+The concrete field classes cover common data types:
+- `AutoField`, `BigAutoField`, `SmallAutoField`: auto-incrementing primary keys.
+- `BooleanField` and `NullBooleanField`: boolean values, with nullable support.
+- `CharField`, `TextField`, `EmailField`, `URLField`, `SlugField`: string-based data, each with appropriate validators and form fields.
+- `DateField`, `DateTimeField`, `TimeField`, `DurationField`: temporal data with parsing, formatting, and optional `auto_now`/`auto_now_add`.
+- `DecimalField`, `FloatField`, `IntegerField` and integer variants: numeric data with precision/range validation.
+- `GenericIPAddressField` and deprecated `IPAddressField`: IP address handling.
+- `BinaryField`: raw binary data, serialized via base64.
+- `UUIDField`: UUID values.
+- `FilePathField`: filesystem path selection.
+- `CommaSeparatedIntegerField`: deprecated, retained for migrations.
+
+The code also includes mixins and helper classes, such as `DateTimeCheckMixin` for date/time option validation and `PositiveIntegerRelDbTypeMixin` for database-specific relation column types. Overall, this file is the foundation for all model fields in Django, connecting model definitions to database backends, validation, serialization, and form rendering.
+
+# FILE: django/db/models/fields/reverse_related.py
+The code defines “rel objects,” internal Django classes that describe reverse relationships for related fields such as `ForeignKey`, `OneToOneField`, and `ManyToManyField`. These objects are stored on a field’s `remote_field` attribute and also serve as reverse-field representations in the model metadata API.
+
+The base class `ForeignObjectRel` holds shared information about a relation: the originating field, the model it points to, related name/query name, `limit_choices_to`, parent-link flag, and `on_delete` behavior. It exposes flags like `auto_created`, `concrete`, `editable`, `is_relation`, and `null` (reverse relations are always nullable). It also provides several cached properties that defer to the associated forward field, such as `many_to_many`, `many_to_one`, `one_to_many`, `one_to_one`, and `db_type`.
+
+Its methods include utilities for filtering and querying: `get_path_info` delegates to the forward field’s reverse path, `get_joining_columns` returns reverse join columns, and `get_extra_restriction` builds additional SQL restrictions. It also offers `get_lookup` and `get_internal_type` by delegating to the forward field. `get_choices` produces a list of choices suitable for `<select>` widgets by fetching related model instances. The `get_accessor_name` method determines the name of the reverse accessor (e.g., `model_set` or a custom `related_name`), respecting the `multiple` and `symmetrical` flags. `is_hidden` checks for a trailing `+` in the related name to identify hidden relations. Several cache-name and field-name helpers support internals like caching fetched related objects and resolving target fields.
+
+Subclasses specialize the behavior:
+
+- `ManyToOneRel` is used by `ForeignKey`. It stores the specific field name on the target model and can retrieve that field via `get_related_field`. Its `set_field_name` defaults the field name to the target model’s primary key if none was provided. It also supports pickling by omitting a cached property.
+
+- `OneToOneRel` extends `ManyToOneRel` for `OneToOneField`. It sets `multiple = False`, meaning the reverse accessor returns a single object rather than a queryset.
+
+- `ManyToManyRel` is used by `ManyToManyField`. It adds `through`, `through_fields`, `symmetrical`, and `db_constraint` attributes. It validates combinations of these options, and its `get_related_field` locates the field on the through model that points to the target model.
+
+Overall, these classes centralize reverse-relation metadata and behavior, enabling Django’s model options, query machinery, and form/inline utilities to interact uniformly with different relation types.

@@ -1,0 +1,27 @@
+
+
+import unittest
+
+class PushBoxGameTestCheckWin(unittest.TestCase):
+    def setUp(self) -> None:
+        self.game_map = [
+            "#####",
+            "#O  #",
+            "# X #",
+            "#  G#",
+            "#####"
+        ]
+        self.game = PushBoxGame(self.game_map)
+
+    def test_check_win_1(self):
+        self.assertFalse(self.game.check_win())
+
+    def test_check_win_2(self):
+        moves = ['d', 's', 'a', 's', 'd']
+        for move in moves:
+            self.game.move(move)
+        self.assertTrue(self.game.check_win())
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

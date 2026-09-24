@@ -1,0 +1,2682 @@
+# FILE: django/db/models/sql/query.py
+# CLASS RawQuery
+
+[DEFINE_WORKER: "Initializes the object with the given SQL and using values, defaults params to an empty tuple when it is falsy, and creates neutral cursor and query metadata state." __init__]
+    [INPUTS]
+        <REF> sql </REF>: str "SQL query string to store on the object."
+        <REF> using </REF>: str "Using clause or query source to store on the object."
+        <REF> params </REF>: tuple or iterable "Optional query parameters; if falsy, stored as an empty tuple."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.params to params if params is truthy; otherwise set self.params to an empty tuple (). RESULT self.params]
+            [COMMAND Set self.sql to sql. RESULT self.sql]
+            [COMMAND Set self.using to using. RESULT self.using]
+            [COMMAND Set self.cursor to None. RESULT self.cursor]
+            [COMMAND Set self.low_mark to 0 and self.high_mark to None. RESULT self.low_mark, self.high_mark]
+            [COMMAND Set self.extra_select to a new empty dictionary. RESULT self.extra_select]
+            [COMMAND Set self.annotation_select to a new empty dictionary. RESULT self.annotation_select]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a clone of the current object configured by the provided using argument." chain]
+    [INPUTS]
+        <REF> self </REF>: object "Current object whose clone is created."
+        <REF> using </REF>: object "Configuration value passed to clone to customize the new object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cloned_object </REF>: object "A clone of the current object configured by using."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call clone on the current object with the using parameter and return the resulting clone. RESULT cloned_object]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a new RawQuery using the original SQL and parameters, bound to the supplied execution context." clone]
+    [INPUTS]
+        <REF> using </REF>: object "Execution context or connection used for the cloned RawQuery."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> new_raw_query </REF>: RawQuery "A new RawQuery instance constructed with self.sql, using, and params=self.params."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.sql as the SQL text of the current RawQuery instance. RESULT self.sql]
+            [COMMAND Use the supplied using argument as the execution context for the new RawQuery. RESULT using]
+            [COMMAND Access self.params as the query parameters of the current RawQuery instance. RESULT self.params]
+            [COMMAND Construct a new RawQuery instance with self.sql as the first positional argument, using as the second positional argument, and params=self.params as the keyword argument. RESULT new_raw_query]
+            [COMMAND Return the newly constructed RawQuery object to the caller. RESULT new_raw_query]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes the cursor if needed, then returns the converted column names from the current query using the active database connection's identifier converter." get_columns]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> converted_columns </REF>: list "List of converted column identifiers from self.cursor.description."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.cursor is None, execute the query by calling self._execute_query(). RESULT self.cursor]
+            [COMMAND Assign converter from connections[self.using].introspection.identifier_converter. RESULT converter]
+            [COMMAND For each column_meta in self.cursor.description, convert column_meta[0] using converter and collect the results into a list. RESULT converted_columns]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the built-in dict type when self.params is a Mapping, otherwise returns the built-in tuple type." params_type]
+    [INPUTS]
+        <REF> self.params </REF>: Mapping or object "The attribute of the instance that is checked to decide whether to return dict or tuple."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: type "The dict type if self.params is a Mapping, otherwise the tuple type."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.params is an instance of Mapping. RESULT is_mapping]
+            [COMMAND Return the dict type if is_mapping is true, otherwise return the tuple type. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.params is not an instance of Mapping]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the tuple type. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves the configured database connection, adapts the query parameters for an unknown target type, creates a database cursor, and executes the SQL query with the adapted parameters." _execute_query]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the database connection for the current alias by evaluating connections[self.using] and assign the connection object to connection. RESULT connection]
+            [COMMAND Read self.params_type and assign it to params_type. RESULT params_type]
+            [COMMAND Obtain the method object connection.ops.adapt_unknown_value and assign it to adapter without calling it. RESULT adapter]
+            [COMMAND Dispatch parameter adaptation based on params_type: if params_type is exactly tuple use the tuple adaptation flow, if params_type is exactly dict use the dict adaptation flow, otherwise raise RuntimeError; store the adapted parameters in params. RESULT params]
+            [COMMAND Create a database cursor from connection and assign it to self.cursor. RESULT self.cursor]
+            [COMMAND Execute self.sql on self.cursor with params as the bound parameters. RESULT _execution_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: params_type is exactly tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each element in self.params, call adapter on the element, then build a new tuple named params from the adapted elements. RESULT params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: params_type is exactly dict]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each key/value pair in self.params.items(), call adapter on the value while keeping the key unchanged, then build a new dictionary named params from the adapted values. RESULT params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: params_type is neither exactly tuple nor exactly dict]
+        [LOG "Unexpected params type: {params_type}"]
+        [THROW RuntimeError "Raises RuntimeError to reject unsupported params_type values."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS Query
+
+[DEFINE_WORKER: "Initializes a new query object with the provided model, an initial where clause, and all default SQL-related, annotation, combination, and extension state." __init__]
+    [INPUTS]
+        <REF> model </REF>: object "The model for which this query is constructed."
+        <REF> where </REF>: type/callable "The class or factory used to create the initial where clause; defaults to WhereNode."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the model parameter to self.model. RESULT self.model]
+            [COMMAND Initialize self.alias_refcount to an empty dictionary for tracking alias reference counts. RESULT self.alias_refcount]
+            [COMMAND Initialize self.alias_map to an empty dictionary for recording joins and their types. RESULT self.alias_map]
+            [COMMAND Initialize self.external_aliases to an empty set for aliases referenced from outer queries. RESULT self.external_aliases]
+            [COMMAND Initialize self.table_map to an empty dictionary for mapping table names to lists of aliases. RESULT self.table_map]
+            [COMMAND Set self.default_cols to True so default columns are selected. RESULT self.default_cols]
+            [COMMAND Set self.default_ordering to True to enable default ordering. RESULT self.default_ordering]
+            [COMMAND Set self.standard_ordering to True to use standard ordering. RESULT self.standard_ordering]
+            [COMMAND Initialize self.used_aliases to an empty set for tracking used aliases. RESULT self.used_aliases]
+            [COMMAND Set self.filter_is_sticky to False. RESULT self.filter_is_sticky]
+            [COMMAND Set self.subquery to False. RESULT self.subquery]
+            [COMMAND Initialize self.select to an empty tuple for the SELECT clause expressions. RESULT self.select]
+            [COMMAND Call the where callable or class to create the initial where clause and assign it to self.where. RESULT self.where]
+            [COMMAND Store the where callable or class itself in self.where_class for later where construction. RESULT self.where_class]
+            [COMMAND Set self.group_by to None, meaning no GROUP BY clause is initially defined. RESULT self.group_by]
+            [COMMAND Initialize self.order_by to an empty tuple for ordering expressions. RESULT self.order_by]
+            [COMMAND Set self.low_mark to 0 as the lower offset boundary. RESULT self.low_mark]
+            [COMMAND Set self.high_mark to None as the upper offset boundary. RESULT self.high_mark]
+            [COMMAND Set self.distinct to False. RESULT self.distinct]
+            [COMMAND Initialize self.distinct_fields to an empty tuple. RESULT self.distinct_fields]
+            [COMMAND Set self.select_for_update to False. RESULT self.select_for_update]
+            [COMMAND Set self.select_for_update_nowait to False. RESULT self.select_for_update_nowait]
+            [COMMAND Set self.select_for_update_skip_locked to False. RESULT self.select_for_update_skip_locked]
+            [COMMAND Initialize self.select_for_update_of to an empty tuple. RESULT self.select_for_update_of]
+            [COMMAND Set self.select_related to False. RESULT self.select_related]
+            [COMMAND Set self.max_depth to 5 as the arbitrary limit for select_related recursion. RESULT self.max_depth]
+            [COMMAND Initialize self.values_select to an empty tuple for values() or values_list() selections. RESULT self.values_select]
+            [COMMAND Initialize self.annotations to an empty dictionary mapping alias to annotation expression. RESULT self.annotations]
+            [COMMAND Set self.annotation_select_mask to None. RESULT self.annotation_select_mask]
+            [COMMAND Set self._annotation_select_cache to None. RESULT self._annotation_select_cache]
+            [COMMAND Set self.combinator to None. RESULT self.combinator]
+            [COMMAND Set self.combinator_all to False. RESULT self.combinator_all]
+            [COMMAND Initialize self.combined_queries to an empty tuple. RESULT self.combined_queries]
+            [COMMAND Initialize self.extra to an empty dictionary mapping column alias to SQL and params. RESULT self.extra]
+            [COMMAND Set self.extra_select_mask to None. RESULT self.extra_select_mask]
+            [COMMAND Set self._extra_select_cache to None. RESULT self._extra_select_cache]
+            [COMMAND Initialize self.extra_tables to an empty tuple. RESULT self.extra_tables]
+            [COMMAND Initialize self.extra_order_by to an empty tuple. RESULT self.extra_order_by]
+            [COMMAND Initialize self.deferred_loading to a tuple containing an empty frozenset and True, representing no deferred fields. RESULT self.deferred_loading]
+            [COMMAND Initialize self._filtered_relations to an empty dictionary. RESULT self._filtered_relations]
+            [COMMAND Set self.explain_query to False. RESULT self.explain_query]
+            [COMMAND Set self.explain_format to None. RESULT self.explain_format]
+            [COMMAND Initialize self.explain_options to an empty dictionary. RESULT self.explain_options]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the single selected item's field if exactly one select item exists, otherwise returns the single annotation selection's output_field if exactly one annotation_select entry exists, otherwise returns None." output_field]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: field object or None "The field from self.select[0] when len(self.select) == 1; otherwise the output_field from the sole value in self.annotation_select when len(self.annotation_select) == 1; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.select contains exactly one item by evaluating len(self.select) == 1. RESULT select_has_single_item]
+            [COMMAND If select_has_single_item is true, return self.select[0].field and exit the method. RESULT selected_field]
+            [COMMAND If select_has_single_item is false, check whether self.annotation_select contains exactly one entry by evaluating len(self.annotation_select) == 1. RESULT annotation_select_has_single_entry]
+            [COMMAND If annotation_select_has_single_entry is false, reach the end of the method and return None. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: select_has_single_item is false and annotation_select_has_single_entry is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return next(iter(self.annotation_select.values())).output_field and exit the method. RESULT annotation_output_field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if any of self.select, self.annotation_select_mask, or self.extra_select_mask is truthy, and False only if all three are falsy." has_select_fields]
+    [INPUTS]
+        <REF> self </REF>: object "Instance containing the select, annotation_select_mask, and extra_select_mask attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if at least one of the three attributes is truthy; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate self.select; if it is truthy, use it as the OR-chain value, otherwise evaluate self.annotation_select_mask; if truthy, use it, otherwise evaluate self.extra_select_mask; convert the final value to bool and return it. RESULT has_select_fields_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the first alias from self.alias_map, or None if the map contains no aliases." base_table]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object or None "The first alias from self.alias_map, or None if no alias exists."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over self.alias_map in its iteration order (keys if it is a dictionary), obtaining the first element as alias. RESULT alias]
+            [COMMAND Return alias immediately on the first iteration, exiting the function. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.alias_map is empty, so the loop body never executes.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fall through after the loop and return None implicitly. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the SQL string and bound parameters for this query by compiling it using the default database alias." sql_with_params]
+    [INPUTS]
+        <REF> self </REF>: query object "The query object whose SQL representation is to be generated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_params_tuple </REF>: tuple "A tuple containing the generated SQL string and the list of bound parameters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the SQL compiler for this query object using DEFAULT_DB_ALIAS as the database alias. RESULT compiler]
+            [COMMAND Call compiler.as_sql() to produce the SQL string and its bound parameters. RESULT sql_params_tuple]
+            [COMMAND Return the sql_params_tuple as the method's result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Gets and returns the database compiler instance for this query, using the supplied connection or the connection resolved from the using alias, and raising ValueError if neither is provided." get_compiler]
+    [INPUTS]
+        <REF> self </REF>: object "The query object for which the compiler is requested."
+        <REF> using </REF>: string|null "Database alias used to resolve a connection from the connections registry; may be None."
+        <REF> connection </REF>: object|null "Database connection to use when no alias is supplied; may be None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "A compiler instance created by connection.ops.compiler(self.compiler)(self, connection, using)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the guard condition using is None and connection is None; the and short-circuits if using is not None. RESULT missing_both]
+            [COMMAND Set connection to the provided connection argument as the default active connection. RESULT connection]
+            [COMMAND Return connection.ops.compiler(self.compiler)(self, connection, using). RESULT compiler_instance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: using is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Override connection by looking it up in the connections registry as connections[using]. RESULT connection]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: using is None and connection is None]
+        [LOG "ValueError: Need either using or connection"]
+        [THROW ValueError "Raised when both using and connection are None because at least one of them is required."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the Options instance for the associated model by accessing self.model._meta." get_meta]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance on which get_meta is called; self.model must be set and expose _meta."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The Options metadata object referenced by self.model._meta."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.model._meta to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a lightweight copy of the current Query by creating a new instance of the same class, shallow-copying the instance dictionary, cloning selected mutable state, and resetting caches." clone]
+    [INPUTS]
+        <REF> self </REF>: Query "The current Query instance to clone."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> obj </REF>: Query "A new Query instance with copied attributes and independent copies of selected mutable state."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create an empty object using Empty(). RESULT obj]
+            [COMMAND Set obj.__class__ to the same class as self.__class__. RESULT obj]
+            [COMMAND Copy the entire instance dictionary from self into obj by assigning obj.__dict__ the result of self.__dict__.copy(). RESULT obj]
+            [COMMAND Copy self.alias_refcount into obj.alias_refcount using .copy(). RESULT obj]
+            [COMMAND Copy self.alias_map into obj.alias_map using .copy(). RESULT obj]
+            [COMMAND Copy self.external_aliases into obj.external_aliases using .copy(). RESULT obj]
+            [COMMAND Copy self.table_map into obj.table_map using .copy(). RESULT obj]
+            [COMMAND Clone self.where into obj.where using .clone(). RESULT obj]
+            [COMMAND Copy self.annotations into obj.annotations using .copy(). RESULT obj]
+            [COMMAND If self.annotation_select_mask is None, set obj.annotation_select_mask to None; otherwise, set obj.annotation_select_mask to self.annotation_select_mask.copy(). RESULT obj]
+            [COMMAND Set obj._annotation_select_cache to None; it is intentionally not copied so that it can be re-populated later. RESULT obj]
+            [COMMAND Copy self.extra into obj.extra using .copy(). RESULT obj]
+            [COMMAND If self.extra_select_mask is None, set obj.extra_select_mask to None; otherwise, set obj.extra_select_mask to self.extra_select_mask.copy(). RESULT obj]
+            [COMMAND If self._extra_select_cache is None, set obj._extra_select_cache to None; otherwise, set obj._extra_select_cache to self._extra_select_cache.copy(). RESULT obj]
+            [COMMAND If the key 'subq_aliases' exists in self.__dict__, copy self.subq_aliases into obj.subq_aliases using .copy(). RESULT obj]
+            [COMMAND Copy self.used_aliases into obj.used_aliases using .copy(). RESULT obj]
+            [COMMAND Copy self._filtered_relations into obj._filtered_relations using .copy(). RESULT obj]
+            [COMMAND Try to delete obj.base_table; if AttributeError is raised, ignore it and continue. RESULT obj]
+            [COMMAND Return obj. RESULT obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a copy of the current Query, optionally changing the copy's class, clearing used aliases when no sticky filter is set, disabling the sticky filter flag, and invoking query setup if supported." chain]
+    [INPUTS]
+        <REF> self </REF>: Query "The current Query instance to clone and prepare for another operation."
+        <REF> klass </REF>: type or None "Optional class to assign to the cloned Query object, e.g. UpdateQuery."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Query "A cloned Query object ready for another operation, with its class possibly changed, used_aliases conditionally reset, filter_is_sticky set to False, and _setup_query called if present."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clone the current Query instance self into a new object obj by calling self.clone(). RESULT obj]
+            [COMMAND If klass is truthy and obj.__class__ differs from klass, set obj.__class__ to klass. RESULT obj]
+            [COMMAND If obj.filter_is_sticky is false, reset obj.used_aliases to a new empty set. RESULT obj]
+            [COMMAND Set obj.filter_is_sticky to False. RESULT obj]
+            [COMMAND If obj has an attribute named '_setup_query', call obj._setup_query(). RESULT obj]
+            [COMMAND Return obj as the cloned and prepared Query. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a clone of the current object, applies alias changes from change_map to the clone, and returns the relabeled clone." relabeled_clone]
+    [INPUTS]
+        <REF> self </REF>: object "The current object whose clone is to be created."
+        <REF> change_map </REF>: dict "A mapping used to change aliases on the cloned object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The cloned object after alias relabeling has been applied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a clone of the current object by calling self.clone() and assign it to the variable clone. RESULT clone]
+            [COMMAND Apply alias relabeling to clone by calling clone.change_aliases(change_map). RESULT clone]
+            [COMMAND Return the relabeled clone from the method. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rewrites an annotation's source expressions so that any referenced columns or aggregates are selected in the inner query, reusing existing aliases or adding hidden aliases as needed." rewrite_cols]
+    [INPUTS]
+        <REF> annotation </REF>: object "Annotation expression whose source expressions will be rewritten."
+        <REF> col_cnt </REF>: int "Counter used to generate unique hidden column aliases; incremented and returned when new aliases are created."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> annotation </REF>: object "The same annotation object with its source expressions replaced by rewritten expressions."
+        <REF> col_cnt </REF>: int "Updated column counter after generating any new hidden aliases."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the source expressions of annotation by calling annotation.get_source_expressions() and assign the returned list to orig_exprs. RESULT orig_exprs]
+            [COMMAND Initialize new_exprs as an empty list to accumulate rewritten expressions. RESULT new_exprs]
+            [COMMAND For each expression expr in orig_exprs, inspect expr and choose the appropriate rewriting path. RESULT expr]
+            [COMMAND In the for loop over orig_exprs, if expr is an instance of Ref, append expr directly to new_exprs and continue to the next expression. RESULT new_exprs]
+            [COMMAND In the for loop over orig_exprs, if expr is an instance of WhereNode or Lookup, recursively call self.rewrite_cols(expr, col_cnt), assign the returned expression and counter to new_expr and col_cnt, then append new_expr to new_exprs. RESULT new_exprs]
+            [COMMAND In the for loop over orig_exprs, when expr is not a Ref and not a WhereNode or Lookup, iterate over self.annotation_select.items(), assigning each pair to col_alias and selected_annotation. RESULT col_alias, selected_annotation]
+            [COMMAND During that inner search over self.annotation_select.items(), if selected_annotation equals expr, set new_expr to Ref(col_alias, expr), break out of the inner search, and append new_expr to new_exprs. RESULT new_expr]
+            [COMMAND If the inner search over self.annotation_select.items() finishes without a break and either expr is an instance of Col or, only when the Col check fails, expr.contains_aggregate is true and expr.is_summary is false, increment col_cnt by 1, build col_alias as '__col' followed by the decimal value of col_cnt, store expr in self.annotations[col_alias], call self.append_annotation_mask([col_alias]), set new_expr to Ref(col_alias, expr), and append new_expr to new_exprs. RESULT new_expr]
+            [COMMAND If the inner search over self.annotation_select.items() finishes without a break and expr is neither a Col nor an expression for which contains_aggregate is true with is_summary false, recursively call self.rewrite_cols(expr, col_cnt), assign the returned expression and counter to new_expr and col_cnt, and append new_expr to new_exprs. RESULT new_expr]
+            [COMMAND After processing all expressions in orig_exprs, call annotation.set_source_expressions(new_exprs) to replace the original source expressions. RESULT annotation]
+            [COMMAND Return the rewritten annotation and the updated col_cnt. RESULT (annotation, col_cnt)]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: In the for loop over orig_exprs, expr is an instance of Ref.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append expr directly to new_exprs. RESULT new_exprs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: In the for loop over orig_exprs, expr is an instance of WhereNode or Lookup.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Recursively call self.rewrite_cols(expr, col_cnt), assigning the returned expression and counter to new_expr and col_cnt. RESULT new_expr]
+            [COMMAND Append new_expr to new_exprs. RESULT new_exprs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: In the outer else branch, the inner search over self.annotation_select.items() finds a col_alias whose selected_annotation equals expr.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set new_expr to Ref(col_alias, expr). RESULT new_expr]
+            [COMMAND Break out of the inner search loop and append new_expr to new_exprs. RESULT new_exprs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: In the outer else branch, the inner search over self.annotation_select.items() finishes without a break, and expr is an instance of Col or, only when the Col check fails, expr.contains_aggregate is true with expr.is_summary false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Increment col_cnt by 1 and build col_alias as '__col' followed by the decimal value of col_cnt. RESULT col_alias]
+            [COMMAND Store expr in self.annotations[col_alias] and call self.append_annotation_mask([col_alias]). RESULT self.annotations]
+            [COMMAND Set new_expr to Ref(col_alias, expr) and append it to new_exprs. RESULT new_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: In the outer else branch, the inner search over self.annotation_select.items() finishes without a break, and expr is neither a Col nor an expression for which contains_aggregate is true with is_summary false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Recursively call self.rewrite_cols(expr, col_cnt), assigning the returned expression and counter to new_expr and col_cnt. RESULT new_expr]
+            [COMMAND Append new_expr to new_exprs. RESULT new_exprs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the aggregation values for the current queryset by either wrapping it in an AggregateQuery subquery when limits, distinct, grouping, or annotations require it, or simplifying the query directly, then executing the outer query and returning a dictionary keyed by annotation aliases." get_aggregation]
+    [INPUTS]
+        <REF> using </REF>: str "Database alias used to obtain the query compiler and execute SQL."
+        <REF> added_aggregate_names </REF>: iterable of str "Annotation aliases that should be excluded from existing_annotations."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Mapping from annotation alias to the converted aggregation value, or an empty dictionary when self.annotation_select is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.annotation_select is empty, return an empty dictionary immediately. RESULT empty_result]
+            [COMMAND Compute has_limit as true when self.low_mark is not 0 or self.high_mark is not None, with short-circuit evaluation of the high_mark check. RESULT has_limit]
+            [COMMAND Build existing_annotations by iterating over self.annotations.items() and collecting each annotation whose alias is not present in added_aggregate_names. RESULT existing_annotations]
+            [COMMAND Determine need_subquery as true if isinstance(self.group_by, tuple), has_limit is true, existing_annotations is non-empty, self.distinct is true, or self.combinator is truthy. RESULT need_subquery]
+            [COMMAND If need_subquery is false, set outer_query to self, set self.select to an empty tuple, set self.default_cols to False, set self.extra to an empty dictionary, and continue to finalization. RESULT outer_query]
+            [COMMAND If need_subquery is true, import AggregateQuery from django.db.models.sql.subqueries, create outer_query as AggregateQuery(self.model), create inner_query by cloning self, set inner_query.select_for_update to False, set inner_query.select_related to False, and set the annotation mask of inner_query to self.annotation_select. RESULT inner_query]
+            [COMMAND Within the need_subquery branch, if has_limit is false and self.distinct_fields is false, clear ordering on inner_query; otherwise preserve ordering because distinct fields or limits require it. RESULT inner_query_ordering_state]
+            [COMMAND Within the need_subquery branch, if inner_query.distinct is false, compute has_existing_aggregate_annotations by checking whether any annotation in existing_annotations has a truthy contains_aggregate attribute, using True as the default when the attribute is absent. RESULT has_existing_aggregate_annotations]
+            [COMMAND Within the need_subquery branch, if inner_query.distinct is false, inner_query.default_cols is true, and has_existing_aggregate_annotations is true, set inner_query.group_by to a tuple containing the primary key column of self.model obtained through the initial alias. RESULT inner_query_group_by]
+            [COMMAND Within the need_subquery branch, when inner_query.distinct is false, set inner_query.default_cols to False. RESULT inner_query_default_cols]
+            [COMMAND Within the need_subquery branch, build relabels as a dictionary mapping every table alias in inner_query.alias_map to the string 'subquery' and also map the None alias to 'subquery'. RESULT relabels]
+            [COMMAND Within the need_subquery branch, initialize col_cnt to 0. RESULT col_cnt]
+            [COMMAND Within the need_subquery branch, for each alias and expression in a snapshot list of inner_query.annotation_select.items(), capture annotation_select_mask from inner_query.annotation_select_mask. If expression.is_summary is true, rewrite expression with inner_query.rewrite_cols(expression, col_cnt) updating col_cnt, assign the relabeled clone of the rewritten expression to outer_query.annotations[alias], delete alias from inner_query.annotations, and remove alias from the captured annotation_select_mask. After each iteration, call inner_query.set_annotation_mask(inner_query.annotation_select_mask) to prevent cached annotation results. RESULT outer_query_annotations]
+            [COMMAND Within the need_subquery branch, if inner_query.select is an empty tuple, inner_query.default_cols is false, and inner_query.annotation_select_mask is empty, set inner_query.select to a tuple containing the primary key column of self.model obtained through the initial alias. RESULT inner_query_select]
+            [COMMAND Within the need_subquery branch, attempt to call outer_query.add_subquery(inner_query, using). If EmptyResultSet is raised, return a dictionary mapping every alias in outer_query.annotation_select to None immediately. RESULT subquery_added_or_empty_result]
+            [COMMAND After the need_subquery branch and the non-subquery branch converge, clear ordering on outer_query with clear_ordering(True), clear limits on outer_query with clear_limits(), set outer_query.select_for_update to False, and set outer_query.select_related to False. RESULT outer_query_finalized]
+            [COMMAND Create compiler by calling outer_query.get_compiler(using). RESULT compiler]
+            [COMMAND Set result to the return value of compiler.execute_sql(SINGLE). RESULT result]
+            [COMMAND If result is None, set result to a list containing None repeated len(outer_query.annotation_select) times. RESULT result_filled]
+            [COMMAND Create converters by calling compiler.get_converters(outer_query.annotation_select.values()). RESULT converters]
+            [COMMAND Apply converters by calling compiler.apply_converters((result,), converters), take the first item from the returned iterator with next, and assign that converted row back to result. RESULT converted_result]
+            [COMMAND Return a dictionary created by zipping the keys of outer_query.annotation_select with the converted result values. RESULT final_aggregation_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Performs a COUNT() query on a clone of the current queryset using the supplied database alias, and returns the count, treating a null aggregation result as zero." get_count]
+    [INPUTS]
+        <REF> self </REF>: object "The current queryset instance whose existing filter constraints are used as the basis for the count."
+        <REF> using </REF>: str "The database alias on which to execute the aggregation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> number </REF>: int "The number of rows matching the current filter constraints; 0 if the aggregation returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clone the current queryset into a new object to avoid modifying the original. RESULT obj]
+            [COMMAND Add a Count('*') annotation to the cloned queryset with alias '__count' and mark it as a summary. RESULT obj]
+            [COMMAND Run get_aggregation(using, ['__count']) on the cloned queryset and read the value under the '__count' key; assign it to number. RESULT number]
+            [COMMAND If number is None, set number to 0. RESULT number]
+            [COMMAND Return the final value of number. RESULT number]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the stored where clause from the instance." has_filters]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: unknown "The value of self.where"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of self.where. RESULT self.where]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clones the query, conditionally adjusts grouping and clears the select clause when the query is not distinct, clears ordering, limits the query to one row, obtains the query compiler, and returns whether that compiler reports any results." has_results]
+    [INPUTS]
+        <REF> using </REF>: str "The database alias to use when obtaining the query compiler."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the query compiler reports that the bounded query has any results, otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clone self into q. RESULT q]
+            [COMMAND If q.distinct is falsy, then: if q.group_by is exactly True, add each concrete field attname from self.model._meta.concrete_fields to q via q.add_fields((f.attname for f in self.model._meta.concrete_fields), False) and call q.set_group_by(); after that inner conditional, call q.clear_select_clause(). If q.distinct is truthy, perform none of these operations. RESULT q]
+            [COMMAND Clear all ordering on q by calling q.clear_ordering(True). RESULT q]
+            [COMMAND Set the query limit to one row by calling q.set_limits(high=1). RESULT q]
+            [COMMAND Obtain the query compiler by calling q.get_compiler(using=using). RESULT compiler]
+            [COMMAND Return the boolean produced by compiler.has_results(). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clones the query object, configures explain formatting and options, retrieves the database compiler with the specified alias, and returns the compiler's explain output as a single newline-separated string." explain]
+    [INPUTS]
+        <REF> self </REF>: object "The query object on which explain is invoked."
+        <REF> using </REF>: string "The database alias used to obtain the compiler."
+        <REF> format </REF>: string or None "Optional value assigned to q.explain_format for the explain output format."
+        <REF> options </REF>: dict "Additional keyword arguments stored in q.explain_options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The compiler's explain query output lines joined by newline characters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clone the current object self by calling self.clone() and assign the copy to q. RESULT q]
+            [COMMAND Set q.explain_query to the boolean constant True. RESULT q.explain_query]
+            [COMMAND Set q.explain_format to the value of the format parameter. RESULT q.explain_format]
+            [COMMAND Set q.explain_options to the dictionary of keyword arguments captured in options. RESULT q.explain_options]
+            [COMMAND Call q.get_compiler(using=using) and assign the returned compiler object to compiler. RESULT compiler]
+            [COMMAND Call compiler.explain_query() to generate the query explanation lines. RESULT explain_lines]
+            [COMMAND Join the explanation lines in explain_lines with a newline character and return the resulting string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges the rhs query into the current query by relabeling joins, combining where clauses, selections, extras, extra masks, extra tables, and ordering according to the AND/OR connector, mutating self in place." combine]
+    [INPUTS]
+        <REF> rhs </REF>: Query "Right-hand-side query to merge into the current query; it is not modified."
+        <REF> connector </REF>: connector constant (AND or OR) "Determines how the rhs filters, extras, and masks are connected to the current query's expressions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that self.model equals rhs.model, that self.can_filter() is true, that self.distinct equals rhs.distinct, and that self.distinct_fields equals rhs.distinct_fields; if any validation fails, abort with the corresponding AssertionError. RESULT assertions_passed]
+            [COMMAND Initialize change_map as an empty dictionary to record alias relabeling from rhs aliases to new aliases. RESULT change_map]
+            [COMMAND Set conjunction to True if connector equals AND, otherwise False. RESULT conjunction]
+            [COMMAND Set reuse to an empty set when conjunction is True, otherwise to a new set containing all current aliases from self.alias_map. RESULT reuse]
+            [COMMAND Ensure the base table alias exists in the current query by calling self.get_initial_alias(). RESULT base_alias_ready]
+            [COMMAND Create a JoinPromoter with connector, 2, and False, then add votes for every existing alias in self.alias_map whose join_type is INNER. RESULT joinpromoter]
+            [COMMAND Initialize rhs_votes as an empty set and rhs_tables as a list of all rhs.alias_map keys excluding the first base-table alias. RESULT rhs_tables]
+            [COMMAND For each alias in rhs_tables, retrieve rhs.alias_map[alias], relabel it with join.relabeled_clone(change_map), and add it to the current query with self.join(join, reuse=reuse), storing the returned alias as new_alias. RESULT new_alias]
+            [COMMAND Within the same loop over rhs_tables, after adding the join, if the relabeled join's join_type is INNER add new_alias to rhs_votes; then unconditionally discard new_alias from reuse. RESULT rhs_votes_updated]
+            [COMMAND Within the same loop over rhs_tables, if alias differs from new_alias record change_map[alias] = new_alias; if rhs.alias_refcount[alias] is falsy call self.unref_alias(new_alias). RESULT alias_changes_recorded]
+            [COMMAND Add rhs_votes to joinpromoter and call joinpromoter.update_join_types(self) to update join types in the combined query. RESULT join_types_updated]
+            [COMMAND Clone rhs.where into w, call w.relabel_aliases(change_map), and add w to self.where with the specified connector. RESULT where_combined]
+            [COMMAND If rhs.select is truthy, build a list of col.relabeled_clone(change_map) for each col in rhs.select and pass it to self.set_select; otherwise set self.select to an empty tuple. RESULT select_combined]
+            [COMMAND If connector equals OR and both self.extra and rhs.extra are truthy, raise ValueError; otherwise continue. RESULT or_extra_check]
+            [COMMAND Update self.extra with rhs.extra in place. RESULT extra_combined]
+            [COMMAND Initialize extra_select_mask as an empty set; if self.extra_select_mask is not None update it with that mask, and if rhs.extra_select_mask is not None update it with that mask. RESULT extra_select_mask]
+            [COMMAND If extra_select_mask is truthy, apply it by calling self.set_extra_mask(extra_select_mask). RESULT extra_mask_applied]
+            [COMMAND Append rhs.extra_tables to self.extra_tables in place. RESULT extra_tables_combined]
+            [COMMAND Set self.order_by to rhs.order_by if rhs.order_by is truthy, otherwise keep the current self.order_by; similarly set self.extra_order_by to rhs.extra_order_by if truthy, otherwise keep the current self.extra_order_by. RESULT ordering_combined]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.model is not equal to rhs.model]
+        [LOG "Cannot combine queries on two different base models."]
+        [THROW AssertionError "Raised when the two queries use different base models."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.can_filter() returns False]
+        [LOG "Cannot combine queries once a slice has been taken."]
+        [THROW AssertionError "Raised when the current query has been sliced and can no longer be filtered."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.distinct is not equal to rhs.distinct]
+        [LOG "Cannot combine a unique query with a non-unique query."]
+        [THROW AssertionError "Raised when one query is distinct and the other is not."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.distinct_fields is not equal to rhs.distinct_fields]
+        [LOG "Cannot combine queries with different distinct fields."]
+        [THROW AssertionError "Raised when the distinct_fields sets differ between the two queries."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: connector equals OR and both self.extra and rhs.extra are truthy]
+        [LOG "When merging querysets using 'or', you cannot have extra(select=...) on both sides."]
+        [THROW ValueError "Raised when OR-combining two queries that both define extra selections, because the result would not have consistent values."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the deferred loading configuration into per-model field restriction sets and invokes the provided callback for each affected model so the target structure can be populated." deferred_to_data]
+    [INPUTS]
+        <REF> self </REF>: object "The query object whose deferred_loading tuple is processed."
+        <REF> target </REF>: object "The destination structure that is populated in place by callback invocations."
+        <REF> callback </REF>: callable "A callable accepting target, model, and a set of fields; invoked for each model with restricted fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack self.deferred_loading into field_names and defer. RESULT field_names, defer]
+            [COMMAND Initialize orig_opts from self.get_meta(), seen as an empty dictionary, and must_include mapping orig_opts.concrete_model to a set containing orig_opts.pk. RESULT orig_opts, seen, must_include]
+            [COMMAND For each field_name in field_names, split it by LOOKUP_SEP into parts; traverse each intermediate relationship by resolving fields through opts, replacing filtered relation names from self._filtered_relations, updating cur_model according to is_reverse_o2o or source.remote_field.model, updating opts, adding the source field to must_include[old_model] unless it is a reverse one-to-one, and always adding the current model's primary key through add_to_dict; then resolve the final field, detect reverse objects using field.auto_created and not field.concrete, select field.related_model or field.model, convert the model to its concrete_model, use cur_model when the resolved model equals opts.model, and add the field to seen through add_to_dict unless is_reverse_o2o(field). RESULT must_include, seen]
+            [COMMAND If defer is true, build workset by iterating over the models in seen and adding each local field not already in the selected values to its concrete model, merge must_include values for models already present in workset, and invoke callback(target, model, values) for each workset entry. RESULT callback_invocations_from_workset]
+            [COMMAND If defer is false, merge must_include values into seen for models already present or insert a new seen entry for new models, ensure every model in orig_opts.get_parent_list() is present in seen via setdefault, and invoke callback(target, model, values) for each seen entry. RESULT callback_invocations_from_seen]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: field_names is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately without making any callback invocations or initializing seen or must_include. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a table alias by reusing the first existing alias when create is false and one exists, otherwise generating and registering a new alias with reference count 1 and returning whether it was newly created." table_alias]
+    [INPUTS]
+        <REF> table_name </REF>: str "The table name for which an alias is requested."
+        <REF> create </REF>: bool "When true, forces creation of a new alias; when false, an existing alias may be reused."
+        <REF> filtered_relation </REF>: object or None "Optional relation object used to provide the alias on the first occurrence when it is not None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (alias, created) where alias is the reused or newly created table alias string and created is False when the alias was reused or True when it was newly created."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up self.table_map.get(table_name) and store the result as alias_list; this is None when table_name is absent, otherwise it is the list of aliases already created for table_name. RESULT alias_list]
+            [COMMAND Determine whether the existing-alias fast path is available by evaluating the short-circuit condition: create is falsy and alias_list is non-empty. RESULT reuse_available]
+            [COMMAND If reuse_available is true, set alias to alias_list[0], increment self.alias_refcount[alias] by 1, and return the tuple (alias, False). RESULT reuse_return_value]
+            [COMMAND Continue only when reuse_available is false; check whether alias_list is non-empty. RESULT alias_list_truthy]
+            [COMMAND If alias_list_truthy is true, generate a new alias string from self.alias_prefix and len(self.alias_map) + 1 using the format '%s%d', then append the new alias to alias_list. RESULT alias]
+            [COMMAND If alias_list_truthy is false, this is the first occurrence of table_name: set alias to filtered_relation.alias when filtered_relation is not None, otherwise set alias to table_name, and set self.table_map[table_name] to a one-element list containing alias. RESULT alias]
+            [COMMAND Set self.alias_refcount[alias] to 1 for the selected new or first alias. RESULT refcount_initialized]
+            [COMMAND Return the tuple (alias, True) to signal that a new alias was created. RESULT new_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Increases the reference count for the given alias by incrementing its value in the alias_refcount dictionary." ref_alias]
+    [INPUTS]
+        <REF> alias </REF>: str "The alias whose reference count is to be incremented."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Increment the reference count for the given alias by 1 in self.alias_refcount. RESULT self.alias_refcount]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Decreases the reference count associated with the given alias by the specified amount." unref_alias]
+    [INPUTS]
+        <REF> self </REF>: object "The instance of the class that owns the alias_refcount dictionary."
+        <REF> alias </REF>: Any "The key identifying the alias whose reference count should be decreased."
+        <REF> amount </REF>: int "The amount by which to decrease the reference count; defaults to 1."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None; updates self.alias_refcount[alias] in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current reference count for alias from self.alias_refcount. RESULT current_count]
+            [COMMAND Compute current_count minus amount to obtain the new reference count. RESULT new_count]
+            [COMMAND Store new_count in self.alias_refcount under alias. RESULT self.alias_refcount[alias]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Promotes join types in the alias map to a left outer join, starting from the supplied aliases and propagating to dependent child aliases whenever a join is nullable or its parent is already a left outer join." promote_joins]
+    [INPUTS]
+        <REF> aliases </REF>: iterable of alias identifiers "Aliases whose join types may need promotion; converted to a mutable worklist."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: None "The method updates self.alias_map in place and does not return a value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the input aliases iterable into a list and assign it to the local variable aliases. RESULT aliases]
+            [COMMAND While the worklist aliases is not empty, pop the first alias and assign it to alias. RESULT alias]
+            [COMMAND Within the while loop, if self.alias_map[alias].join_type is None, treat this alias as the base table and continue to the next queued alias without altering its join type. RESULT continue]
+            [COMMAND Within the while loop, assert that self.alias_map[alias].join_type is not None. RESULT None]
+            [COMMAND Within the while loop, assign parent_alias to self.alias_map[alias].parent_alias. RESULT parent_alias]
+            [COMMAND Within the while loop, compute parent_louter using the short-circuit expression parent_alias and self.alias_map[parent_alias].join_type == LOUTER. RESULT parent_louter]
+            [COMMAND Within the while loop, compute already_louter as self.alias_map[alias].join_type == LOUTER. RESULT already_louter]
+            [COMMAND Within the while loop, if (self.alias_map[alias].nullable or parent_louter) is true and already_louter is false, replace self.alias_map[alias] with self.alias_map[alias].promote(). RESULT self.alias_map[alias]]
+            [COMMAND Within the while loop, after promoting alias, iterate over self.alias_map and extend aliases with every join whose parent_alias equals alias and that is not already in aliases. RESULT aliases]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.alias_map[alias].join_type is None for the current alias]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the base table and continue with the next alias in the worklist. RESULT continue]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: (self.alias_map[alias].nullable or parent_louter) is true and already_louter is false for the current alias]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Promote the current alias by assigning self.alias_map[alias] = self.alias_map[alias].promote(). RESULT self.alias_map[alias]]
+            [COMMAND Extend the worklist with child aliases of the current alias that are not already queued. RESULT aliases]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The current alias is not the base table but self.alias_map[alias].join_type is None]
+        [LOG "Assertion failed: only the first alias should have a None join_type"]
+        [THROW AssertionError "Raised when a non-base alias has an invalid None join type."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Demotes all LOUTER joins in the supplied aliases to INNER, processing aliases as a FIFO worklist and appending INNER parent aliases for later processing as required by the join-chain rule." demote_joins]
+    [INPUTS]
+        <REF> aliases </REF>: Iterable "An iterable of alias keys whose LOUTER joins should be demoted to INNER; it is converted to a list at the start."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: None "No value is returned; self.alias_map is mutated in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert aliases to a new list using list(aliases) and assign it back to aliases so the input is processed as a mutable FIFO worklist. RESULT aliases]
+            [COMMAND While aliases is not empty, remove the first element from aliases with aliases.pop(0) and assign it to alias. RESULT alias]
+            [COMMAND Within the while loop, if self.alias_map[alias].join_type equals LOUTER, replace self.alias_map[alias] with self.alias_map[alias].demote(), changing that join to INNER. RESULT self.alias_map[alias]]
+            [COMMAND Within the while loop's if block for a LOUTER alias, after demoting alias, read parent_alias from the updated self.alias_map[alias].parent_alias. RESULT parent_alias]
+            [COMMAND Within the same LOUTER-handling if block, if self.alias_map[parent_alias].join_type equals INNER, append parent_alias to the end of aliases so it is processed later by the while loop. RESULT aliases]
+            [COMMAND Continue popping and processing aliases until aliases becomes empty; the method then returns None without further modification. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resets reference counts for each alias in self.alias_refcount to match the target counts in to_counts by calling unref_alias with the difference." reset_refcounts]
+    [INPUTS]
+        <REF> to_counts </REF>: dict "Mapping of alias names to target reference count values; missing aliases default to a target count of 0."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a snapshot of the current alias_refcount dictionary using .copy() so that mutations during iteration do not affect the iteration. RESULT alias_refcount_snapshot]
+            [COMMAND For each alias and its current reference count cur_refcount in alias_refcount_snapshot, compute unref_amount as cur_refcount minus to_counts.get(alias, 0). RESULT unref_amount]
+            [COMMAND Call self.unref_alias(alias, unref_amount) with the computed difference, which adjusts the alias's reference count toward the target value. RESULT unref_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renames aliases throughout a query object by relabeling select, group by, where, and annotation references and migrating internal alias maps and reference counts from old to new alias names." change_aliases]
+    [INPUTS]
+        <REF> change_map </REF>: dict "Mapping from old alias names to new alias names; keys and values must be disjoint."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: NoneType "The method returns None and performs the alias changes in-place on the current query object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that the keys of change_map and the values of change_map are disjoint. RESULT validated_change_map]
+            [COMMAND Relabel alias references in self.where by applying change_map through self.where.relabel_aliases(change_map). RESULT where_relabeled]
+            [COMMAND If self.group_by is a tuple, replace each column in self.group_by with col.relabeled_clone(change_map) and rebind self.group_by to the resulting tuple; otherwise leave self.group_by unchanged. RESULT group_by_relabeled]
+            [COMMAND Rebind self.select to a tuple containing col.relabeled_clone(change_map) for every column in the previous self.select. RESULT select_relabeled]
+            [COMMAND If self.annotations is truthy, rebind self.annotations to a dict whose values are col.relabeled_clone(change_map) for each key and column in the previous self.annotations; if self.annotations is falsy, keep the old falsy value as the new self.annotations. RESULT annotations_relabeled]
+            [COMMAND For each old_alias and new_alias in change_map.items(), if old_alias is not present in self.alias_map, skip the rest of this iteration and continue with the next change_map pair. RESULT alias_pairs_filtered]
+            [COMMAND Within the outer loop over change_map items, only when old_alias is present in self.alias_map, create alias_data by calling self.alias_map[old_alias].relabeled_clone(change_map), store alias_data in self.alias_map under new_alias, copy the reference count from self.alias_refcount[old_alias] to self.alias_refcount[new_alias], delete old_alias from self.alias_refcount, and delete old_alias from self.alias_map. RESULT internal_alias_maps_migrated]
+            [COMMAND Within the same outer loop and after the alias map migration, get table_aliases from self.table_map[alias_data.table_name], find the first position whose alias equals old_alias, replace that element with new_alias, and break out of the inner search loop after the replacement. RESULT table_alias_lists_updated]
+            [COMMAND Rebind self.external_aliases to a new set containing change_map.get(alias, alias) for each alias in the previous self.external_aliases. RESULT external_aliases_relabeled]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The set of keys in change_map is not disjoint from the set of values in change_map, meaning some old alias key is also used as a new alias value in the same mapping.]
+        [LOG "Assertion failed: change_map keys and values must be disjoint"]
+        [THROW AssertionError "Raised to reject an invalid alias mapping where an old alias equals a new alias in the same change_map."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Advances the current query's alias prefix to the next non-conflicting alphabetic prefix, propagates the alias set to the outer query, and remaps the current query's aliases using the new prefix." bump_prefix]
+    [INPUTS]
+        <REF> self </REF>: Query "The current query object; provides alias_prefix, subq_aliases, alias_map, and a change_aliases method, and is mutated by this method."
+        <REF> outer_query </REF>: Query "The outer query object whose alias_prefix is compared and whose subq_aliases set receives the current query's updated alias set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested generator prefix_gen: assign alphabet = ascii_uppercase; compute prefix = chr(ord(self.alias_prefix) + 1) and yield prefix once; then for each n starting at 1, let seq be alphabet[alphabet.index(prefix):] if prefix is truthy else the full alphabet, yield each ''.join(s) for every s from itertools.product(seq, repeat=n), and after finishing the products for that n set prefix to None. RESULT prefix_gen_generator]
+            [COMMAND Evaluate the guard condition self.alias_prefix != outer_query.alias_prefix; if true the method exits via the alternative flow, if false continue to the recursion-limit setup. RESULT prefix_guard_result]
+            [COMMAND Read sys.getrecursionlimit(), divide it by 16 using integer floor division, and bind the result to local_recursion_limit. RESULT local_recursion_limit]
+            [COMMAND Start a for loop over enumerate(prefix_gen()), binding loop position to pos and each generated candidate to prefix. RESULT prefix_search_loop]
+            [COMMAND Inside the for loop, if prefix is not in self.subq_aliases, assign self.alias_prefix = prefix and break out of the loop immediately. RESULT selected_prefix]
+            [COMMAND Inside the for loop, when prefix is already in self.subq_aliases and pos is strictly greater than local_recursion_limit, raise a RecursionError; otherwise continue to the next generated prefix. RESULT recursion_limit_check]
+            [COMMAND After a new prefix is selected, update self.subq_aliases to a new set equal to the union of the old self.subq_aliases and {self.alias_prefix}. RESULT updated_self_subq_aliases]
+            [COMMAND Update outer_query.subq_aliases to a new set equal to the union of the old outer_query.subq_aliases and the updated self.subq_aliases. RESULT updated_outer_subq_aliases]
+            [COMMAND Call self.change_aliases with a dictionary mapping each alias in self.alias_map to '%s%d' % (self.alias_prefix, pos), where pos is the enumeration index of that alias. RESULT remapped_aliases]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.alias_prefix != outer_query.alias_prefix]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return from bump_prefix immediately, leaving self and outer_query unchanged. RESULT void]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: During the prefix search, a generated prefix is already in self.subq_aliases and the loop position pos is strictly greater than local_recursion_limit.]
+        [LOG "Maximum recursion depth exceeded: too many subqueries."]
+        [THROW RecursionError "Raised when too many candidate prefixes are already used and the local recursion limit is exceeded, preventing an infinite loop."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the initial query alias by reusing the existing base table and increasing its reference count when an alias map exists, otherwise constructing and joining a base table from database metadata." get_initial_alias]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> alias </REF>: object "The first alias for this query: either the existing base table after ref_alias is called, or the joined BaseTable created from the database metadata."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of self.alias_map to select which branch initializes the alias. RESULT alias_map_present]
+            [COMMAND Return the alias produced by the selected branch as the initial alias for this query. RESULT alias]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.alias_map is truthy at the initial if/else check]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set alias to self.base_table. RESULT alias]
+            [COMMAND Call self.ref_alias(alias), increasing the reference count for this alias. RESULT ref_count_incremented]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.alias_map is falsy at the initial if/else check]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a BaseTable with self.get_meta().db_table as the table name and None as the alias. RESULT base_table]
+            [COMMAND Call self.join(base_table) and assign the result to alias. RESULT alias]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the number of table aliases whose current reference count in self.alias_refcount is truthy, which effectively counts only non-zero reference counts before execution zeroes them." count_active_tables]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: int "Number of tables with a truthy, non-zero reference count."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the collection of all reference counts from self.alias_refcount by calling values() RESULT ref_counts]
+            [COMMAND For each count in ref_counts, test whether the count is truthy; keep only the counts that pass this filter RESULT active_ref_counts]
+            [COMMAND Count the number of kept truthy reference counts by taking the length of the filtered list RESULT active_table_count]
+            [COMMAND Return active_table_count as the integer result RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the alias for a join by reusing an existing matching alias when possible, otherwise creates a new alias, registers it in alias_map, and normalizes the join type to LOUTER if the parent alias is LOUTER or the join is nullable." join]
+    [INPUTS]
+        <REF> join </REF>: BaseTable or Join "The join or base table for which an alias is requested."
+        <REF> reuse </REF>: set or None "Set of aliases that may be reused; None means all aliases in alias_map are eligible."
+        <REF> reuse_with_filtered_relation </REF>: bool "When True and reuse is provided, matching uses j.equals(join, with_filtered_relation=False) instead of normal equality."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> alias </REF>: str "The existing reused alias or the newly created alias for the join."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build reuse_aliases from self.alias_map: if reuse_with_filtered_relation and reuse are both truthy, include each alias a when a is in reuse and the stored relation j equals join with with_filtered_relation=False; otherwise include each alias a when (reuse is None or a is in reuse) and j equals join using normal equality. RESULT reuse_aliases]
+            [COMMAND If reuse_aliases is non-empty, execute the reuse-alias alternative flow and return its returned alias immediately; otherwise continue to the new-alias creation path. RESULT reuse_decision]
+            [COMMAND Call self.table_alias(join.table_name, create=True, filtered_relation=join.filtered_relation) and unpack the first returned value into alias, discarding the second returned value. RESULT alias]
+            [COMMAND If join.join_type is truthy, inspect self.alias_map[join.parent_alias].join_type and join.nullable: set the local join_type to LOUTER when the parent join_type is LOUTER or join.nullable is true, otherwise set it to INNER; then assign join.join_type = join_type. RESULT join.join_type]
+            [COMMAND Set join.table_alias to alias and store join in self.alias_map under the key alias. RESULT self.alias_map]
+            [COMMAND Return alias. RESULT alias]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: reuse_aliases is non-empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If join.table_alias is in reuse_aliases, set reuse_alias to join.table_alias; otherwise set reuse_alias to reuse_aliases[-1] to reuse the most recent alias. RESULT reuse_alias]
+            [COMMAND Call self.ref_alias(reuse_alias). RESULT ref_alias_result]
+            [COMMAND Return reuse_alias immediately. RESULT reuse_alias]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds a single annotation expression to the query by resolving it against the query context, appending the alias to the annotation mask, and storing the resolved expression under that alias." add_annotation]
+    [INPUTS]
+        <REF> annotation </REF>: Expression "The expression object to resolve and add as an annotation."
+        <REF> alias </REF>: string "The field name under which the resolved annotation is stored."
+        <REF> is_summary </REF>: boolean "When true, resolves the expression in summary/aggregate mode; defaults to false."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the annotation expression by calling annotation.resolve_expression(self, allow_joins=True, reuse=None, summarize=is_summary), and assign the returned resolved expression back to annotation. RESULT annotation]
+            [COMMAND Append a one-element list containing alias to the query annotation mask by calling self.append_annotation_mask([alias]). RESULT self]
+            [COMMAND Store the resolved annotation expression in the query annotations dictionary under the key alias by assigning self.annotations[alias] = annotation. RESULT self.annotations[alias]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clones the queryset, configures it as a subquery, conditionally clears ordering, resolves the WHERE clause and annotations, and updates external aliases from the outer query before returning the clone." resolve_expression]
+    [INPUTS]
+        <REF> query </REF>: object "Outer query reference; its aliases are treated as external aliases and its alias_map is used for external alias detection."
+        <REF> args </REF>: tuple "Positional arguments forwarded to nested resolve_expression calls."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to nested resolve_expression calls."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: object "A cloned queryset with subquery flag set, resolved WHERE and annotations, and external aliases updated."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clone self by calling self.clone() and store the result in the clone variable. RESULT clone]
+            [COMMAND Call clone.bump_prefix(query) so the subquery uses a different set of aliases than the outer query. RESULT clone]
+            [COMMAND Set clone.subquery to True. RESULT clone]
+            [COMMAND With short-circuit evaluation, check whether self.low_mark == 0 and self.high_mark is None and not self.distinct_fields and not self.select_for_update; if all conditions are true, call clone.clear_ordering(True), otherwise preserve the existing ordering on clone. RESULT clone]
+            [COMMAND Resolve the WHERE clause on the clone by calling clone.where.resolve_expression(query, *args, **kwargs). RESULT clone]
+            [COMMAND Iterate over each key, value pair in clone.annotations.items(); for each pair, call value.resolve_expression(query, *args, **kwargs), assign the return value to resolved, and if resolved has an attribute named external_aliases, update resolved.external_aliases with clone.alias_map; finally, store resolved back into clone.annotations[key]. RESULT clone]
+            [COMMAND Update clone.external_aliases by including each alias from query.alias_map for which table is a Join whose table.join_field.related_model._meta.db_table differs from alias, or table is a BaseTable whose table_name differs from table.table_alias. RESULT clone.external_aliases]
+            [COMMAND Return the fully resolved clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compiles the current query into a SQL string and parameter list, returning them as a tuple and wrapping the SQL in parentheses when the query is a subquery." as_sql]
+    [INPUTS]
+        <REF> compiler </REF>: object "Compiler argument passed to as_sql; unused by the body of the method."
+        <REF> connection </REF>: object "Database connection used to obtain the compiler for SQL generation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: string "Generated SQL string, wrapped in parentheses if self.subquery is truthy."
+        <REF> params </REF>: list "Query parameters accompanying the SQL string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_compiler(connection=connection).as_sql(), ignoring the passed compiler argument, and unpack the returned pair into sql and params. RESULT sql, params]
+            [COMMAND If self.subquery is truthy, assign sql = '(%s)' % sql, wrapping the SQL string in parentheses. RESULT sql]
+            [COMMAND Return the tuple (sql, params) to the caller. RESULT sql, params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a Django lookup value by resolving expression-like values against the query, resolving expression elements inside list/tuple values while discarding their results, and returning the original value unchanged in the list/tuple case." resolve_lookup_value]
+    [INPUTS]
+        <REF> self </REF>: object "Query object used as the context for resolve_expression calls."
+        <REF> value </REF>: object "Lookup value to resolve; may be an expression, a list/tuple, or a plain value."
+        <REF> can_reuse </REF>: boolean "Controls whether reusable aliases are allowed during expression resolution."
+        <REF> allow_joins </REF>: boolean "Controls whether joins are allowed during expression resolution."
+        <REF> simple_col </REF>: boolean "Controls whether F expressions are resolved as simple column references."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> value </REF>: object "The original unchanged value when no outer expression resolution occurs, or the result of value.resolve_expression when the outer expression branch is taken; list/tuple values are returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether value has the attribute resolve_expression. RESULT has_resolve_expression]
+            [COMMAND If value has resolve_expression, build kwargs with reuse=can_reuse and allow_joins=allow_joins; if value is an instance of F, add simple_col=simple_col to kwargs; call value.resolve_expression(self, **kwargs) and assign the returned result to value. RESULT value]
+            [COMMAND If value does not have resolve_expression and value is a list or tuple, iterate over each sub_value in value. RESULT sub_value]
+            [COMMAND Within the loop over sub_value, check whether sub_value has the attribute resolve_expression. RESULT sub_value_has_resolve_expression]
+            [COMMAND Within the loop over sub_value, if sub_value has resolve_expression and is an instance of F, call sub_value.resolve_expression(self, reuse=can_reuse, allow_joins=allow_joins, simple_col=simple_col) and discard the returned result. RESULT discarded]
+            [COMMAND Within the loop over sub_value, if sub_value has resolve_expression and is not an instance of F, call sub_value.resolve_expression(self, reuse=can_reuse, allow_joins=allow_joins) and discard the returned result. RESULT discarded]
+            [COMMAND After the outer conditional and any loop complete, leave value unchanged in the list/tuple branch because resolved sub-values are not stored back into value. RESULT value]
+            [COMMAND Return value. RESULT value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the type of a Django-style lookup string by splitting it, checking whether annotations provide a reference expression, and otherwise resolving lookup and field parts through names_to_path, with an invalid-lookup guard." solve_lookup_type]
+    [INPUTS]
+        <REF> lookup </REF>: string "The lookup string to resolve, for example 'foobar__id__icontains'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "Returns (expression_lookups, (), expression) if annotations produce a truthy expression; otherwise returns (lookup_parts, field_parts, False)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split lookup by LOOKUP_SEP using the string split method and assign the resulting list of substrings to lookup_splitted. RESULT lookup_splitted]
+            [COMMAND After the annotations branch is skipped or its inner expression is falsy, call self.names_to_path(lookup_splitted, self.get_meta()) and unpack the returned 4-tuple as _, field, _, lookup_parts. RESULT _, field, _, lookup_parts]
+            [COMMAND Compute field_parts as the prefix of lookup_splitted from index 0 up to len(lookup_splitted) - len(lookup_parts). RESULT field_parts]
+            [COMMAND Check the guard condition len(lookup_parts) > 1 and not field_parts; if true, follow the FieldError exception flow instead of the normal return. RESULT guard_condition]
+            [COMMAND Return the tuple (lookup_parts, field_parts, False) as the normal completion result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.annotations is truthy and refs_expression(lookup_splitted, self.annotations) returns a truthy expression.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inside the outer if self.annotations branch, call refs_expression(lookup_splitted, self.annotations) and unpack its 2-tuple result into expression and expression_lookups. RESULT expression and expression_lookups]
+            [COMMAND If expression is truthy, immediately return the tuple (expression_lookups, (), expression) and exit the method. RESULT early_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: When len(lookup_parts) > 1 and field_parts is empty (not field_parts).]
+        [LOG "Invalid lookup '%s' for model %s'."]
+        [THROW FieldError "Raised when the lookup has more than one lookup part but no field parts, indicating an invalid lookup."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a query object is of the correct type by verifying related-lookup compatibility only when the object has model metadata, and raises a descriptive ValueError if the lookup is incompatible." check_query_object_type]
+    [INPUTS]
+        <REF> value </REF>: object "The query object being validated; it may be a Django model instance/class or an unrelated value."
+        <REF> opts </REF>: object "The model options object representing the expected target type for the related lookup."
+        <REF> field </REF>: string "The field name involved in the query lookup."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether value has an attribute named '_meta' by evaluating hasattr(value, '_meta'). RESULT has_meta]
+            [COMMAND Within the guard 'if hasattr(value, '_meta')', when has_meta is true, evaluate check_rel_lookup_compatibility(value._meta.model, opts, field) and store the boolean result. RESULT is_compatible]
+            [COMMAND If is_compatible is true, complete the method without raising an error. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value does not have the '_meta' attribute (has_meta is false)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the compatibility check and continue execution without performing related-lookup validation. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: value has the '_meta' attribute (has_meta is true) and check_rel_lookup_compatibility(value._meta.model, opts, field) returns false (is_compatible is false)]
+        [LOG "Cannot query '{value}': Must be '{opts.object_name}' instance."]
+        [THROW ValueError "Raised when the query object exposes model metadata but is not compatible with the target model options and field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks the type of object passed for a relational field lookup, raising ValueError for incompatible QuerySets without selected fields and validating model instances or iterables against the field's related model options." check_related_objects]
+    [INPUTS]
+        <REF> field </REF>: Field "The relational field on the left-hand side of the lookup."
+        <REF> value </REF>: object "The value being validated; may be a Query, a model object, or an iterable of objects."
+        <REF> opts </REF>: Options "Model options of the related model expected by the field."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "The method returns None after successful validation or raises ValueError if validation fails."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If field.is_relation is false, stop processing and return without validating value. RESULT None]
+            [COMMAND If field.is_relation is true and isinstance(value, Query) and not value.has_select_fields and not check_rel_lookup_compatibility(value.model, opts, field), raise ValueError; see exception_flows. RESULT None]
+            [COMMAND If field.is_relation is true, the incompatible Query condition is false, and hasattr(value, '_meta') is true, call self.check_query_object_type(value, opts, field). RESULT None]
+            [COMMAND If field.is_relation is true, the incompatible Query condition is false, hasattr(value, '_meta') is false, and hasattr(value, '__iter__') is true, iterate over each v in value and call self.check_query_object_type(v, opts, field) for every v. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: field.is_relation is true and isinstance(value, Query) and not value.has_select_fields and not check_rel_lookup_compatibility(value.model, opts, field)]
+        [LOG "Cannot use QuerySet for '{value.model._meta.object_name}': Use a QuerySet for '{opts.object_name}'."]
+        [THROW ValueError "Raised when value is a Query without selected fields and its model is not compatible with the field's related model options."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a lookup object by applying transforms, resolving missing lookup names as exact lookups, and normalizing None or empty-string exact rhs values to isnull lookups when required." build_lookup]
+    [INPUTS]
+        <REF> lookups </REF>: list of strings "List of lookup and transform names to process; a falsy value is treated as ['exact']."
+        <REF> lhs </REF>: object "SQLExpression-like value that supports get_lookup() and try_transform() behavior."
+        <REF> rhs </REF>: object "Value that the constructed lookup will compare against."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object or null "The resolved lookup object, or None when no lookup class can be resolved."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack `lookups or ['exact']` into transforms and lookup_name; all list items except the last become transforms and the last item becomes lookup_name; if lookups is falsy, transforms is empty and lookup_name is 'exact'. RESULT transforms, lookup_name]
+            [COMMAND For each name in transforms, apply self.try_transform(lhs, name) and assign the transformed value back to lhs. RESULT lhs]
+            [COMMAND Call lhs.get_lookup(lookup_name) and assign the returned lookup class to lookup_class. RESULT lookup_class]
+            [COMMAND If lookup_class is truthy, continue with the main path; otherwise follow the alternative flow for a missing initial lookup_class. RESULT lookup_class]
+            [COMMAND Instantiate the lookup by calling lookup_class(lhs, rhs) and assign it to lookup. RESULT lookup]
+            [COMMAND If lookup.rhs is None and lookup.can_use_none_as_rhs is False, follow the alternative flow for None rhs handling; otherwise continue. RESULT lookup]
+            [COMMAND If connections[DEFAULT_DB_ALIAS].features.interprets_empty_strings_as_nulls is True, lookup_name is 'exact', and lookup.rhs is an empty string, follow the alternative flow for empty-string exact handling; otherwise continue. RESULT lookup]
+            [COMMAND Return lookup. RESULT lookup]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup_class is falsy after the initial lhs.get_lookup(lookup_name) call.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If lhs.field.is_relation is True, raise FieldError as described in exception_flows. RESULT exception]
+            [COMMAND Interpret lookup_name as a transform by assigning lhs = self.try_transform(lhs, lookup_name). RESULT lhs]
+            [COMMAND Set lookup_name to 'exact'. RESULT lookup_name]
+            [COMMAND Call lhs.get_lookup('exact') on the transformed lhs and assign it to lookup_class. RESULT lookup_class]
+            [COMMAND If lookup_class is still falsy, return None; otherwise the fallback succeeds and the main flow continues with lookup_class. RESULT lookup_class or None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup.rhs is None and lookup.can_use_none_as_rhs is False.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If lookup_name is not in ('exact', 'iexact'), raise ValueError as described in exception_flows. RESULT exception]
+            [COMMAND Return lhs.get_lookup('isnull')(lhs, True). RESULT isnull_lookup]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: connections[DEFAULT_DB_ALIAS].features.interprets_empty_strings_as_nulls is True, lookup_name is 'exact', and lookup.rhs is an empty string.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return lhs.get_lookup('isnull')(lhs, True). RESULT isnull_lookup]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: lookup_class is falsy and lhs.field.is_relation is True during fallback.]
+        [LOG "Related Field got invalid lookup: {lookup_name}"]
+        [THROW FieldError "Raised when a relational field is given an invalid lookup name."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: lookup.rhs is None, lookup.can_use_none_as_rhs is False, and lookup_name is not in ('exact', 'iexact').]
+        [LOG "Cannot use None as a query value"]
+        [THROW ValueError "Raised when None is used as a query value for a lookup that does not support it."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Attempts to obtain and initialize the transform class registered for a lookup name on lhs, returning the constructed transform when available and raising FieldError with close-match suggestions otherwise." try_transform]
+    [INPUTS]
+        <REF> lhs </REF>: object "The left-hand side expression object from which the transform is requested and which provides the output field used in error reporting."
+        <REF> name </REF>: string "The lookup/transform name to fetch from lhs."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "An instance created by calling the found transform class with lhs when a transform is available."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the transform class for the lookup name by calling lhs.get_transform(name) and store the returned value as transform_class. RESULT transform_class]
+            [COMMAND Evaluate whether transform_class is truthy to determine whether the transform is available. RESULT transform_class_is_truthy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If transform_class is truthy, meaning the transform is available]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke transform_class(lhs) and immediately return the resulting transform object, ending method execution. RESULT transform_instance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If transform_class is falsey, meaning no transform was found]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the falsey branch, assign lhs.output_field.__class__ to output_field. RESULT output_field]
+            [COMMAND Within the falsey branch, call difflib.get_close_matches(name, output_field.get_lookups()) and assign the returned list to suggested_lookups. RESULT suggested_lookups]
+            [COMMAND Within the falsey branch, evaluate whether suggested_lookups is non-empty. RESULT has_suggestions]
+            [COMMAND Within the falsey branch, if has_suggestions is true, set suggestion to ', perhaps you meant %s?' formatted by joining suggested_lookups with ' or '; otherwise set suggestion to '.'. RESULT suggestion]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: If transform_class is falsey, after suggestion has been set]
+        [LOG "Unsupported lookup '{name}' for {output_field.__name__} or join on the field not permitted{suggestion}"]
+        [THROW FieldError "Indicates that the lookup name is unsupported for the output field or not permitted as a join, optionally providing close-match suggestions."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a WhereNode clause for a single filter expression, resolving lookup paths, join metadata, and negated-null semantics, while returning used join aliases unless an outer condition is required." build_filter]
+    [INPUTS]
+        <REF> filter_expr </REF>: tuple or list with two elements "Filter expression containing the lookup argument and the lookup value."
+        <REF> branch_negated </REF>: bool "Indicates whether the current branch contains any negations."
+        <REF> current_negated </REF>: bool "Indicates whether the current filter is negated."
+        <REF> can_reuse </REF>: set or None "Set of reusable joins for multijoins."
+        <REF> allow_joins </REF>: bool "Whether joined field references are permitted."
+        <REF> split_subq </REF>: bool "Whether subqueries should be split for negated branches."
+        <REF> reuse_with_filtered_relation </REF>: bool "Whether only joins in can_reuse should be reused."
+        <REF> simple_col </REF>: bool "Whether to construct simple column references."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple of the built WhereNode clause and either an empty list, the set of used joins, or an empty tuple when an outer condition is required."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that filter_expr is not a dict; a dict input raises FieldError in the exception flow. RESULT validated filter_expr]
+            [COMMAND Unpack filter_expr into arg and value. RESULT arg, value]
+            [COMMAND Validate that arg is truthy; a falsy arg raises FieldError in the exception flow. RESULT validated arg]
+            [COMMAND Call self.solve_lookup_type(arg) and unpack the result into lookups, parts, and reffed_expression. RESULT lookups, parts, reffed_expression]
+            [COMMAND Validate that reffed_expression is filterable; if its filterable attribute is explicitly falsy, NotSupportedError is raised in the exception flow. RESULT validated reffed_expression]
+            [COMMAND Validate that allow_joins is True or len(parts) is at most 1; otherwise FieldError is raised in the exception flow. RESULT validated joined field usage]
+            [COMMAND Snapshot pre_joins as a shallow copy of self.alias_refcount. RESULT pre_joins]
+            [COMMAND Resolve the lookup value by calling self.resolve_lookup_value(value, can_reuse, allow_joins, simple_col). RESULT value]
+            [COMMAND Compute used_joins as the set of aliases whose reference count in self.alias_refcount is greater than the corresponding count in the pre_joins snapshot. RESULT used_joins]
+            [COMMAND Create a fresh clause by calling self.where_class(). RESULT clause]
+            [COMMAND If reffed_expression is truthy, divert to the reffed-expression alternative flow; otherwise continue with the join-based lookup path. RESULT continue]
+            [COMMAND Obtain opts from self.get_meta() and alias from self.get_initial_alias(). RESULT opts, alias]
+            [COMMAND Set allow_many to the boolean expression not branch_negated or not split_subq. RESULT allow_many]
+            [COMMAND Attempt to set up joins by calling self.setup_joins(parts, opts, alias, can_reuse=can_reuse, allow_many=allow_many, reuse_with_filtered_relation=reuse_with_filtered_relation); if MultiJoin is raised, use the MultiJoin alternative flow. RESULT join_info]
+            [COMMAND Within the setup_joins try block, if value is an Iterator, convert it to a list to prevent consumption by later checks. RESULT value]
+            [COMMAND Within the setup_joins try block, call self.check_related_objects(join_info.final_field, value, join_info.opts). RESULT none]
+            [COMMAND Within the setup_joins try block, set self._lookup_joins to join_info.joins. RESULT self._lookup_joins]
+            [COMMAND After a successful join setup, update used_joins with join_info.joins. RESULT used_joins]
+            [COMMAND Call self.trim_joins(join_info.targets, join_info.joins, join_info.path) and unpack the result into targets, alias, and join_list. RESULT targets, alias, join_list]
+            [COMMAND If can_reuse is not None, update can_reuse with join_list. RESULT can_reuse]
+            [COMMAND If join_info.final_field.is_relation is true, check that len(lookups) is at most 1, then construct col from one target with _get_col or from multiple targets with MultiColSource; if is_relation is false, construct col via _get_col(targets[0], join_info.final_field, alias, simple_col). RESULT col]
+            [COMMAND Build the lookup condition by calling self.build_lookup(lookups, col, value). RESULT condition]
+            [COMMAND Read lookup_type from condition.lookup_name. RESULT lookup_type]
+            [COMMAND Add condition to clause with AND. RESULT clause]
+            [COMMAND Compute require_outer as lookup_type equals 'isnull' AND condition.rhs is the boolean True AND current_negated is falsy. RESULT require_outer]
+            [COMMAND If current_negated is truthy and (lookup_type is not 'isnull' or condition.rhs is the boolean False) and condition.rhs is not None, set require_outer to True. RESULT require_outer]
+            [COMMAND Within that current_negated block, if lookup_type is not 'isnull' and either self.is_nullable(targets[0]) is true or the last join type is LOUTER, add a column IS NOT NULL condition to clause by creating an isnull lookup with False and adding it with AND. RESULT clause]
+            [COMMAND Return clause with used_joins if require_outer is False; otherwise return clause with an empty tuple in place of used_joins. RESULT final return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: reffed_expression is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a lookup condition by calling self.build_lookup(lookups, reffed_expression, value). RESULT condition]
+            [COMMAND Add condition to clause with AND. RESULT clause]
+            [COMMAND Return clause and an empty list. RESULT clause, []]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.setup_joins raises MultiJoin]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.split_exclude(filter_expr, can_reuse, e.names_with_path), where e is the captured MultiJoin exception. RESULT returned split_exclude result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: filter_expr is a dict]
+        [LOG "Cannot parse keyword query as dict"]
+        [THROW FieldError "Raised because a dict is not a valid filter expression for this method."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: arg is falsy]
+        [LOG "Cannot parse keyword query {arg!r}"]
+        [THROW FieldError "Raised because the lookup argument is empty or false."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: reffed_expression has an attribute filterable that is falsy; the default is True when the attribute is absent]
+        [LOG "reffed_expression.__class__.__name__ is disallowed in the filter clause."]
+        [THROW NotSupportedError "Raised when the referenced expression is explicitly marked as non-filterable."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: allow_joins is False and len(parts) is greater than 1]
+        [LOG "Joined field references are not permitted in this query"]
+        [THROW FieldError "Raised when a joined field reference appears but joins are disabled."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: join_info.final_field.is_relation is true and len(lookups) is greater than 1]
+        [LOG "Related Field got invalid lookup: {lookups[0]}"]
+        [THROW FieldError "Raised when a relational field receives more than one lookup transform."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds a filter condition to the query by converting filter_clause into a Q object and passing it to self.add_q." add_filter]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is called; provides the add_q method that receives the constructed Q object."
+        <REF> filter_clause </REF>: subscriptable pair such as a tuple or list of length 2 "The first element is a valid Python identifier string used as the field name, and the second element is the lookup value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate filter_clause[0] to obtain the field name. RESULT field_name]
+            [COMMAND Evaluate filter_clause[1] to obtain the field value. RESULT field_value]
+            [COMMAND Create a dictionary mapping field_name to field_value. RESULT filter_dict]
+            [COMMAND Construct a Q object by unpacking filter_dict as keyword arguments, equivalent to Q(field_name=field_value). RESULT q_object]
+            [COMMAND Call self.add_q(q_object) to add the filter condition to the query. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds a query object to the query by computing existing inner joins, delegating to the internal query adder, AND-ing the resulting clause when present, and demoting joins for final join promotion." add_q]
+    [INPUTS]
+        <REF> q_object </REF>: object "Query object to be added to the current query."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "No return value; the method mutates internal query state."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute existing_inner as the set of all keys a in self.alias_map for which self.alias_map[a].join_type equals INNER. RESULT existing_inner]
+            [COMMAND Call self._add_q(q_object, self.used_aliases) and unpack the returned two-element value into clause and a discarded placeholder. RESULT clause]
+            [COMMAND If clause is truthy, add clause to self.where using the AND connector. RESULT self.where]
+            [COMMAND Call self.demote_joins(existing_inner) to demote any outer joins that are no longer valid while preserving the previously existing inner joins. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a Q object into a WHERE clause fragment by calling _add_q with a fresh alias set, joins disabled, and simple column behavior enabled, then returning the first element of the resulting sequence." build_where]
+    [INPUTS]
+        <REF> q_object </REF>: object "Query/filter object to be converted into a WHERE clause fragment."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> where_clause </REF>: object "First element of the sequence returned by _add_q, representing the generated WHERE filter fragment."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a fresh empty set for used_aliases to isolate alias tracking for this call. RESULT used_aliases]
+            [COMMAND Call _add_q on self with q_object, used_aliases=used_aliases, allow_joins=False, and simple_col=True, and capture the returned sequence. RESULT add_q_result]
+            [COMMAND Return the first element of add_q_result, discarding any remaining elements of the sequence. RESULT where_clause]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively converts a Q-object into a where-clause while maintaining negation state and join-promotion votes, and returns the resulting clause with the needed inner join information." _add_q]
+    [INPUTS]
+        <REF> q_object </REF>: object "Query object (Q object) with connector, negated, and children attributes."
+        <REF> used_aliases </REF>: set "Aliases already used in the query, used to prevent reuse."
+        <REF> branch_negated </REF>: boolean "Whether the current branch has been negated; defaults to False."
+        <REF> current_negated </REF>: boolean "Current accumulated negation state; defaults to False."
+        <REF> allow_joins </REF>: boolean "Whether joins are allowed; defaults to True."
+        <REF> split_subq </REF>: boolean "Whether subqueries may be split; defaults to True."
+        <REF> simple_col </REF>: boolean "Whether to use simplified column handling; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> target_clause </REF>: object "The constructed where-clause object containing all accumulated child clauses."
+        <REF> needed_inner </REF>: object "The join-promotion information returned by joinpromoter.update_join_types(self)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the current method _add_q, assign local variable connector from q_object.connector. RESULT connector]
+            [COMMAND Update current_negated as current_negated XOR q_object.negated, toggling it when q_object.negated is true. RESULT current_negated]
+            [COMMAND Update branch_negated as branch_negated OR q_object.negated, making it sticky once any q_object.negated is true. RESULT branch_negated]
+            [COMMAND Create target_clause by calling self.where_class(connector=connector, negated=q_object.negated), using the original q_object.negated rather than the updated current_negated. RESULT target_clause]
+            [COMMAND Create joinpromoter by calling JoinPromoter(q_object.connector, len(q_object.children), current_negated), using the updated current_negated. RESULT joinpromoter]
+            [COMMAND Begin iterating over each child in q_object.children. RESULT child]
+            [COMMAND Within the for loop over q_object.children, determine whether isinstance(child, Node) is true. RESULT None]
+            [COMMAND Within the for loop, when child is a Node instance, call self._add_q(child, used_aliases, branch_negated, current_negated, allow_joins, split_subq) and unpack the returned tuple into child_clause and needed_inner; do not pass simple_col, so it uses its default value False in the recursive call. RESULT child_clause, needed_inner]
+            [COMMAND Within the for loop's Node branch, call joinpromoter.add_votes(needed_inner) to register the recursive call's join-promotion votes. RESULT None]
+            [COMMAND Within the for loop, when child is not a Node instance, call self.build_filter(child, can_reuse=used_aliases, branch_negated=branch_negated, current_negated=current_negated, allow_joins=allow_joins, split_subq=split_subq, simple_col=simple_col) and unpack the returned tuple into child_clause and needed_inner. RESULT child_clause, needed_inner]
+            [COMMAND Within the for loop's non-Node branch, call joinpromoter.add_votes(needed_inner) to register the build_filter call's join-promotion votes. RESULT None]
+            [COMMAND Within the for loop, after the if/else dispatch, if child_clause is truthy, call target_clause.add(child_clause, connector). RESULT target_clause]
+            [COMMAND After all q_object.children have been processed, assign needed_inner = joinpromoter.update_join_types(self). RESULT needed_inner]
+            [COMMAND Return the tuple (target_clause, needed_inner) as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a FilteredRelation query clause from a Q-object tree by iterating its children, preserving negation state, and combining child clauses with the same connector." build_filtered_relation_q]
+    [INPUTS]
+        <REF> q_object </REF>: Node/Q-like query tree node "The query object containing connector, negated flag, and children to process."
+        <REF> reuse </REF>: set or reusable-join cache "Existing reusable aliases or joins passed through to nested clause builders."
+        <REF> branch_negated </REF>: bool "Indicates whether any outer branch is negated; defaults to False."
+        <REF> current_negated </REF>: bool "Tracks the current cumulative negation state; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> target_clause </REF>: WhereNode / FilteredRelation clause "A clause object built with q_object's connector and negated flag, containing all child clauses."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read connector from q_object.connector. RESULT connector]
+            [COMMAND Apply current_negated ^= q_object.negated; if q_object.negated is True, invert current_negated, otherwise keep current_negated unchanged. RESULT current_negated]
+            [COMMAND Evaluate branch_negated = branch_negated or q_object.negated with short-circuit semantics; the result is True if the previous branch_negated is True or q_object.negated is True, otherwise False. RESULT branch_negated]
+            [COMMAND Create target_clause by calling self.where_class(connector=connector, negated=q_object.negated). RESULT target_clause]
+            [COMMAND For each child in q_object.children, process the child and accumulate its clause. RESULT child]
+            [COMMAND Within the for loop over q_object.children, if isinstance(child, Node), call self.build_filtered_relation_q(child, reuse=reuse, branch_negated=branch_negated, current_negated=current_negated) and assign the returned clause to child_clause. RESULT child_clause]
+            [COMMAND Within the for loop over q_object.children, for a non-Node child, call self.build_filter(child, can_reuse=reuse, branch_negated=branch_negated, current_negated=current_negated, allow_joins=True, split_subq=False, reuse_with_filtered_relation=True), assign the first returned value to child_clause, and discard the second returned value. RESULT child_clause]
+            [COMMAND Within the for loop over q_object.children, after child_clause is built, add it to target_clause by calling target_clause.add(child_clause, connector). RESULT target_clause]
+            [COMMAND After the for loop completes, return target_clause. RESULT target_clause]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers a FilteredRelation under its alias after validating that the relation's condition lookups are not nested beyond the supported depth." add_filtered_relation]
+    [INPUTS]
+        <REF> filtered_relation </REF>: FilteredRelation "The filtered relation to register; its alias is overwritten with the provided alias and its condition is validated."
+        <REF> alias </REF>: str "The alias to assign to filtered_relation and use as the key in self._filtered_relations."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "No value is returned; the method mutates filtered_relation.alias and self._filtered_relations in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set filtered_relation.alias to alias. RESULT filtered_relation]
+            [COMMAND Build lookups as a dict by calling get_children_from_q on filtered_relation.condition and passing the returned children to the dict constructor. RESULT lookups]
+            [COMMAND For each lookup in the lazy chain starting with filtered_relation.relation_name followed by the keys of lookups, process the next lookup from the chain. RESULT lookup]
+            [COMMAND Within the loop for the current lookup, call self.solve_lookup_type(lookup) and unpack the result into lookup_parts, field_parts, and an ignored third value. RESULT lookup_parts, field_parts]
+            [COMMAND Within the same loop, compute shift as 2 if lookup_parts is empty or falsy, otherwise compute shift as 1. RESULT shift]
+            [COMMAND Within the same loop, validate the depth by checking whether len(field_parts) is greater than shift + len(lookup_parts); if it is, trigger the ValueError exception path, otherwise continue with the next lookup. RESULT lookup]
+            [COMMAND After the loop finishes without triggering the exception, store filtered_relation in self._filtered_relations at the key filtered_relation.alias. RESULT self._filtered_relations]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: For any lookup in the chain, len(field_parts) is greater than shift + len(lookup_parts), where shift is 2 when lookup_parts is empty and 1 otherwise.]
+        [LOG "FilteredRelation's condition doesn't support nested relations (got %r)."]
+        [THROW ValueError "Raised when a lookup path in the FilteredRelation condition is nested too deeply and is not supported."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a lookup name path against model options into join path information, final target fields, and remaining names, while handling pk aliases, annotations, filtered relations, concrete inheritance, and disallowed many-to-many joins." names_to_path]
+    [INPUTS]
+        <REF> names </REF>: list of str "Path of lookup names to resolve against the model options."
+        <REF> opts </REF>: Model Options "Starting model options for name resolution."
+        <REF> allow_many </REF>: bool "Whether many-to-many joins are permitted during path resolution. Defaults to True."
+        <REF> fail_on_missing </REF>: bool "Whether an unresolved name should raise FieldError. Defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> path </REF>: list of PathInfo "All join path info tuples built while resolving names."
+        <REF> final_field </REF>: Field "The last join field or local non-relational field used."
+        <REF> targets </REF>: list or tuple of Field "Fields guaranteed to contain the same value as the final field."
+        <REF> remaining_names </REF>: list of str "The names that were not consumed by field resolution, starting at names[pos + 1]."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize path to an empty list and names_with_path to an independent empty list. RESULT path, names_with_path]
+            [COMMAND Start looping through enumerate(names), where pos is the zero-based index and name is the current lookup component. RESULT pos, name]
+            [COMMAND For each current name, create cur_names_with_path as a tuple (name, []) to collect path info for this component. RESULT cur_names_with_path]
+            [COMMAND If name is 'pk', replace the local variable name with opts.pk.name, while cur_names_with_path[0] retains the original 'pk' component. RESULT name]
+            [COMMAND Set field and filtered_relation to None, then attempt field = opts.get_field(name). RESULT field, filtered_relation]
+            [COMMAND If opts.get_field(name) raises FieldDoesNotExist and name is in self.annotation_select, set field to self.annotation_select[name].output_field. RESULT field]
+            [COMMAND Else if opts.get_field(name) raises FieldDoesNotExist, name is not in self.annotation_select, name is in self._filtered_relations, and pos == 0, set filtered_relation to self._filtered_relations[name] and set field to opts.get_field(filtered_relation.relation_name). RESULT filtered_relation, field]
+            [COMMAND If field is not None and field.is_relation is True and field.related_model is falsy, raise FieldError for the generic relation case. RESULT _]
+            [COMMAND If field is not None, extract model = field.model._meta.concrete_model; if that raises AttributeError, set model = None. RESULT model]
+            [COMMAND If field is None after resolution attempts, decrement pos by 1. If pos becomes -1 or fail_on_missing is True, build sorted available names and raise FieldError; otherwise break the loop. RESULT pos]
+            [COMMAND After resolving a field, if model is not opts.model, compute path_to_parent = opts.get_path_to_parent(model). If path_to_parent is truthy, extend path and cur_names_with_path[1] with it and update opts to path_to_parent[-1].to_opts. RESULT path, opts, cur_names_with_path]
+            [COMMAND If field has get_path_info, compute pathinfos = field.get_path_info(filtered_relation) for the relational field branch. RESULT pathinfos]
+            [COMMAND In the relational branch, if allow_many is False, scan pathinfos for a segment p with p.m2m True; if found, extend cur_names_with_path[1] with pathinfos[0:inner_pos + 1], append cur_names_with_path to names_with_path, and raise MultiJoin with pos + 1 and names_with_path. RESULT _]
+            [COMMAND In the relational branch with no MultiJoin, set last = pathinfos[-1], extend path with pathinfos, set final_field = last.join_field, opts = last.to_opts, targets = last.target_fields, extend cur_names_with_path[1] with pathinfos, append cur_names_with_path to names_with_path, and continue to the next name. RESULT path, final_field, opts, targets, names_with_path]
+            [COMMAND If field does not have get_path_info, treat it as a local non-relational field: set final_field = field and targets = (field,). If fail_on_missing is True and pos + 1 != len(names), raise FieldError; otherwise break the loop. RESULT final_field, targets]
+            [COMMAND After the loop exits by completion or break, return path, final_field, targets, and names[pos + 1:]. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: opts.get_field(name) raises FieldDoesNotExist and name is in self.annotation_select]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Use self.annotation_select[name].output_field as the resolved field. RESULT field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: opts.get_field(name) raises FieldDoesNotExist, name is not in self.annotation_select, name is in self._filtered_relations, and pos == 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set filtered_relation to self._filtered_relations[name] and resolve field via opts.get_field(filtered_relation.relation_name). RESULT filtered_relation, field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field is resolved but model is not opts.model and opts.get_path_to_parent(model) returns a truthy path]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extend path and cur_names_with_path[1] with the parent path, then update opts to the last parent path entry's to_opts. RESULT path, opts, cur_names_with_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field is not resolved, pos was decremented to at least 0, and fail_on_missing is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Break out of the for loop immediately, preserving names[pos + 1:] as the unprocessed remaining names. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field is a local non-relational field and fail_on_missing is False or it is the last name]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set final_field = field and targets = (field,), then break out of the loop. RESULT final_field, targets]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: field is not None and field.is_relation is True and field.related_model is falsy]
+        [LOG "Field '<name>' does not generate an automatic reverse relation and therefore cannot be used for reverse querying. If it is a GenericForeignKey, consider adding a GenericRelation."]
+        [THROW FieldError "Raised when a relation field cannot form reverse joins because it has no related model."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: field resolution fails and pos becomes -1 or fail_on_missing is True]
+        [LOG "Cannot resolve keyword '<name>' into field. Choices are: <sorted available names>"]
+        [THROW FieldError "Raised when a lookup name cannot be resolved to a field and missing names are not allowed or no previous field remains before the unresolved name."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: allow_many is False and, while enumerating pathinfos as (inner_pos, p), a segment p has p.m2m True]
+        [LOG "Many-to-many join encountered at position <pos + 1>; cur_names_with_path[1] is extended with pathinfos[0:inner_pos + 1] and names_with_path is appended before raising."]
+        [THROW MultiJoin "Raised when a many-to-many join is required but allow_many is False."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: field has no get_path_info, fail_on_missing is True, and pos + 1 is not equal to len(names)]
+        [LOG "Cannot resolve keyword '<names[pos + 1]>' into field. Join on '<name>' not permitted."]
+        [THROW FieldError "Raised when a lookup continues past a local non-relational field while fail_on_missing is True."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves field names into a join path, wraps remaining transform names into a chained field transformer, executes the required table joins, and returns JoinInfo with the final field, targets, options, aliases, path, and transformer." setup_joins]
+    [INPUTS]
+        <REF> names </REF>: list "Field path components to resolve into joins and transforms."
+        <REF> opts </REF>: Options "Model options representing the starting table for the join computation."
+        <REF> alias </REF>: str "Alias of the table from which joining starts."
+        <REF> can_reuse </REF>: set or None "Aliases that can be reused for reverse foreign key joins; None means all joins are reusable."
+        <REF> allow_many </REF>: bool "If False, reverse foreign keys encountered while resolving names raise MultiJoin."
+        <REF> reuse_with_filtered_relation </REF>: bool "If True, forces can_reuse on filtered relation connections and allows reusing filtered relations."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: JoinInfo "Join metadata containing final_field, targets, final opts, joined aliases, original path, and final_transformer callable."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize joins as a list containing the starting alias. RESULT joins]
+            [COMMAND Define the base final_transformer as a function that takes field and alias and returns field.get_col(alias). RESULT final_transformer]
+            [COMMAND Set last_field_exception to None. RESULT last_field_exception]
+            [COMMAND For each pivot from len(names) down to 1, attempt to resolve names[:pivot] by calling self.names_to_path(names[:pivot], opts, allow_many, fail_on_missing=True), storing the returned values as path, final_field, targets, and rest. RESULT path, final_field, targets, rest]
+            [COMMAND On successful resolution in the pivot loop, set transforms to names[pivot:], leave rest unused, and break out of the loop. RESULT transforms]
+            [COMMAND For each name in transforms, define transform(field, alias, *, name, previous) so that when it is later invoked it calls previous(field, alias), passes the result to self.try_transform(wrapped, name), and on FieldError, if final_field is a Field and last_field_exception is truthy, raises last_field_exception, otherwise re-raises the current FieldError; then set final_transformer = functools.partial(transform, name=name, previous=final_transformer). RESULT final_transformer]
+            [COMMAND Start iterating over each join in path. RESULT join]
+            [COMMAND For the current join in the loop, if join.filtered_relation is truthy, set filtered_relation to join.filtered_relation.clone() and table_alias to filtered_relation.alias; otherwise set filtered_relation and table_alias to None. RESULT filtered_relation, table_alias]
+            [COMMAND For the current join in the loop, set opts to join.to_opts. RESULT opts]
+            [COMMAND For the current join in the loop, if join.direct is truthy, set nullable to self.is_nullable(join.join_field); otherwise set nullable to True. RESULT nullable]
+            [COMMAND For the current join in the loop, construct connection as Join(opts.db_table, alias, table_alias, INNER, join.join_field, nullable, filtered_relation=filtered_relation). RESULT connection]
+            [COMMAND For the current join in the loop, set reuse to can_reuse if join.m2m is truthy or reuse_with_filtered_relation is truthy; otherwise set reuse to None. RESULT reuse]
+            [COMMAND For the current join in the loop, call self.join(connection, reuse=reuse, reuse_with_filtered_relation=reuse_with_filtered_relation) and assign the returned alias to alias. RESULT alias]
+            [COMMAND For the current join in the loop, append the current alias to joins. RESULT joins]
+            [COMMAND For the current join in the loop, if filtered_relation is truthy, assign filtered_relation.path to a shallow copy of joins. RESULT filtered_relation]
+            [COMMAND After processing all joins, return JoinInfo(final_field, targets, opts, joins, path, final_transformer). RESULT join_info]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.names_to_path raises FieldError while pivot is greater than 1.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the caught FieldError in last_field_exception and continue trying the next shorter prefix in the pivot loop. RESULT last_field_exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.names_to_path raises MultiJoin because allow_many is False and a reverse foreign key is encountered.]
+        [LOG "A reverse foreign key would produce multiple joins, but allow_many is False; MultiJoin propagates."]
+        [THROW MultiJoin "Raised when a reverse foreign key requires multiple joins while allow_many is False."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.names_to_path raises FieldError while pivot equals 1, meaning no prefix of names can be resolved even when pivot is 1.]
+        [LOG "A field error occurred while resolving the first name as a field; the original FieldError is re-raised."]
+        [THROW FieldError "Indicates that no prefix of names could be resolved as a valid field path."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: When the final_transformer returned by this method is later invoked, previous(field, alias) or self.try_transform(wrapped, name) raises FieldError, and final_field is a Field and last_field_exception is truthy.]
+        [LOG "A FieldError occurred while applying a transform; the stored last_field_exception is raised instead."]
+        [THROW FieldError "The stored field-resolution exception is raised in place of the transform error."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: When the final_transformer returned by this method is later invoked, previous(field, alias) or self.try_transform(wrapped, name) raises FieldError, and either final_field is not a Field or last_field_exception is falsy.]
+        [LOG "A FieldError occurred while applying a transform and no stored exception takes precedence; the current FieldError is re-raised."]
+        [THROW FieldError "The FieldError raised by the transform chain is re-raised unchanged."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Trims unnecessary direct joins from the end of a join chain by walking the path in reverse, remapping target fields to the outer table whenever the current join is safe to remove, and returns the remaining targets, final join alias, and join list." trim_joins]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance providing unref_alias."
+        <REF> targets </REF>: tuple "Tuple of field objects representing the target columns that must be resolved."
+        <REF> joins </REF>: list "List of active join aliases."
+        <REF> path </REF>: list "List of PathInfo objects describing the joins used to build the path."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "Tuple containing the final targets, the last remaining join alias, and the remaining join list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Make a shallow copy of the joins list by evaluating joins[:], and rebind joins to that new list for the rest of the method. RESULT joins]
+            [COMMAND Start a for loop over enumerate(reversed(path)), processing each path element from the end of path toward the beginning; the loop index pos is unused. RESULT loop_context]
+            [COMMAND At the top of each iteration, if len(joins) == 1 or not info.direct, break out of the loop. RESULT break_condition_1]
+            [COMMAND In the same iteration, after the first guard passes, if info.filtered_relation is truthy, break out of the loop. RESULT break_condition_2]
+            [COMMAND In the same iteration, compute join_targets as the set of t.column values for every t in info.join_field.foreign_related_fields. RESULT join_targets]
+            [COMMAND In the same iteration, compute cur_targets as the set of t.column values for every t in targets. RESULT cur_targets]
+            [COMMAND In the same iteration, if cur_targets is not a subset of join_targets, break out of the loop. RESULT break_condition_3]
+            [COMMAND In the same iteration, build targets_dict from info.join_field.related_fields by mapping r[1].column to r[0] for each pair whose r[1].column is in cur_targets. RESULT targets_dict]
+            [COMMAND In the same iteration, remap targets to a new tuple using tuple(targets_dict[t.column] for t in targets). RESULT targets]
+            [COMMAND In the same iteration, pop the last alias from joins and call self.unref_alias on the popped alias. RESULT popped_alias]
+            [COMMAND After the loop completes, return the final targets, joins[-1], and joins. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a field reference by returning an existing annotation directly or as a Ref during aggregate queries, and otherwise resolves a lookup path into a database column while enforcing join and multicolumn restrictions." resolve_ref]
+    [INPUTS]
+        <REF> name </REF>: string "Field name or lookup path to resolve."
+        <REF> allow_joins </REF>: bool "Whether joined field references are permitted; defaults to True."
+        <REF> reuse </REF>: set or None "Optional set of reusable join aliases to update with the resolved joins; defaults to None."
+        <REF> summarize </REF>: bool "Whether an aggregate query is being built, requiring annotation references through the subquery; defaults to False."
+        <REF> simple_col </REF>: bool "Whether a simple column object should be returned; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The resolved annotation object, Ref object, or database column."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether joined field references are disallowed while name contains a lookup separator; if so, the corresponding exception flow applies. RESULT joined_reference_check]
+            [COMMAND Check whether name exists in self.annotations. RESULT is_annotation]
+            [COMMAND When name is not in self.annotations, split name by LOOKUP_SEP to produce field_list. RESULT field_list]
+            [COMMAND When name is not in self.annotations, call setup_joins(field_list, self.get_meta(), self.get_initial_alias(), can_reuse=reuse) to resolve the lookup path. RESULT join_info]
+            [COMMAND When name is not in self.annotations, call trim_joins(join_info.targets, join_info.joins, join_info.path) to compute targets, final_alias, and join_list. RESULT trimmed_joins]
+            [COMMAND When name is not in self.annotations, check whether not allow_joins and len(join_list) is greater than 1; if so, the corresponding exception flow applies. RESULT joined_after_trim_check]
+            [COMMAND When name is not in self.annotations, check whether len(targets) is greater than 1; if so, the corresponding exception flow applies. RESULT multicolumn_check]
+            [COMMAND When name is not in self.annotations, call join_info.transform_function(targets[0], final_alias) to verify the final lookup target is a field or valid transform; let any FieldError propagate. RESULT transform_verified]
+            [COMMAND When name is not in self.annotations, if reuse is not None, update reuse with join_list. RESULT reuse_updated]
+            [COMMAND When name is not in self.annotations, build col = _get_col(targets[0], join_info.targets[0], join_list[-1], simple_col). RESULT col]
+            [COMMAND When name is not in self.annotations, return col. RESULT column_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: name is in self.annotations and summarize is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return Ref(name, self.annotation_select[name]) to reference the aggregate query's annotation select. RESULT ref_annotation]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: name is in self.annotations and summarize is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.annotations[name] directly. RESULT annotation_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: not allow_joins and LOOKUP_SEP in name]
+        [LOG "Joined field references are not permitted in this query"]
+        [THROW FieldError "Rejects a joined field reference when joins are disallowed before annotation resolution."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the non-annotation lookup path, not allow_joins and len(join_list) is greater than 1]
+        [LOG "Joined field references are not permitted in this query"]
+        [THROW FieldError "Rejects a lookup path that requires more than one join when joins are disallowed."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the non-annotation lookup path, len(targets) is greater than 1]
+        [LOG "Referencing multicolumn fields with F() objects isn't supported"]
+        [THROW FieldError "Rejects references to multicolumn fields because F() objects cannot represent them."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the non-annotation lookup path, join_info.transform_function(targets[0], final_alias) raises FieldError because the final lookup target is not a valid field or transform]
+        [LOG "Final lookup target is not a valid field or transform"]
+        [THROW FieldError "Raised when the last lookup in name is not a field or valid transform."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a negated subquery condition for exclude filters on N-to-many relations, using an IN subquery with null-safety and adding an OR IS NULL fallback when a left outer join is involved." split_exclude]
+    [INPUTS]
+        <REF> filter_expr </REF>: tuple "Filter expression, e.g. ('child__name', 'foo'), to convert into a subquery exclude."
+        <REF> can_reuse </REF>: set "Set of join aliases usable for filters in the original query."
+        <REF> names_with_path </REF>: object "Join path metadata used by query.trim_start() to determine which leading joins can be removed from the subquery."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A pair (condition, needed_inner) where condition is the built negated condition and needed_inner indicates whether the filter requires an inner join."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack filter_expr into filter_lhs and filter_rhs. RESULT filter_lhs, filter_rhs]
+            [COMMAND If filter_rhs is an F expression, rewrite filter_expr as (filter_lhs, OuterRef(filter_rhs.name)). RESULT filter_expr]
+            [COMMAND Create a new Query instance for self.model. RESULT query]
+            [COMMAND Add filter_expr to the query using query.add_filter(filter_expr). RESULT query]
+            [COMMAND Force-clear the query ordering by calling query.clear_ordering(True). RESULT query]
+            [COMMAND Trim leading joins from the subquery by calling query.trim_start(names_with_path), assigning the trimmed prefix to trimmed_prefix and the left-outer-join flag to contains_louter. RESULT trimmed_prefix, contains_louter]
+            [COMMAND Take the first selected column from query.select as col, then derive select_field from col.target and alias from col.alias. RESULT col, select_field, alias]
+            [COMMAND If self.is_nullable(select_field) is true, get select_field.get_lookup('isnull'), construct lookup = lookup_class(select_field.get_col(alias), False), and add lookup to query.where with AND. RESULT query]
+            [COMMAND If alias is in can_reuse, set pk = select_field.model._meta.pk, call query.bump_prefix(self), get select_field.get_lookup('exact'), construct an exact lookup between pk.get_col(query.select[0].alias) and pk.get_col(alias), add it to query.where with AND, and add alias to query.external_aliases. RESULT query]
+            [COMMAND Call self.build_filter with filter spec ('%s__in' % trimmed_prefix, query), current_negated=True, branch_negated=True, and can_reuse=can_reuse; assign the returned pair to condition and needed_inner. RESULT condition, needed_inner]
+            [COMMAND If contains_louter is true, call self.build_filter with filter spec ('%s__isnull' % trimmed_prefix, True), current_negated=True, branch_negated=True, and can_reuse=can_reuse, discard the second returned value, and add the first returned value (or_null_condition) to condition with OR. RESULT condition]
+            [COMMAND Return condition and needed_inner. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds a NothingNode condition to the current where clause using the AND operator." set_empty]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a NothingNode() and add it to self.where using the AND operator. RESULT self.where]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if self.where.children contains at least one NothingNode instance; otherwise returns False." is_empty]
+    [INPUTS]
+        <REF> self </REF>: object "The object containing a where attribute with a children collection to inspect."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if any child in self.where.children is an instance of NothingNode; False if none are, including when the collection is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the children collection from self.where. RESULT children]
+            [COMMAND Create a generator expression that iterates over each child in children and evaluates whether isinstance(c, NothingNode) is true for that child. RESULT nothing_node_checks]
+            [COMMAND Evaluate any(nothing_node_checks), which returns True immediately at the first child that is a NothingNode and returns False if no such child exists, including when children is empty. RESULT found_nothing_node]
+            [COMMAND Return found_nothing_node as the result of is_empty. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adjusts the lower and upper row-limit marks by applying the supplied low and high offsets, clamping both marks to an existing upper bound, and clears the result set when the marks become equal." set_limits]
+    [INPUTS]
+        <REF> low </REF>: int or None "Offset to add to the current lower mark; if None, the lower mark is unchanged."
+        <REF> high </REF>: int or None "Offset to add to the current upper mark; if None, the upper mark is unchanged."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the outer condition 'high is not None', if self.high_mark is not None, set self.high_mark to min(self.high_mark, self.low_mark + high); otherwise set self.high_mark to self.low_mark + high. RESULT self.high_mark]
+            [COMMAND Within the outer condition 'low is not None', if self.high_mark is not None, set self.low_mark to min(self.high_mark, self.low_mark + low); otherwise set self.low_mark to self.low_mark + low. RESULT self.low_mark]
+            [COMMAND If self.low_mark equals self.high_mark, call self.set_empty(). RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clears any existing limits by resetting low_mark to 0 and high_mark to None." clear_limits]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the tuple (0, None) to self.low_mark and self.high_mark respectively, clearing any existing limits. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns true when the object's high_mark is not None and is exactly one unit greater than low_mark." has_limit_one]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if high_mark is not None and high_mark - low_mark equals 1, otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.high_mark is None. RESULT high_mark_is_none]
+            [COMMAND If self.high_mark is None, return False immediately without evaluating the subtraction. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.high_mark is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute self.high_mark minus self.low_mark. RESULT difference]
+            [COMMAND Return whether difference equals 1. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Return True if adding filters is still possible, which requires self.low_mark to be falsy and self.high_mark to be None." can_filter]
+    [INPUTS]
+        <REF> self </REF>: object "Instance exposing low_mark and high_mark attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True when self.low_mark is falsy and self.high_mark is None; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the can_filter method, parse the expression according to Python precedence as `(not self.low_mark) and (self.high_mark is None)`, then evaluate the left operand `not self.low_mark` to determine whether low_mark is falsy (falsy values include None, False, 0, empty strings/collections). RESULT low_mark_falsy]
+            [COMMAND If low_mark_falsy is False, short-circuit the logical AND and return False immediately without reading self.high_mark. RESULT final_result]
+            [COMMAND If low_mark_falsy is True, evaluate the right operand `self.high_mark is None` to determine whether high_mark is exactly the None object. RESULT high_mark_is_none]
+            [COMMAND Return True if high_mark_is_none is True; otherwise return False. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes all fields from the SELECT clause by resetting select-related attributes and clearing extra and annotation masks." clear_select_clause]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign an empty tuple () to self.select. RESULT self.select]
+            [COMMAND Set self.default_cols to False. RESULT self.default_cols]
+            [COMMAND Set self.select_related to False. RESULT self.select_related]
+            [COMMAND Call self.set_extra_mask with an empty tuple () to clear the extra mask. RESULT None]
+            [COMMAND Call self.set_annotation_mask with an empty tuple () to clear the annotation mask. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clears the queryset's selectable field lists by resetting self.select and self.values_select to empty tuples, while leaving extra_select columns unchanged." clear_select_fields]
+    [INPUTS]
+        <REF> self </REF>: object "The queryset instance whose select and values_select attributes are reset to empty tuples."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: NoneType "No return value; the method mutates self.select and self.values_select in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign an empty tuple to self.select to clear the list of fields to select. RESULT self.select]
+            [COMMAND Assign an empty tuple to self.values_select to clear the list of values to select. RESULT self.values_select]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the default columns flag to False and stores the provided columns as an immutable tuple in the select attribute." set_select]
+    [INPUTS]
+        <REF> cols </REF>: iterable "An iterable of column identifiers to convert to a tuple and assign to self.select."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.default_cols to the boolean False. RESULT self.default_cols]
+            [COMMAND Convert cols to a tuple and assign it to self.select. RESULT self.select]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: cols is not iterable, so tuple(cols) cannot build a tuple.]
+        [LOG "A TypeError occurs because tuple(cols) requires cols to be iterable."]
+        [THROW TypeError "Raised because tuple(cols) requires an iterable argument."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Assigns the provided field names to the distinct_fields attribute and enables the distinct flag on the query." add_distinct_fields]
+    [INPUTS]
+        <REF> field_names </REF>: tuple "Variable-length positional field names to be set as the query's distinct fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the tuple field_names to self.distinct_fields. RESULT self.distinct_fields]
+            [COMMAND Set self.distinct to True. RESULT self.distinct]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds the given model fields to the select set in the order specified, resolving lookup paths and raising FieldError for invalid field names." add_fields]
+    [INPUTS]
+        <REF> field_names </REF>: iterable of strings "Field names to add to the select set, processed in the order given."
+        <REF> allow_m2m </REF>: bool "Whether many-to-many relations are allowed when resolving field lookups; defaults to True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the initial alias from self.get_initial_alias(). RESULT alias]
+            [COMMAND Get the model metadata from self.get_meta(). RESULT opts]
+            [COMMAND Within the try block, initialize cols as an empty list to collect selected field targets. RESULT cols]
+            [COMMAND Within the try block, for each field name in field_names in order, split the name on LOOKUP_SEP and call self.setup_joins(...) with opts, alias, and allow_many=allow_m2m, preserving all rows by using outer joins when no existing joins are present; store the returned join info. RESULT join_info]
+            [COMMAND Within the same field-name loop, call self.trim_joins(join_info.targets, join_info.joins, join_info.path) and unpack the returned targets, final_alias, and joins. RESULT targets, final_alias, joins]
+            [COMMAND Within the same field-name loop, for each target in targets, append join_info.transform_function(target, final_alias) to cols. RESULT cols]
+            [COMMAND Within the try block, after processing all field names, if cols is non-empty, call self.set_select(cols) to set the select set. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: A MultiJoin exception is raised while resolving or trimming joins for a field name.]
+        [LOG "Invalid field name: '{name}'"]
+        [THROW FieldError "The field name cannot be resolved because it would require an invalid multi-valued join."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: A FieldError is caught while resolving a field name and LOOKUP_SEP is present in that field name.]
+        [LOG "Original FieldError from the model on which the lookup failed is re-raised."]
+        [THROW FieldError "Re-raises the original FieldError for lookups spanning relationships."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: A FieldError is caught while resolving a field name and LOOKUP_SEP is not present in that field name.]
+        [LOG "Cannot resolve keyword '{name}' into field. Choices are: {', '.join(sorted([*get_field_names_from_opts(opts), *self.extra, *self.annotation_select, *self._filtered_relations]))}"]
+        [THROW FieldError "The keyword cannot be resolved to a field; the message lists available choices."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates each ordering field or expression, raises FieldError for invalid or aggregate ordering arguments, and either adds the ordering to the query's order_by clause or disables default ordering when no ordering is provided." add_ordering]
+    [INPUTS]
+        <REF> ordering </REF>: tuple "Positional arguments containing field names, field names with '-' or '?' direction prefixes, or OrderBy expression objects. An empty tuple indicates that default ordering should be disabled."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named errors. RESULT errors]
+            [COMMAND For each item in ordering, run the following two checks in sequence: if item does not have a resolve_expression attribute and does not match ORDER_PATTERN, append item to errors; then, if getattr(item, 'contains_aggregate', False) is truthy, raise FieldError with the aggregate usage message. RESULT errors]
+            [COMMAND After the ordering loop, if errors is truthy, raise FieldError with the invalid order_by arguments message. RESULT FieldError]
+            [COMMAND If ordering is truthy, execute self.order_by += ordering. RESULT self.order_by]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After validation and the error check, ordering is falsy because no positional arguments were supplied.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.default_ordering to False. RESULT self.default_ordering]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: During the for loop, an item in ordering has getattr(item, 'contains_aggregate', False) equal to True.]
+        [LOG "Using an aggregate in order_by() without also including it in annotate() is not allowed: {item}"]
+        [THROW FieldError "Raised when an ordering item is an aggregate expression that was not also included in annotate()."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: After the for loop, errors is truthy.]
+        [LOG "Invalid order_by arguments: {errors}"]
+        [THROW FieldError "Raised when one or more ordering items are neither resolvable expressions nor valid ORDER_PATTERN matches."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes all explicit and extra ordering settings, and if force_empty is True also disables the model's default ordering." clear_ordering]
+    [INPUTS]
+        <REF> force_empty </REF>: bool "If True, disables the model's default ordering; if False, leaves default_ordering unchanged."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.order_by to an empty tuple, clearing all explicit ordering settings. RESULT self.order_by]
+            [COMMAND Set self.extra_order_by to an empty tuple, clearing all extra ordering settings. RESULT self.extra_order_by]
+            [COMMAND If force_empty is True, set self.default_ordering to False so the resulting query has no ordering at all. RESULT self.default_ordering]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Expands the GROUP BY clause by combining self.select with group-by columns from each annotation, falling back to a deprecated call style when an annotation's get_group_by_cols method does not accept an alias keyword." set_group_by]
+    [INPUTS]
+        <REF> self </REF>: object "Query object containing a select list and an annotation_select dictionary of annotation objects."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self.group_by </REF>: tuple "Tuple of group-by columns formed from self.select and annotation group-by columns."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set group_by to list(self.select), creating a shallow copy of the select list. RESULT group_by]
+            [COMMAND If self.annotation_select is truthy, enter the for loop over each alias and annotation in self.annotation_select.items(). RESULT annotation_loop]
+            [COMMAND Within the annotation loop, in the try block, inspect whether annotation.get_group_by_cols accepts alias by evaluating inspect.getcallargs(annotation.get_group_by_cols, alias=alias). Any exception other than TypeError propagates out of the method. RESULT signature_check]
+            [COMMAND In the else branch of that try/except within the annotation loop, when the signature inspection succeeds without raising TypeError, set group_by_cols to annotation.get_group_by_cols(alias=alias). RESULT group_by_cols]
+            [COMMAND In the except TypeError branch within the annotation loop, set annotation_class to annotation.__class__, build msg as '`alias=None` must be added to the signature of %s.%s.get_group_by_cols().' using annotation_class.__module__ and annotation_class.__qualname__, emit warnings.warn(msg, category=RemovedInDjango40Warning), then set group_by_cols to annotation.get_group_by_cols(). RESULT group_by_cols]
+            [COMMAND Within the annotation loop, after the try/except/else completes, extend group_by with group_by_cols. RESULT group_by]
+            [COMMAND After the if self.annotation_select block completes, assign self.group_by to tuple(group_by). RESULT self.group_by]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds or preserves a nested dictionary representation of select_related paths from the given fields, starting fresh when select_related is a bool and otherwise reusing its current value, then stores the resulting dictionary back on self." add_select_related]
+    [INPUTS]
+        <REF> self </REF>: object "The object whose select_related attribute is read and later mutated."
+        <REF> fields </REF>: iterable of str "Field paths to add to the select_related structure; each field is split on LOOKUP_SEP into nested keys."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate isinstance(self.select_related, bool), using an exact boolean type check so True and False match but integers 1 and 0 do not. RESULT is_bool]
+            [COMMAND If is_bool is true, set field_dict to a new empty dictionary. RESULT field_dict]
+            [COMMAND For each field in fields, set d to field_dict as the root of the nested dictionary. RESULT d]
+            [COMMAND Within the outer loop over each field, split field on LOOKUP_SEP into parts; for each part, execute d = d.setdefault(part, {}), which inserts an empty dictionary only for missing keys and returns the existing or new value so the loop descends one level. RESULT d]
+            [COMMAND After all fields are processed, assign self.select_related = field_dict, making self.select_related refer to the same dictionary object as field_dict. RESULT self.select_related]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If is_bool is false, the original value of self.select_related is retained as field_dict instead of replacing it with {}.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set field_dict = self.select_related. RESULT field_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds user-defined select expressions, where conditions, extra tables, and ordering to the query's extra attributes, pairing each unescaped %s placeholder in a select expression with its corresponding parameter from select_params." add_extra]
+    [INPUTS]
+        <REF> select </REF>: dict "Dictionary mapping names to select expression templates that may contain %s placeholders."
+        <REF> select_params </REF>: iterable "Iterable of parameter values used to fill unescaped %s placeholders in the select expressions."
+        <REF> where </REF>: str "SQL where condition to add to the query; used together with params."
+        <REF> params </REF>: list/tuple "Parameter values for the where condition."
+        <REF> tables </REF>: iterable "Table names to append to extra_tables."
+        <REF> order_by </REF>: str/list/tuple "Ordering specification to set as the query's extra_order_by."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether select is truthy; if it is, execute the select processing block, otherwise skip it and continue to the where condition. RESULT select_guard]
+            [COMMAND Within the select processing block, initialize select_pairs as an empty dictionary. RESULT select_pairs]
+            [COMMAND Within the select processing block, if select_params is truthy, create param_iter = iter(select_params); otherwise create param_iter = iter([]). RESULT param_iter]
+            [COMMAND Within the select processing block, for each name, entry in select.items(), convert entry to a string, initialize entry_params as an empty list, scan the entry for unescaped '%s' placeholders (a placeholder is recognized only at the beginning of the string or when not immediately preceded by '%'), append the next value from param_iter to entry_params for each recognized placeholder, and after scanning set select_pairs[name] = (entry, entry_params). RESULT select_pairs]
+            [COMMAND Within the select processing block after the for loop, merge select_pairs into self.extra by calling self.extra.update(select_pairs). RESULT self.extra]
+            [COMMAND Check whether where or params is truthy; if so, add ExtraWhere(where, params) to self.where with connector AND. RESULT self.where]
+            [COMMAND Check whether tables is truthy; if so, append tuple(tables) to self.extra_tables. RESULT self.extra_tables]
+            [COMMAND Check whether order_by is truthy; if so, set self.extra_order_by to order_by. RESULT self.extra_order_by]
+            [COMMAND Return None implicitly after all optional blocks. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When a select entry contains more unescaped '%s' placeholders than the number of values remaining in select_params, next(param_iter) raises StopIteration.]
+        [LOG "Not enough select_params values to fill unescaped %s placeholders in select entries."]
+        [THROW StopIteration "Raised when select_params has insufficient values for the unescaped %s placeholders in select."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resets self.deferred_loading to an empty frozenset with the boolean True, clearing all deferred fields while leaving deferred loading enabled." clear_deferred_loading]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.deferred_loading to a new tuple (frozenset(), True), overwriting any previous deferred fields and setting deferred loading to enabled. RESULT self.deferred_loading]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Updates the deferred_loading state by adding field_names to the deferred set when the defer flag is true, or by removing field_names from the immediate-load set when the defer flag is false." add_deferred_loading]
+    [INPUTS]
+        <REF> field_names </REF>: list of strings "Model field names to add to the deferred set or remove from the immediate-load set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack the current self.deferred_loading value into existing (the current set of field names) and defer (the boolean flag indicating deferred vs immediate-load mode). RESULT existing, defer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: defer is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Add field_names to the existing set of deferred names and set self.deferred_loading to (existing.union(field_names), True). RESULT self.deferred_loading]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: defer is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Remove field_names from the existing set of immediate-load names and set self.deferred_loading to (existing.difference(field_names), False). RESULT self.deferred_loading]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Replaces the current immediate-loading fields with the supplied model field names, converting the generic 'pk' to the concrete primary key name and respecting existing deferred fields." add_immediate_loading]
+    [INPUTS]
+        <REF> field_names </REF>: iterable of str "Model field names to be set as the new immediate-loading fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack self.deferred_loading into existing_deferred_fields and defer_flag. RESULT existing_deferred_fields, defer_flag]
+            [COMMAND Convert field_names to a set of unique names and store it as field_names_set. RESULT field_names_set]
+            [COMMAND If 'pk' is present in field_names_set, remove it and add the concrete primary key name from self.get_meta().pk.name. RESULT field_names_set]
+            [COMMAND If defer_flag is true, set self.deferred_loading to (field_names_set.difference(existing_deferred_fields), False). RESULT self.deferred_loading]
+            [COMMAND If defer_flag is false, set self.deferred_loading to (frozenset(field_names_set), False). RESULT self.deferred_loading]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a cached dictionary mapping models to sets of deferred field names that will be loaded, computing and caching that dictionary on first access if it does not already exist." get_loaded_field_names]
+    [INPUTS]
+        <REF> self </REF>: object "The model instance on which the loaded field names are computed and cached."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "A dictionary mapping models to sets of deferred field names to load. Returns an empty dictionary if no fields are deferred."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the cached loaded field names from self._loaded_field_names_cache. RESULT cached_loaded_field_names]
+            [COMMAND Return the cached loaded field names. RESULT cached_loaded_field_names]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: AttributeError is raised when accessing self._loaded_field_names_cache because the cache has not been initialized yet.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary named collection for storing deferred field names. RESULT collection]
+            [COMMAND Call self.deferred_to_data(collection, self.get_loaded_field_names_cb) to populate collection with the deferred field data. RESULT collection]
+            [COMMAND Store collection in self._loaded_field_names_cache. RESULT self._loaded_field_names_cache]
+            [COMMAND Return collection. RESULT collection]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Updates the given target dictionary by mapping each model key to the set of unique attname values from the provided fields." get_loaded_field_names_cb]
+    [INPUTS]
+        <REF> self </REF>: object "The callback receiver instance."
+        <REF> target </REF>: dict "Mutable mapping to be updated; maps model keys to sets of field attribute names."
+        <REF> model </REF>: hashable "Dictionary key under which the set of field attribute names is stored."
+        <REF> fields </REF>: iterable "Iterable of field objects whose attname attributes are collected into a set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each element f in fields, collecting f.attname into a set so duplicate attname values are discarded, then assign the resulting set to target[model], overwriting any previous value; if fields is empty, the assigned set is empty. RESULT target]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the annotation selection mask to None when no names are provided, otherwise to a set of the provided names, and resets the annotation selection cache." set_annotation_mask]
+    [INPUTS]
+        <REF> names </REF>: optional iterable "Optional collection of annotation names; None clears the mask, otherwise the mask is set to set(names)."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether names is the exact None object using an identity check. RESULT names_is_none]
+            [COMMAND In the true branch of the if/else conditional, assign None to self.annotation_select_mask. RESULT annotation_select_mask]
+            [COMMAND In the false branch of the if/else conditional, when names is not None, create a set from names and assign it to self.annotation_select_mask. RESULT annotation_select_mask]
+            [COMMAND Unconditionally reset self._annotation_select_cache to None. RESULT annotation_select_cache]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Updates the existing annotation select mask by unioning the provided names into it, but only if a mask is already present." append_annotation_mask]
+    [INPUTS]
+        <REF> names </REF>: iterable "Annotation names to add to the existing annotation select mask."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.annotation_select_mask is not None. RESULT mask_exists]
+            [COMMAND If mask_exists is true, compute self.annotation_select_mask.union(names) to form the updated mask. RESULT updated_mask]
+            [COMMAND If mask_exists is true, call self.set_annotation_mask(updated_mask) to persist the updated mask. RESULT self.annotation_select_mask]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.annotation_select_mask is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Take no action and continue with the code following the if statement. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the extra SELECT item mask from the supplied names, clearing it when names is None, and invalidates the extra select cache while leaving the query items intact." set_extra_mask]
+    [INPUTS]
+        <REF> names </REF>: iterable or None "Collection of names to use for the extra select mask; when None, the mask is cleared."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return </REF>: None "This method has no return value; it updates self.extra_select_mask and self._extra_select_cache."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.extra_select_mask to None if names is None; otherwise convert names to a set with set(names) and assign that set to self.extra_select_mask. RESULT self.extra_select_mask]
+            [COMMAND Set self._extra_select_cache to None to invalidate the extra select cache. RESULT self._extra_select_cache]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the cached, mask-filtered, or full annotations dictionary used for the SELECT clause, caching the filtered result when a mask is applied." annotation_select]
+    [INPUTS]
+        <REF> self </REF>: object "Instance holding _annotation_select_cache, annotations, and annotation_select_mask."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Dictionary of annotation columns to include in the SELECT clause."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self._annotation_select_cache is not None, including an empty dictionary, return self._annotation_select_cache immediately. RESULT result]
+            [COMMAND If self._annotation_select_cache is None and self.annotations is empty or falsey, return {}. RESULT result]
+            [COMMAND If self.annotations is non-empty and self.annotation_select_mask is not None, build a new dictionary by iterating over self.annotations.items() and keeping only entries whose key is in self.annotation_select_mask. RESULT filtered_annotations]
+            [COMMAND Assign filtered_annotations to self._annotation_select_cache and return self._annotation_select_cache. RESULT result]
+            [COMMAND If self.annotation_select_mask is None after all prior checks fail, return self.annotations directly without caching. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the cached extra-select dictionary if available; otherwise returns an empty dictionary when no extra data exists, filters and caches the extra dictionary to keys in extra_select_mask when a mask is provided, and returns the original extra dictionary when no mask is provided." extra_select]
+    [INPUTS]
+        <REF> self </REF>: object "Object with attributes _extra_select_cache, extra, and extra_select_mask."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> extra_select_result </REF>: dict "Cached, filtered, or original extra dictionary; empty dictionary when no extra data exists."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self._extra_select_cache is not None; if it is not None, branch to the cached-result alternative flow and return there. RESULT cache_available]
+            [COMMAND When self._extra_select_cache is None, check whether self.extra is falsy; if it is falsy, branch to the empty-extra alternative flow and return there. RESULT extra_is_empty]
+            [COMMAND When self._extra_select_cache is None and self.extra is truthy, check whether self.extra_select_mask is not None; if it is not None, branch to the filtered-cache alternative flow and return there. RESULT mask_present]
+            [COMMAND When self._extra_select_cache is None, self.extra is truthy, and self.extra_select_mask is None, return self.extra as extra_select_result. RESULT extra_select_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self._extra_select_cache is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._extra_select_cache. RESULT extra_select_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._extra_select_cache is None and self.extra is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty dictionary. RESULT extra_select_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._extra_select_cache is None and self.extra is truthy and self.extra_select_mask is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Filter self.extra.items() to key-value pairs whose key is in self.extra_select_mask, assign the resulting dictionary to self._extra_select_cache, and return it. RESULT extra_select_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Trims leading non-many-to-many joins from the lookup path, builds the corresponding lookup prefix and select columns, and returns the prefix and whether the trimmed prefix contains a LEFT OUTER join." trim_start]
+    [INPUTS]
+        <REF> self </REF>: object "The query object whose alias_map, alias_refcount, _lookup_joins, base_table, where_class, where, and select state are read or mutated."
+        <REF> names_with_path </REF>: Iterable[tuple[str, list[PathInfo]]] "Sequence of (lookup_name, path_infos) pairs; each path_infos list contains the PathInfo objects for that lookup segment."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple[str, bool] "A tuple containing the trimmed lookup prefix string usable for outer queries, and a boolean that is True when the trimmed join prefix contains a LEFT OUTER join."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize all_paths as an empty list. RESULT all_paths]
+            [COMMAND For each (_, paths) in names_with_path, extend all_paths with the elements of paths, flattening every path segment into one list. RESULT all_paths]
+            [COMMAND Set contains_louter to False. RESULT contains_louter]
+            [COMMAND Build lookup_tables as the list of aliases t from self.alias_map for which t is in self._lookup_joins or t equals self.base_table, preserving self.alias_map iteration order. RESULT lookup_tables]
+            [COMMAND Iterate over enumerate(all_paths) with loop variables trimmed_paths and path. At the beginning of each iteration, if path.m2m is truthy, break immediately without trimming that path. Otherwise, if self.alias_map[lookup_tables[trimmed_paths + 1]].join_type == LOUTER, set contains_louter to True; then bind alias to lookup_tables[trimmed_paths] and call self.unref_alias(alias). When this loop stops, trimmed_paths is the stopping path index and path is the stopping path object. RESULT trimmed_paths, path]
+            [COMMAND Set join_field to path.join_field.field. RESULT join_field]
+            [COMMAND Set paths_in_prefix to trimmed_paths and initialize trimmed_prefix as an empty list. RESULT paths_in_prefix, trimmed_prefix]
+            [COMMAND For each (name, path) in names_with_path, if paths_in_prefix - len(path) < 0 (equivalently len(path) > paths_in_prefix), break; otherwise append name to trimmed_prefix and subtract len(path) from paths_in_prefix. RESULT trimmed_prefix]
+            [COMMAND Append join_field.foreign_related_fields[0].name to trimmed_prefix. RESULT trimmed_prefix]
+            [COMMAND Rebind trimmed_prefix to LOOKUP_SEP.join(trimmed_prefix), converting the accumulated prefix list into a single lookup-prefix string. RESULT trimmed_prefix]
+            [COMMAND Choose the select-field and select-alias branch based on the join type at self.alias_map[lookup_tables[trimmed_paths + 1]]. The non-LOUTER and LOUTER branches are defined in alternative_flows; after either branch, select_fields and select_alias are available. RESULT select_fields, select_alias]
+            [COMMAND Iterate over keys of self.alias_map in order; for the first table whose self.alias_refcount[table] > 0, replace self.alias_map[table] with BaseTable(self.alias_map[table].table_name, table) and break. If no table has a positive refcount, make no replacement. RESULT self.alias_map]
+            [COMMAND Call self.set_select([f.get_col(select_alias) for f in select_fields]) to set the query's select columns using the chosen alias and fields. RESULT self]
+            [COMMAND Return the tuple (trimmed_prefix, contains_louter). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The join type at self.alias_map[lookup_tables[trimmed_paths + 1]] is not LOUTER.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set select_fields to [r[0] for r in join_field.related_fields]. RESULT select_fields]
+            [COMMAND Set select_alias to lookup_tables[trimmed_paths + 1]. RESULT select_alias]
+            [COMMAND Call self.unref_alias(lookup_tables[trimmed_paths]). RESULT self]
+            [COMMAND Compute extra_restriction = join_field.get_extra_restriction(self.where_class, None, lookup_tables[trimmed_paths + 1]); if extra_restriction is truthy, call self.where.add(extra_restriction, AND). RESULT extra_restriction]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The join type at self.alias_map[lookup_tables[trimmed_paths + 1]] is LOUTER.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set select_fields to [r[1] for r in join_field.related_fields]. RESULT select_fields]
+            [COMMAND Set select_alias to lookup_tables[trimmed_paths]. RESULT select_alias]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a model field should be treated as nullable by checking if the active database backend interprets empty strings as null and the field allows empty strings, or if the field explicitly allows null." is_nullable]
+    [INPUTS]
+        <REF> field </REF>: Field "The model field definition whose nullable status is being checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> is_nullable </REF>: boolean "True if the field should be treated as nullable; otherwise false."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the flag interprets_empty_strings_as_nulls from connections[DEFAULT_DB_ALIAS].features and store it as db_treats_empty_as_null. RESULT db_treats_empty_as_null]
+            [COMMAND Evaluate db_treats_empty_as_null and field.empty_strings_allowed with Python-style and short-circuiting; if db_treats_empty_as_null is false, skip field.empty_strings_allowed and set backend_and_empty_allowed to false; otherwise set backend_and_empty_allowed to the value of field.empty_strings_allowed. RESULT backend_and_empty_allowed]
+            [COMMAND Return backend_and_empty_allowed if it is truthy; otherwise return field.null, preserving the or short-circuit behavior so field.null is not evaluated when backend_and_empty_allowed is truthy. RESULT is_nullable]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS JoinPromoter
+
+[DEFINE_WORKER: "Initializes a logical connector node by storing the raw connector and negation flag, computing the effective connector via De Morgan's law when negated, and setting the child count and an empty join vote counter." __init__]
+    [INPUTS]
+        <REF> connector </REF>: logical connector (AND/OR) "The original logical connector to store and potentially flip."
+        <REF> num_children </REF>: integer "The number of child conditions or sub-expressions."
+        <REF> negated </REF>: boolean "Whether the logical condition is negated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign connector to self.connector and negated to self.negated. RESULT self]
+            [COMMAND Determine self.effective_connector by branching on self.negated. RESULT self]
+            [COMMAND Assign num_children to self.num_children. RESULT self]
+            [COMMAND Initialize self.votes as a new empty Counter to count table aliases for inner and outer join requirements. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.negated is true and connector == AND]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inside the outer true branch of self.negated and the inner true branch of connector == AND, set self.effective_connector to OR. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.negated is true and connector != AND]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inside the outer true branch of self.negated and the inner false branch of connector == AND, set self.effective_connector to AND. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.negated is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inside the outer false branch of self.negated, set self.effective_connector to self.connector. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds one vote per item from the supplied iterable to self.votes." add_votes]
+    [INPUTS]
+        <REF> votes </REF>: iterable "Iterable of items; each item is counted as one additional vote in self.votes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Update self.votes by calling its update method with votes, adding one vote for each element in the votes iterable. RESULT self.votes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adjusts the query's join types so that joins are demoted to INNER whenever that is safe, while promoting joins to LEFT OUTER in OR cases where an INNER join could remove valid results." update_join_types]
+    [INPUTS]
+        <REF> self </REF>: JoinPromoter "The join promoter instance; self.votes maps join aliases to vote counts, self.effective_connector is 'AND' or 'OR', and self.num_children is the total number of child conditions."
+        <REF> query </REF>: Query "The query object whose join types are updated via promote_joins and demote_joins."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> to_demote </REF>: set "The set of table aliases that were demoted to INNER joins; the query is also mutated as a side effect by promote_joins and demote_joins."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize to_promote and to_demote as empty sets. RESULT to_promote, to_demote]
+            [COMMAND Iterate over each table and votes in self.votes.items(). RESULT table, votes]
+            [COMMAND Within the loop over self.votes.items(), if self.effective_connector == 'OR' and votes < self.num_children, add table to to_promote. RESULT to_promote]
+            [COMMAND Within the same loop over self.votes.items(), if self.effective_connector == 'AND' or (self.effective_connector == 'OR' and votes == self.num_children), add table to to_demote. RESULT to_demote]
+            [COMMAND After completing the loop, call query.promote_joins(to_promote) to promote the selected joins. RESULT query]
+            [COMMAND After promoting, call query.demote_joins(to_demote) to demote the selected joins. RESULT query]
+            [COMMAND Return to_demote. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a deduplicated set of all field names and, for concrete fields, their attribute names from the fields exposed by opts." get_field_names_from_opts]
+    [INPUTS]
+        <REF> opts </REF>: object with get_fields() "Options object whose get_fields() returns the field objects to collect names from."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> field_names </REF>: set of str "Set containing f.name for every field and f.attname for every field where f.concrete is truthy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call opts.get_fields() to obtain the iterator of field objects. RESULT fields]
+            [COMMAND For each field f in fields, generate a tuple: if f.concrete is truthy, generate (f.name, f.attname); otherwise generate (f.name,). RESULT field_tuples]
+            [COMMAND Flatten field_tuples into a single iterator of strings using itertools.chain.from_iterable. RESULT flattened_names]
+            [COMMAND Collect flattened_names into a set, eliminating duplicate names, and return that set. RESULT field_names]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively traverses the children of a Node object and yields every non-Node leaf value in depth-first order." get_children_from_q]
+    [INPUTS]
+        <REF> q </REF>: object "The root object whose children list is traversed; expected to have an iterable children attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: generator "A generator yielding non-Node values found by recursively expanding all Node descendants."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each child in q.children, determine whether child is an instance of Node. RESULT child]
+            [COMMAND Within the for loop over q.children, if child is an instance of Node, recursively call get_children_from_q(child) and yield every value from the resulting recursive generator. RESULT recursive_yield]
+            [COMMAND Within the same for loop, if child is not an instance of Node, yield child directly as a leaf value. RESULT yielded_child]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: child is an instance of Node or a subclass of Node]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Recursively traverse the child Node by calling get_children_from_q(child), yielding all non-Node values from that subtree. RESULT recursive_yield]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: child is not an instance of Node]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Yield child itself as a leaf value without further traversal. RESULT yielded_child]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a column object by creating SimpleCol(target, field) when simple_col is truthy, or by delegating to target.get_col(alias, field) otherwise." _get_col]
+    [INPUTS]
+        <REF> target </REF>: object "Object that provides get_col(alias, field) for the non-simple column path."
+        <REF> field </REF>: string "Field name used to construct SimpleCol when simple_col is truthy."
+        <REF> alias </REF>: string "Alias passed to target.get_col(alias, field) when simple_col is falsy."
+        <REF> simple_col </REF>: boolean "Flag checked for truthiness; selects the SimpleCol early-return path when set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Column object returned by SimpleCol(target, field) or by target.get_col(alias, field)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In _get_col, when simple_col is falsy, call target.get_col(alias, field) and return the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: simple_col is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In _get_col, construct SimpleCol(target, field) and return it. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Return the sort field name and direction from an order specification, interpreting a leading '-' as descending and otherwise using the default direction." get_order_dir]
+    [INPUTS]
+        <REF> field </REF>: str "Field name to sort by; a leading '-' indicates descending order."
+        <REF> default </REF>: str "Default sort direction ('ASC' or 'DESC') used when field has no '-' prefix. Defaults to 'ASC'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A (field_name, direction) tuple, where field_name omits the leading '-' and direction is 'ASC' or 'DESC'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the direction tuple for the default order using ORDER_DIR[default] and store it in dirn. RESULT dirn]
+            [COMMAND Check whether field starts with '-'; if so, follow the alternative flow, otherwise continue to the normal return. RESULT has_minus_prefix]
+            [COMMAND Return field unchanged and dirn[0] as the direction. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: field starts with '-']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return field without its leading '-' and dirn[1] as the direction. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds the given value to the set of values associated with the key in the dictionary, creating a new set with the value if the key is not already present." add_to_dict]
+    [INPUTS]
+        <REF> data </REF>: Dict[K, Set[V]] "Dictionary whose values are sets of previously added values for each key; modified in place."
+        <REF> key </REF>: K "Hashable key under which the value should be stored."
+        <REF> value </REF>: V "Value to add to the set associated with the key."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether key is already a key in data. RESULT key_presence]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: key_presence is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Add value to the set stored at data[key]. RESULT data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: key_presence is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new set containing value and assign it to data[key]. RESULT data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the given Django model field is a reverse one-to-one relation by checking that it is a relation, is one-to-one, and is not concrete." is_reverse_o2o]
+    [INPUTS]
+        <REF> field </REF>: Django model field or related object "The field or related object to inspect."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the field is a non-concrete one-to-one relation; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept the field object as input. RESULT field]
+            [COMMAND Evaluate field.is_relation; if it is false, short-circuit and return False. RESULT is_relation]
+            [COMMAND Evaluate field.one_to_one; if it is false, short-circuit and return False. RESULT one_to_one]
+            [COMMAND Evaluate not field.concrete; if it is false, return False; otherwise return True. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

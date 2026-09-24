@@ -1,0 +1,387 @@
+# FILE: django/core/servers/basehttp.py
+# CLASS WSGIServer
+
+[DEFINE_WORKER: "Initializes the instance by conditionally setting the IPv6 address family, storing the allow_reuse_address flag, and forwarding remaining arguments to the superclass initializer." __init__]
+    [INPUTS]
+        <REF> args </REF>: tuple "Positional arguments forwarded to the superclass initializer."
+        <REF> ipv6 </REF>: bool "If true, sets self.address_family to socket.AF_INET6; defaults to false."
+        <REF> allow_reuse_address </REF>: bool "Value assigned to self.allow_reuse_address; defaults to true."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to the superclass initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If ipv6 is true, set self.address_family to socket.AF_INET6; if ipv6 is false, do not set self.address_family. RESULT self.address_family]
+            [COMMAND Set self.allow_reuse_address to the value of allow_reuse_address, which defaults to True. RESULT self.allow_reuse_address]
+            [COMMAND Call super().__init__, passing *args and **kwargs to the superclass initializer. RESULT super().__init__]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Handles connection errors by logging broken-pipe errors as informational messages and delegating all other errors to the parent class's error handler." handle_error]
+    [INPUTS]
+        <REF> request </REF>: object "The request that was being processed when the error occurred."
+        <REF> client_address </REF>: object "The address of the client involved in the error."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine whether the current error is a broken-pipe error by evaluating is_broken_pipe_error(). RESULT is_broken_pipe]
+            [COMMAND If is_broken_pipe is true, log an informational message using the format string '- Broken pipe from %s\n' with client_address as the argument. RESULT log_call]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If is_broken_pipe is false, meaning the current error is not a broken-pipe condition.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Delegate the error to the parent class by calling super().handle_error(request, client_address). RESULT parent_handled]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS ThreadedWSGIServer
+
+# CLASS ServerHandler
+
+[DEFINE_WORKER: "Initializes the server handler by wrapping stdin in a LimitedStream based on CONTENT_LENGTH, defaulting to zero if CONTENT_LENGTH is invalid or missing, and then forwards the streams, environ, and extra kwargs to the parent initializer." __init__]
+    [INPUTS]
+        <REF> stdin </REF>: stream "The standard input stream from the WSGI server."
+        <REF> stdout </REF>: stream "The standard output stream from the WSGI server."
+        <REF> stderr </REF>: stream "The standard error stream from the WSGI server."
+        <REF> environ </REF>: dict "WSGI environment dictionary containing request and server metadata."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to the parent initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "No value is returned; __init__ implicitly returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the try block, read environ.get('CONTENT_LENGTH'), convert it with int(), and assign the result to content_length. RESULT content_length]
+            [COMMAND Within the except block for (ValueError, TypeError), catch the conversion failure and assign 0 to content_length. RESULT content_length]
+            [COMMAND Construct LimitedStream(stdin, content_length) using content_length as the maximum read limit for stdin. RESULT limited_stream]
+            [COMMAND Call super().__init__(limited_stream, stdout, stderr, environ, **kwargs) to initialize the parent. RESULT parent_init_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Cleans up headers by delegating to the base class, forcing Connection: close when Content-Length is missing or the server is not threaded, and marking the request connection for closure when the Connection header is close." cleanup_headers]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().cleanup_headers() to perform the base class header cleanup. RESULT self]
+            [COMMAND If 'Content-Length' is not in self.headers, set self.headers['Connection'] to 'close'. RESULT self.headers]
+            [COMMAND Otherwise, if 'Content-Length' is in self.headers and self.request_handler.server is not an instance of socketserver.ThreadingMixIn, set self.headers['Connection'] to 'close'. RESULT self.headers]
+            [COMMAND If self.headers.get('Connection') equals 'close', set self.request_handler.close_connection to True. RESULT self.request_handler.close_connection]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Closes the object by consuming limited data from the standard input stream and then delegating to the parent close implementation." close]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call get_stdin() on self to obtain the standard input stream. RESULT stdin_stream]
+            [COMMAND Call _read_limited() on stdin_stream to read and consume any limited pending input data. RESULT stdin_stream]
+            [COMMAND Call super().close() to close the object through the parent class implementation. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS WSGIRequestHandler
+
+[DEFINE_WORKER: "Returns the client IP address by taking the first element of self.client_address and avoids the parent method's socket.getfqdn call." address_string]
+    [INPUTS]
+        <REF> self </REF>: object "Current object exposing a client_address indexable sequence, typically a (host, port) tuple."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> client_ip </REF>: string "First element of self.client_address, usually the client IP address."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the first element of self.client_address without calling the parent address_string method or socket.getfqdn. RESULT client_ip]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes all header keys containing underscores from self.headers, then calls super().get_environ() to construct and return the WSGI environ." get_environ]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> environ </REF>: dict "The WSGI environ dictionary returned by super().get_environ()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each key k in self.headers (iterating directly over the dictionary, not a copy), if k contains the underscore character '_', delete self.headers[k]. RESULT self.headers]
+            [COMMAND Call super().get_environ() to construct the WSGI environ from the filtered headers and return it. RESULT environ]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Processes the first request and then continues processing subsequent requests until close_connection becomes true, after which it shuts down the write side of the connection." handle]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.close_connection to True. RESULT self.close_connection]
+            [COMMAND Before the while loop, call self.handle_one_request() to process the first request. RESULT request_result]
+            [COMMAND While self.close_connection is False, call self.handle_one_request() to process the next request. RESULT self.close_connection]
+            [COMMAND After the while loop ends, call self.connection.shutdown(socket.SHUT_WR) to shut down the write side of the connection. RESULT shutdown_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: During the shutdown attempt, self.connection.shutdown(socket.SHUT_WR) raises AttributeError or OSError.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the exception, ignore it, and continue without shutting down the write side. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reads and validates the HTTP request line, then constructs a ServerHandler from the request streams and environment and runs the server application through it, with early exits for oversized lines and failed request parsing." handle_one_request]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read a line of at most 65537 bytes from self.rfile.readline(65537) and assign the result to self.raw_requestline. RESULT self.raw_requestline]
+            [COMMAND Evaluate whether len(self.raw_requestline) > 65536; if true, take the oversized request line alternative flow. RESULT oversized_line_condition]
+            [COMMAND Call self.parse_request(); if it returns False, take the parse-request-failed alternative flow; otherwise continue. RESULT parse_request_result]
+            [COMMAND Construct ServerHandler using self.rfile, self.wfile, self.get_stderr(), and self.get_environ(), and assign the instance to handler. RESULT handler]
+            [COMMAND Assign self to handler.request_handler as a backpointer for logging and connection closing. RESULT handler.request_handler]
+            [COMMAND Call handler.run(self.server.get_app()) and discard its return value; the method then returns None. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: len(self.raw_requestline) > 65536, meaning the request line exceeds the 65536-byte limit.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the oversized request-line branch, set self.requestline to an empty string. RESULT self.requestline]
+            [COMMAND Within the oversized request-line branch, set self.request_version to an empty string. RESULT self.request_version]
+            [COMMAND Within the oversized request-line branch, set self.command to an empty string. RESULT self.command]
+            [COMMAND Within the oversized request-line branch, call self.send_error(414) to send HTTP 414 URI Too Long. RESULT none]
+            [COMMAND Within the oversized request-line branch, return immediately from handle_one_request after sending the error. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.parse_request() returns False, indicating that an error response has already been sent.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the parse-request-failed branch, return immediately from handle_one_request without constructing or running the ServerHandler. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Loads and returns the WSGI application configured in settings.WSGI_APPLICATION, falling back to Django's default WSGI application when the setting is None." get_internal_wsgi_application]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> wsgi_application </REF>: WSGI application callable "The configured WSGI application, or the default WSGI application returned by django.core.wsgi.get_wsgi_application when settings.WSGI_APPLICATION is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the settings object from django.conf. RESULT settings]
+            [COMMAND Retrieve the value of the WSGI_APPLICATION attribute from settings using getattr and assign it to app_path. RESULT app_path]
+            [COMMAND In a try block, import and return the WSGI application from app_path using import_string(app_path). RESULT wsgi_application]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: app_path is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the default WSGI application produced by django.core.wsgi.get_wsgi_application(). RESULT wsgi_application]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: import_string(app_path) raises an ImportError]
+        [LOG "WSGI application '%s' could not be loaded; Error importing module."]
+        [THROW ImproperlyConfigured "Raised from the caught ImportError to indicate the configured WSGI application path could not be imported."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the currently active exception is a broken pipe or related connection error by testing its exception type with issubclass." is_broken_pipe_error]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if the current exception type is a subclass of BrokenPipeError, ConnectionAbortedError, or ConnectionResetError; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call sys.exc_info() and unpack its first element into exc_type, assigning the exception value and traceback to '_', with the final value of '_' being the traceback. RESULT exc_type]
+            [COMMAND Test whether exc_type is a subclass of any of BrokenPipeError, ConnectionAbortedError, or ConnectionResetError using issubclass with a tuple of those exception classes. RESULT is_broken_pipe_error_result]
+            [COMMAND Return the boolean result of the issubclass test. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Starts a WSGI server on the specified address and port, optionally with threading support, then attaches the given WSGI application and serves requests forever." run]
+    [INPUTS]
+        <REF> addr </REF>: str or tuple "The host name or address tuple on which the server should listen."
+        <REF> port </REF>: int "The TCP port number on which the server should listen."
+        <REF> wsgi_handler </REF>: callable "The WSGI application callable to be served by the server."
+        <REF> ipv6 </REF>: bool "Whether to use IPv6 addressing; defaults to False."
+        <REF> threading </REF>: bool "Whether to enable a threaded server by mixing threading support into the server class; defaults to False."
+        <REF> server_cls </REF>: type "The base server class to use; defaults to WSGIServer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct server_address as the tuple (addr, port). RESULT server_address]
+            [COMMAND Select httpd_cls: if threading is truthy, create it dynamically using type('WSGIServer', (socketserver.ThreadingMixIn, server_cls), {}); otherwise set httpd_cls to server_cls. RESULT httpd_cls]
+            [COMMAND Instantiate httpd by calling httpd_cls(server_address, WSGIRequestHandler, ipv6=ipv6). RESULT httpd]
+            [COMMAND If threading is truthy, set httpd.daemon_threads to True. RESULT httpd]
+            [COMMAND Install the WSGI application by calling httpd.set_app(wsgi_handler). RESULT None]
+            [COMMAND Start the server loop by calling httpd.serve_forever(), which blocks indefinitely. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# FILE: django/db/backends/sqlite3/features.py
+# CLASS DatabaseFeatures
+
+[DEFINE_WORKER: "Builds a dictionary of SQLite-related test skip reasons mapped to sets of test identifiers, conditionally adding entries when SQLite is older than 3.27 or when the connection uses an in-memory database." django_test_skips]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> skips </REF>: dict "Mapping from skip reason strings to sets of test identifiers."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize skips with a dictionary literal mapping four SQLite-related reasons to sets of test identifiers: SQLite stores values rounded to 15 significant digits. maps to {model_fields.test_decimalfield.DecimalFieldTests.test_fetch_from_db_without_float_rounding}; SQLite naively remakes the table on field alteration. maps to {schema.tests.SchemaTests.test_unique_no_unnecessary_fk_drops, schema.tests.SchemaTests.test_unique_and_reverse_m2m, schema.tests.SchemaTests.test_alter_field_default_doesnt_perform_queries, schema.tests.SchemaTests.test_rename_column_renames_deferred_sql_references}; SQLite doesn't have a constraint. maps to {model_fields.test_integerfield.PositiveIntegerFieldTests.test_negative_values}; and SQLite doesn't support negative precision for ROUND(). maps to {db_functions.math.test_round.RoundTests.test_null_with_negative_precision, db_functions.math.test_round.RoundTests.test_decimal_with_negative_precision, db_functions.math.test_round.RoundTests.test_float_with_negative_precision, db_functions.math.test_round.RoundTests.test_integer_with_negative_precision}. RESULT skips]
+            [COMMAND If Database.sqlite_version_info is strictly less than the tuple (3, 27) by tuple comparison, update skips by adding the reason Nondeterministic failure on SQLite < 3.27. mapped to the set {expressions_window.tests.WindowFunctionTests.test_subquery_row_range_rank}; otherwise make no changes in this step. RESULT skips]
+            [COMMAND If self.connection.is_in_memory_db() returns True, update skips by adding the reason the sqlite backend's close() method is a no-op when using an in-memory database mapped to the set {servers.test_liveserverthread.LiveServerThreadTest.test_closes_connections}; otherwise make no changes in this step. RESULT skips]
+            [COMMAND Return skips. RESULT skips]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether atomic reference renaming is supported by returning False specifically on macOS 10.15 with SQLite 3.28.0, otherwise returning whether SQLite version is at least 3.26.0." supports_atomic_references_rename]
+    [INPUTS]
+        <REF> self </REF>: object "Instance of the class containing the method; used only for method binding, no instance state is accessed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "False on macOS 10.15 with SQLite exactly 3.28.0; otherwise True if Database.sqlite_version_info >= (3, 26, 0)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the guard condition: platform.mac_ver()[0].startswith('10.15.') and Database.sqlite_version_info == (3, 28, 0), using short-circuit evaluation so the SQLite check only runs if the macOS prefix matches. RESULT is_specific_broken_environment]
+            [COMMAND If is_specific_broken_environment is false, return the result of the lexicographic tuple comparison Database.sqlite_version_info >= (3, 26, 0), which is true for SQLite 3.26.0 and newer. RESULT sqlite_support_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_specific_broken_environment is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately, disabling atomic reference renaming for macOS 10.15 with SQLite exactly 3.28.0. RESULT unsupported_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new dictionary of field type mappings by merging the parent class's introspected field types with additional overrides for BigAutoField, DurationField, GenericIPAddressField, and SmallAutoField." introspected_field_types]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> field_types </REF>: dict "A new dictionary containing all entries from the parent's introspected_field_types, with keys 'BigAutoField', 'DurationField', 'GenericIPAddressField', and 'SmallAutoField' overridden to 'AutoField', 'BigIntegerField', 'CharField', and 'AutoField' respectively."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the parent class's introspected_field_types dictionary by calling super().introspected_field_types. RESULT base_field_types]
+            [COMMAND Create a new dictionary by unpacking base_field_types, then apply the overrides so 'BigAutoField' maps to 'AutoField', 'DurationField' maps to 'BigIntegerField', 'GenericIPAddressField' maps to 'CharField', and 'SmallAutoField' maps to 'AutoField', replacing any same-named keys from the parent. RESULT field_types]
+            [COMMAND Return the resulting field_types dictionary. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the database connection supports the JSON function by successfully executing a SELECT JSON query inside an atomic transaction, and False if an OperationalError is raised." supports_json_field]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the JSON query succeeds; False if an OperationalError is caught."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enter the context manager created by self.connection.cursor(), binding it to cursor. RESULT cursor]
+            [COMMAND Within the cursor context manager, enter the transaction context manager created by transaction.atomic(self.connection.alias). RESULT atomic_context]
+            [COMMAND Within the transaction context manager, call cursor.execute with the SQL query SELECT JSON('{"a": "b"}'). RESULT execute_result]
+            [COMMAND After cursor.execute returns successfully, exit the transaction context manager normally, committing the transaction. RESULT None]
+            [COMMAND After the cursor context manager exits normally, return True from the method. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If OperationalError is raised by transaction.atomic or cursor.execute inside the try block]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inside the except OperationalError block, return False from the method. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the current SQLite version is at least 3.35, which indicates support for returning columns from INSERT statements." can_return_columns_from_insert]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "True if Database.sqlite_version_info is greater than or equal to (3, 35); False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the Database.sqlite_version_info tuple from the Database class. RESULT sqlite_version_info]
+            [COMMAND Compare sqlite_version_info with the constant tuple (3, 35) using a lexicographic greater-than-or-equal-to comparison. RESULT is_at_least_3_35]
+            [COMMAND Return is_at_least_3_35 as the boolean result of the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

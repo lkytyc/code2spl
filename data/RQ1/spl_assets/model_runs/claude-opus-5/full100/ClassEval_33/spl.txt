@@ -1,0 +1,205 @@
+# CLASS DiscountStrategy
+
+[DEFINE_WORKER: "Initializes an order object by binding the customer, cart, and optional promotion to instance attributes, then immediately computes and caches the total price via self.total()." __init__]
+    [INPUTS]
+        <REF> customer </REF>: object "The customer associated with this order; no default, caller must supply a value or None"
+        <REF> cart </REF>: object "The cart containing line items and quantities for the order; no default, caller must supply a value or None"
+        <REF> promotion </REF>: object | None "An optional promotion to apply to the order; defaults to None when no promotion is active"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Bind the customer parameter to self.customer RESULT self.customer]
+            [COMMAND Bind the cart parameter to self.cart RESULT self.cart]
+            [COMMAND Bind the promotion parameter to self.promotion RESULT self.promotion]
+            [COMMAND Call self.total() — which reads self.cart and self.promotion already set above — and store the returned value in the name-mangled private attribute self.__total RESULT self.__total]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: promotion is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND self.total() receives no active promotion and must compute and return the base cart total without applying any discount RESULT self.__total]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: cart is empty or None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND self.total() may return 0, raise an exception, or produce undefined behavior depending on its implementation; callers should ensure cart is a valid non-empty object RESULT self.__total]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the cart total by summing the product of quantity and price for each item, assigns the result to the private instance attribute, and returns it." total]
+    [INPUTS]
+        <REF> self </REF>: object "The instance owning the cart; must have a 'cart' attribute that is an iterable of dicts each containing 'quantity' and 'price' keys"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self.__total </REF>: int | float | Decimal "The accumulated sum of quantity multiplied by price across all cart items; evaluates to integer 0 when the cart is empty; widens to float or Decimal when any item field carries a non-integer numeric type"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over every dict in self.cart using a generator expression, yielding the product of item['quantity'] and item['price'] for each element; pass the generator to sum() with no explicit start argument so the implicit start value is integer 0 RESULT _cart_total]
+            [COMMAND Assign the accumulated sum returned by sum() to the name-mangled private attribute self.__total, unconditionally overwriting any previously stored value RESULT self.__total]
+            [COMMAND Return self.__total to the caller RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.cart is an empty iterable]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND sum() receives an exhausted generator and returns its default start value of integer 0; assign 0 to self.__total and return 0 RESULT self.__total]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: One or more item dicts contain a float or Decimal value for 'quantity' or 'price']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Python's numeric type coercion rules widen the product and the running sum to the broader type (float or Decimal); assign the widened result to self.__total and return it RESULT self.__total]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: One or more item dicts contain a negative value for 'quantity' or 'price']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND The negative product is accumulated without any guard; self.__total may be negative; assign and return the result as normal RESULT self.__total]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.cart does not exist on the instance when this method is called]
+        [LOG "AttributeError raised during iteration setup because self.cart is accessed before being defined on the instance"]
+        [THROW AttributeError "Raised implicitly by Python when self.cart is not present on the instance; the method does not catch or handle this error"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: An item dict in self.cart is missing the key 'quantity' or 'price']
+        [LOG "KeyError raised during generator evaluation when dict lookup fails for a required key"]
+        [THROW KeyError "Raised implicitly by Python on dict key access failure; the method does not catch or handle this error"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the amount due by subtracting an optional promotion-based discount from the order total, where the discount is zero if no promotion is set or the result of calling the promotion strategy with the current order." due]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numeric "The final amount due: the order total minus the computed discount"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.promotion is None RESULT promotion_check]
+            [COMMAND If self.promotion is None, set discount to the integer constant 0 RESULT discount]
+            [COMMAND If self.promotion is not None, call self.promotion(self) — treating the promotion attribute as a callable strategy function that receives the current order object — and assign its return value to discount RESULT discount]
+            [COMMAND Subtract discount from self.__total and return the resulting value RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.promotion is None — no promotion strategy has been assigned to this order]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set discount to 0 RESULT discount]
+            [COMMAND Return self.__total minus 0, which equals self.__total RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.promotion is not None — a callable promotion strategy has been assigned]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self.promotion(self) to compute a context-dependent discount amount based on the current order RESULT discount]
+            [COMMAND Return self.__total minus the computed discount RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a 5% discount on the order total if the customer's fidelity score is at least 1000, otherwise returns zero." FidelityPromo]
+    [INPUTS]
+        <REF> order </REF>: object "An order object exposing a total() method and a customer dictionary with a 'fidelity' key"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> discount </REF>: numeric "Either 5% of the order total as a float, or the integer 0 when the fidelity condition is not met"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read order.customer['fidelity']; if the key is absent a KeyError is raised before any further evaluation RESULT fidelity_score]
+            [COMMAND Evaluate whether fidelity_score is greater than or equal to 1000 (boundary is inclusive: exactly 1000 qualifies) RESULT fidelity_qualifies]
+            [COMMAND If fidelity_qualifies is true, call order.total() and multiply the result by 0.05 to produce a 5% discount; order.total() is not called on the false branch RESULT discount]
+            [COMMAND If fidelity_qualifies is false, set discount to the integer literal 0 without calling order.total() RESULT discount]
+            [COMMAND Return discount directly to the caller without assigning it to an intermediate variable RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Customer fidelity score is below 1000]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the order.total() call entirely and return the integer 0; any side effects of order.total() are not triggered RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The key 'fidelity' is absent from order.customer at the time of evaluation]
+        [LOG "Dictionary lookup order.customer['fidelity'] raises KeyError because the key is not present; no default fallback exists in this method"]
+        [THROW KeyError "Raised by Python when 'fidelity' is not a key in the order.customer dictionary"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Calculates the total bulk-purchase discount for an order by summing 10% of the line total for every cart item whose quantity is at least 20." BulkItemPromo]
+    [INPUTS]
+        <REF> order </REF>: object "Order object containing a cart attribute, which is a list of item dictionaries each holding at minimum a quantity (numeric) and price (numeric) key"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> discount </REF>: float "Total discount amount accumulated across all qualifying cart items; returns 0 when no item meets the minimum quantity threshold"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize local variable discount to the integer literal 0, establishing a safe default of no discount before any cart items are evaluated RESULT discount]
+            [COMMAND Iterate over every item in order.cart in sequence; for each item evaluate whether item quantity is greater than or equal to 20 (inclusive boundary: quantity of exactly 20 qualifies, 19 does not) RESULT item]
+            [COMMAND Within the for loop over order.cart, when the condition item['quantity'] >= 20 is true, compute the line discount as item['quantity'] multiplied by item['price'] multiplied by the constant 0.1 (representing exactly 10%), then accumulate the result into discount using an in-place addition; when the condition is false, skip the item entirely with no else branch and no contribution to discount RESULT discount]
+            [COMMAND After all items in order.cart have been evaluated, return the final value of discount representing the total bulk discount earned across the entire cart RESULT discount]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: order.cart is empty or no item in order.cart has a quantity >= 20]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND The for loop body never executes or the if condition is never true; discount retains its initial value of 0 and is returned unchanged RESULT discount]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a 7% discount on the order total when the cart contains at least 10 distinct products, otherwise returns 0." LargeOrderPromo]
+    [INPUTS]
+        <REF> order </REF>: object "An order object exposing a cart collection of item dicts (each with a 'product' key) and a total() method returning the monetary total"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: number "Discount amount equal to 7% of the order total when the distinct-product threshold is met, or 0 when it is not"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over order.cart and extract the 'product' value from each item dict, collecting results into a set so that duplicate product values are collapsed RESULT unique_product_set]
+            [COMMAND Compute the count of distinct products by applying len() to unique_product_set RESULT distinct_product_count]
+            [COMMAND Evaluate whether distinct_product_count is greater than or equal to 10 (inclusive boundary) RESULT threshold_met]
+            [COMMAND If threshold_met is true, call order.total() and multiply the returned value by 0.07 to produce the discount amount; if threshold_met is false, short-circuit and produce 0 without calling order.total() RESULT discount_amount]
+            [COMMAND Return discount_amount as the function result RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: order.cart is empty, causing unique_product_set to be an empty set with len 0, which is less than 10]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Short-circuit the conditional: skip the call to order.total() and return 0 immediately RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: order.cart contains 10 or more items but all share the same product value, so the deduplicating set collapses to size 1, which is less than 10]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Short-circuit the conditional: skip the call to order.total() and return 0, because the threshold guards product variety, not cart line count RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

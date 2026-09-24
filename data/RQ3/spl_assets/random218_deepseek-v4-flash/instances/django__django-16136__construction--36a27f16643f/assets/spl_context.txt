@@ -1,0 +1,527 @@
+# FILE: django/views/generic/base.py
+# CLASS ContextMixin
+
+[DEFINE_WORKER: "Prepares the context dictionary by ensuring the current view is stored under the 'view' key and merging any non-None extra_context into the keyword arguments before returning them." get_context_data]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which get_context_data is called; provides the extra_context attribute."
+        <REF> kwargs </REF>: dict "The keyword argument context dictionary to be populated and returned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> kwargs </REF>: dict "The updated context dictionary containing the view instance and any merged extra_context items."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If "view" is not already a key in kwargs, set kwargs["view"] to self. RESULT kwargs]
+            [COMMAND If self.extra_context is not None, update kwargs with the key-value pairs from self.extra_context. RESULT kwargs]
+            [COMMAND Return kwargs. RESULT kwargs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS View
+
+[DEFINE_WORKER: "Constructor that converts each passed keyword argument into an instance attribute on the object being initialized." __init__]
+    [INPUTS]
+        <REF> self </REF>: object "The object instance being initialized."
+        <REF> kwargs </REF>: dict "Keyword arguments whose names and values are set as attributes on self."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the constructor, iterate over each key-value pair in kwargs.items() in insertion order and, for each pair, call setattr(self, key, value) to assign the key as an attribute name and value as its value on self. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a class's HTTP handlers are uniformly async by collecting non-option handlers, checking the first handler's coroutine status, and validating the rest, raising ImproperlyConfigured on mixed sync/async handlers." view_is_async]
+    [INPUTS]
+        <REF> cls </REF>: class "The class whose HTTP handler methods are inspected; it must provide http_method_names and may define methods named for HTTP verbs."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if all handlers are async functions; False if all handlers are sync functions or if there are no handlers."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over cls.http_method_names and append getattr(cls, method) to handlers for every method name that is not exactly 'options' and exists on cls. RESULT handlers]
+            [COMMAND Evaluate whether handlers is empty. RESULT handlers_empty]
+            [COMMAND On the non-empty path, inspect the first handler with asyncio.iscoroutinefunction and store the resulting boolean as is_async. RESULT is_async]
+            [COMMAND Using all() over handlers[1:], compare asyncio.iscoroutinefunction(h) with is_async for every remaining handler; all() short-circuits on the first mismatch. RESULT all_handlers_match]
+            [COMMAND Return is_async after all remaining handlers have matched the first handler's sync/async classification. RESULT is_async]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: handlers is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately because there are no HTTP handlers to classify. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: all_handlers_match is False]
+        [LOG "Exception message: f'{cls.__qualname__} HTTP handlers must either be all sync or all async.'"]
+        [THROW ImproperlyConfigured "Raised when HTTP handlers on the class mix synchronous and asynchronous coroutine functions."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates the initialization keyword arguments for a View subclass, creates a request-response view wrapper that instantiates the class, runs setup(), and dispatches the request, then attaches metadata and optional async markers to the wrapper." as_view]
+    [INPUTS]
+        <REF> cls </REF>: Type[View] "View subclass being converted; it provides http_method_names, dispatch, view_is_async, and metadata copied to the view callable."
+        <REF> initkwargs </REF>: dict[str, Any] "Keyword arguments used to initialize the view instance; each key must be an existing attribute of cls and must not be an HTTP method name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> view </REF>: function "A view callable that accepts request, *args, and **kwargs; it instantiates cls with initkwargs, calls setup(), verifies self.request, dispatches via self.dispatch(), and carries view_class, view_initkwargs, __doc__, __module__, __annotations__, and copied dispatch attributes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each key in initkwargs, perform two sequential validation checks: first reject key if it is in cls.http_method_names, then reject key if it is not an existing attribute of cls; stop at the first invalid key. RESULT None]
+            [COMMAND Define the inner function view(request, *args, **kwargs) that serves as the generated view entry point. RESULT view]
+            [COMMAND Within view, create the view instance with self = cls(**initkwargs). RESULT self]
+            [COMMAND Within view, call self.setup(request, *args, **kwargs) to initialize the instance for this request. RESULT None]
+            [COMMAND Within view, after setup returns, verify that self has a 'request' attribute; if the attribute is missing, raise AttributeError. RESULT None]
+            [COMMAND Within view, return self.dispatch(request, *args, **kwargs) to dispatch the request and produce the response. RESULT dispatch_response]
+            [COMMAND After defining view, attach class and initialization metadata: set view.view_class = cls and view.view_initkwargs = initkwargs. RESULT view]
+            [COMMAND Set view.__doc__ = cls.__doc__, view.__module__ = cls.__module__, and view.__annotations__ = cls.dispatch.__annotations__, while intentionally leaving view.__name__ and view.__qualname__ unchanged. RESULT view]
+            [COMMAND Copy attributes set by decorators on the dispatch method by updating view.__dict__ with cls.dispatch.__dict__. RESULT view]
+            [COMMAND If cls.view_is_async is true, mark the view as a coroutine by setting view._is_coroutine = asyncio.coroutines._is_coroutine. RESULT view]
+            [COMMAND Return the fully configured view function. RESULT view]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During the for loop over initkwargs, a key is in cls.http_method_names.]
+        [LOG "The method name %s is not accepted as a keyword argument to %s()."]
+        [THROW TypeError "Rejects initialization keyword arguments that collide with an HTTP method handler name."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the for loop over initkwargs, a key is not an existing attribute of cls.]
+        [LOG "%s() received an invalid keyword %r. as_view only accepts arguments that are already attributes of the class."]
+        [THROW TypeError "Rejects initialization keyword arguments that are not already attributes of the view class."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the generated view, after self.setup(request, *args, **kwargs) returns, self does not have a 'request' attribute.]
+        [LOG "%s instance has no 'request' attribute. Did you override setup() and forget to call super()?"]
+        [THROW AttributeError "Signals that setup() did not set self.request as required before dispatch."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes shared view attributes by conditionally aliasing head to get when the object has get but not head, then storing request, args, and kwargs on the instance." setup]
+    [INPUTS]
+        <REF> request </REF>: object "The request object to be stored as self.request."
+        <REF> args </REF>: tuple "Positional arguments captured by *args, stored as self.args."
+        <REF> kwargs </REF>: dict "Keyword arguments captured by **kwargs, stored as self.kwargs."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize attributes shared by all view methods. RESULT self]
+            [COMMAND If hasattr(self, 'get') is true and hasattr(self, 'head') is false, set self.head to self.get. RESULT self.head]
+            [COMMAND Set self.request to request. RESULT self.request]
+            [COMMAND Set self.args to args. RESULT self.args]
+            [COMMAND Set self.kwargs to kwargs. RESULT self.kwargs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The instance does not have a 'get' attribute, or it already has a 'head' attribute.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave self.head unchanged and continue with the unconditional attribute assignments. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Dispatches an HTTP request to the method handler whose name matches the lowercase request method, using http_method_not_allowed as the fallback for unsupported methods." dispatch]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Incoming request whose method attribute determines the handler to dispatch to."
+        <REF> args </REF>: tuple "Positional arguments forwarded unchanged to the selected handler."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded unchanged to the selected handler."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponse "Response returned by the selected request handler."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether request.method.lower() is in self.http_method_names to determine if the HTTP method is supported. RESULT method_supported]
+            [COMMAND If method_supported is true, resolve the handler by calling getattr(self, request.method.lower(), self.http_method_not_allowed). RESULT handler]
+            [COMMAND Return handler(request, *args, **kwargs) as the response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: method_supported is false because request.method.lower() is not in self.http_method_names]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set handler to self.http_method_not_allowed. RESULT handler]
+            [COMMAND Return handler(request, *args, **kwargs) as the response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Logs a warning containing the request method and path for a disallowed HTTP method, then returns an HttpResponseNotAllowed built from the allowed methods." http_method_not_allowed]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request whose method and path are logged and which is included in the structured log data."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponseNotAllowed "HTTP 405 response constructed with the methods returned by self._allowed_methods()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log a warning message "Method Not Allowed (%s): %s" with request.method and request.path as positional arguments and extra dictionary {"status_code": 405, "request": request}. RESULT log_record]
+            [COMMAND Evaluate self._allowed_methods() to obtain the HTTP methods allowed for this view. RESULT allowed_methods]
+            [COMMAND Construct and return HttpResponseNotAllowed(allowed_methods) as the response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Handles OPTIONS HTTP requests by building an empty HttpResponse with the Allow header set to the comma-and-space-separated allowed methods and Content-Length set to '0', returning it directly for synchronous views and through an inner async function for asynchronous views." options]
+    [INPUTS]
+        <REF> self </REF>: object "The view instance providing _allowed_methods() and view_is_async."
+        <REF> request </REF>: HttpRequest "The incoming HTTP request; accepted for dispatch but not directly used by this implementation."
+        <REF> args </REF>: tuple "Additional positional arguments accepted by the view signature; not used by this implementation."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted by the view signature; not used by this implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: HttpResponse | Coroutine "Returns the configured HttpResponse directly when the view is synchronous; when view_is_async is true, returns a coroutine from the inner async function that yields the configured response when awaited."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new empty HttpResponse instance and assign it to response. RESULT response]
+            [COMMAND Set the Allow header on response to the result of joining self._allowed_methods() with ', ' as the separator. RESULT response]
+            [COMMAND Set the Content-Length header on response to the string '0'. RESULT response]
+            [COMMAND Evaluate whether self.view_is_async is truthy. RESULT async_flag]
+            [COMMAND If async_flag is truthy, define an inner async function named func that returns response. RESULT func]
+            [COMMAND Within the async branch, call func() and return the resulting coroutine without awaiting it. RESULT response_or_coroutine]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.view_is_async is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return response directly without invoking the async inner function. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the uppercase HTTP method names from self.http_method_names that exist as attributes on self." _allowed_methods]
+    [INPUTS]
+        <REF> self </REF>: object "Object instance expected to provide http_method_names and one attribute for each candidate HTTP method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list[str] "List of uppercase HTTP method names for which hasattr(self, m) is true."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named allowed_methods to collect the result. RESULT allowed_methods]
+            [COMMAND Iterate over each element m in self.http_method_names. RESULT m]
+            [COMMAND For the current m, evaluate hasattr(self, m) as the filter condition. RESULT condition_met]
+            [COMMAND If condition_met is true, append m.upper() to allowed_methods. RESULT allowed_methods]
+            [COMMAND Return allowed_methods. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If hasattr(self, m) is false for the current m]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip appending the current m and continue with the next m in self.http_method_names. RESULT m]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS TemplateResponseMixin
+
+[DEFINE_WORKER: "Renders a template using the view's response class and supplied context, applying the default content type when the caller did not provide one." render_to_response]
+    [INPUTS]
+        <REF> self </REF>: object "The view instance providing request, response_class, content_type, template_engine, and get_template_names()."
+        <REF> context </REF>: dict or Context "Template context data used to render the response."
+        <REF> response_kwargs </REF>: dict "Extra keyword arguments forwarded to the response class constructor; may optionally include content_type."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: object "Instance of self.response_class constructed with request, template names, context, using, and response_kwargs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Apply a default content type to response_kwargs by using setdefault with key 'content_type' and value self.content_type; if the key already exists, leave the existing value unchanged. RESULT response_kwargs]
+            [COMMAND Construct the response by calling self.response_class with request=self.request, template=self.get_template_names(), context=context, using=self.template_engine, and all entries from response_kwargs passed as keyword arguments. RESULT response]
+            [COMMAND Return the constructed response object. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured template name as a one-element list, or raises ImproperlyConfigured when no template name has been set." get_template_names]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> template_names </REF>: list "A list containing the configured self.template_name value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.template_name is None. RESULT template_name_is_none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.template_name is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing self.template_name. RESULT template_names]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.template_name is None]
+        [LOG "TemplateResponseMixin requires either a definition of 'template_name' or an implementation of 'get_template_names()'"]
+        [THROW ImproperlyConfigured "Raised when self.template_name is None to indicate missing template configuration."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS TemplateView
+
+[DEFINE_WORKER: "Builds the view context by calling get_context_data with the supplied keyword arguments and returns the HttpResponse produced by rendering that context." get]
+    [INPUTS]
+        <REF> self </REF>: object "The view instance."
+        <REF> request </REF>: HttpRequest "The incoming HTTP request."
+        <REF> args </REF>: tuple "Additional positional arguments, unused in this method."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to get_context_data."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponse "The response returned by render_to_response using the prepared context."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_context_data(**kwargs) and assign the result to context. RESULT context]
+            [COMMAND Call self.render_to_response(context) and return the resulting response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS RedirectView
+
+[DEFINE_WORKER: "Constructs a redirect URL by preferring self.url percent-formatted with kwargs, falling back to reverse(self.pattern_name, args=args, kwargs=kwargs), optionally appending the request query string, and returning None when no URL source is configured." get_redirect_url]
+    [INPUTS]
+        <REF> self </REF>: object "Instance exposing url, pattern_name, request, and query_string attributes used for redirect resolution."
+        <REF> args </REF>: tuple "Positional arguments from the URL pattern match; used by reverse() before the local variable args is overwritten with the request query string."
+        <REF> kwargs </REF>: dict "Keyword arguments from the URL pattern match; used to percent-format self.url and passed to reverse()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string or None "The fully constructed redirect URL, or None when neither self.url nor self.pattern_name is available."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine which configured URL source is present: self.url has priority, and self.pattern_name is checked only when self.url is falsy. If both are falsy, select the immediate return None path. RESULT url_source_selection]
+            [COMMAND In the primary path where self.url is truthy, set url = self.url % kwargs. RESULT url]
+            [COMMAND Set args to self.request.META.get('QUERY_STRING', ''), using the raw query string from the request metadata or the empty string when the QUERY_STRING key is absent. RESULT args]
+            [COMMAND If args is truthy and, with short-circuit evaluation, self.query_string is truthy, append the query string by setting url = '%s?%s' % (url, args). RESULT url]
+            [COMMAND Return url. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.url is falsy and self.pattern_name is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the redirect URL by calling reverse(self.pattern_name, args=args, kwargs=kwargs) and assigning the returned URL to url. RESULT url]
+            [COMMAND Set args to self.request.META.get('QUERY_STRING', ''), using the raw query string from the request metadata or the empty string when the QUERY_STRING key is absent. RESULT args]
+            [COMMAND If args is truthy and, with short-circuit evaluation, self.query_string is truthy, append the query string by setting url = '%s?%s' % (url, args). RESULT url]
+            [COMMAND Return url. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.url is falsy and self.pattern_name is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately, skipping all remaining query-string handling. RESULT return_value_None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a redirect URL and returns a permanent or temporary redirect when one is available; otherwise logs a Gone warning and returns HTTP 410 Gone." get]
+    [INPUTS]
+        <REF> self </REF>: object "View instance providing get_redirect_url and permanent attribute."
+        <REF> request </REF>: HttpRequest "Incoming HTTP request used for logging the path and request object."
+        <REF> args </REF>: tuple "Positional arguments forwarded to get_redirect_url."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to get_redirect_url."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permanent_redirect </REF>: HttpResponsePermanentRedirect "Returned when url is truthy and self.permanent is true."
+        <REF> temporary_redirect </REF>: HttpResponseRedirect "Returned when url is truthy and self.permanent is false."
+        <REF> gone_response </REF>: HttpResponseGone "Returned when url is falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_redirect_url(*args, **kwargs) and assign the returned value to url. RESULT url]
+            [COMMAND If url is truthy, check self.permanent. RESULT permanent_flag]
+            [COMMAND Within the outer if url branch, if self.permanent is truthy, return HttpResponsePermanentRedirect(url) and exit the method. RESULT permanent_redirect]
+            [COMMAND Within the outer if url branch, if self.permanent is falsy, return HttpResponseRedirect(url) and exit the method. RESULT temporary_redirect]
+            [COMMAND Within the outer else branch for url being falsy, log a warning with message 'Gone: %s', request.path, and extra={'status_code': 410, 'request': request}. RESULT None]
+            [COMMAND Within the outer else branch for url being falsy, return HttpResponseGone() and exit the method. RESULT gone_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: url is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.permanent is truthy, return HttpResponsePermanentRedirect(url) and exit the method. RESULT permanent_redirect]
+            [COMMAND If self.permanent is falsy, return HttpResponseRedirect(url) and exit the method. RESULT temporary_redirect]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: url is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log warning 'Gone: %s' with request.path and extra={'status_code': 410, 'request': request}. RESULT None]
+            [COMMAND Return HttpResponseGone() and exit the method. RESULT gone_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Forwards a HEAD request to the get handler, preserving all positional and keyword arguments, and returns the resulting response." head]
+    [INPUTS]
+        <REF> self </REF>: object "The view class instance on which head is invoked."
+        <REF> request </REF>: HttpRequest "The incoming HTTP request object to forward to self.get."
+        <REF> args </REF>: tuple "Additional positional arguments from the request routing to forward unchanged."
+        <REF> kwargs </REF>: dict "Additional keyword arguments from the request routing to forward unchanged."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: HttpResponse "The HTTP response returned by self.get(request, *args, **kwargs)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Forward the incoming request by invoking self.get with request as the first positional argument, plus the contents of args as additional positional arguments and kwargs as keyword arguments. RESULT get_response]
+            [COMMAND Return the result of the self.get invocation to the caller of head. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Handles a POST request by forwarding the request, positional arguments, and keyword arguments to self.get and returning its response unchanged." post]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming HTTP request object forwarded to self.get."
+        <REF> args </REF>: tuple "Additional positional arguments forwarded to self.get."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to self.get."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: HttpResponse "The response returned by self.get, passed back to the caller unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Receive the incoming POST request along with request, args, and kwargs. RESULT request_inputs]
+            [COMMAND Delegate the request to self.get by calling self.get with request, *args, and **kwargs. RESULT get_response]
+            [COMMAND Return the response from self.get directly to the caller without modification. RESULT final_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the options call to self.get by forwarding request, extra positional arguments, and keyword arguments unchanged, and returns the delegated result unmodified." options]
+    [INPUTS]
+        <REF> request </REF>: object "The HTTP request object forwarded as the first positional argument to self.get."
+        <REF> args </REF>: tuple "Additional positional arguments to forward to self.get."
+        <REF> kwargs </REF>: dict "Keyword arguments to forward to self.get."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The return value from self.get, returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the bound callable self.get from the current instance. RESULT get_method]
+            [COMMAND Invoke get_method with request as the first positional argument, expanding each element of args as subsequent positional arguments and each key-value pair of kwargs as keyword arguments. RESULT delegated_result]
+            [COMMAND Return delegated_result to the caller without modification. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the delete operation to self.get by forwarding request, *args, and **kwargs and returning the result unchanged." delete]
+    [INPUTS]
+        <REF> request </REF>: Any "The request object forwarded as the first positional argument to self.get."
+        <REF> args </REF>: tuple "Additional positional arguments forwarded to self.get."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to self.get."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> delegated_result </REF>: Any "The return value of self.get(request, *args, **kwargs), returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get with request, *args, and **kwargs and return its result directly. RESULT delegated_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the put method's request handling to self.get by forwarding all arguments and returning the result unchanged." put]
+    [INPUTS]
+        <REF> self </REF>: object "Bound object instance whose get method is called."
+        <REF> request </REF>: object "Request object forwarded as the first positional argument to self.get."
+        <REF> args </REF>: tuple "Additional positional arguments forwarded to self.get."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to self.get."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The value returned by self.get, returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the get method on self, passing request as the first positional argument, unpacking args as subsequent positional arguments and kwargs as keyword arguments, and capture the returned value. RESULT get_result]
+            [COMMAND Return the captured get_result as the final return value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the patch method to self.get by forwarding request, args, and kwargs and returning the result unchanged." patch]
+    [INPUTS]
+        <REF> self </REF>: object "Enclosing instance that provides the get method."
+        <REF> request </REF>: HttpRequest "Incoming request object forwarded to get."
+        <REF> args </REF>: tuple "Additional positional arguments forwarded to get."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to get."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: Any "The return value of self.get, returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self.get with request as the first positional argument, args expanded as additional positional arguments, and kwargs expanded as keyword arguments. RESULT response]
+            [COMMAND Return response to the caller of patch without modification. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

@@ -1,0 +1,109 @@
+class BigNumCalculator:
+    @staticmethod
+    def add(num1, num2):
+        max_len = max(len(num1), len(num2))
+        num1 = num1.zfill(max_len)
+        num2 = num2.zfill(max_len)
+
+        carry = 0
+        result = []
+
+        for i in range(max_len - 1, -1, -1):
+            total = int(num1[i]) + int(num2[i]) + carry
+            result.append(str(total % 10))
+            carry = total // 10
+
+        if carry:
+            result.append(str(carry))
+
+        return ''.join(reversed(result))
+
+    @staticmethod
+    def subtract(num1, num2):
+        negative = False
+
+        if len(num1) < len(num2) or (len(num1) == len(num2) and num1 < num2):
+            num1, num2 = num2, num1
+            negative = True
+
+        max_len = max(len(num1), len(num2))
+        num1 = num1.zfill(max_len)
+        num2 = num2.zfill(max_len)
+
+        borrow = 0
+        result = []
+
+        for i in range(max_len - 1, -1, -1):
+            digit1 = int(num1[i]) - borrow
+            digit2 = int(num2[i])
+
+            if digit1 < digit2:
+                digit1 += 10
+                borrow = 1
+            else:
+                borrow = 0
+
+            result.append(str(digit1 - digit2))
+
+        result_str = ''.join(reversed(result)).lstrip('0')
+        if not result_str:
+            result_str = '0'
+
+        if negative and result_str != '0':
+            result_str = '-' + result_str
+
+        return result_str
+
+    @staticmethod
+    def multiply(num1, num2):
+        if num1 == '0' or num2 == '0':
+            return '0'
+
+        result = [0] * (len(num1) + len(num2))
+
+        for i in range(len(num1) - 1, -1, -1):
+            for j in range(len(num2) - 1, -1, -1):
+                product = int(num1[i]) * int(num2[j])
+                position_low = i + j + 1
+                position_high = i + j
+
+                total = product + result[position_low]
+                result[position_low] = total % 10
+                result[position_high] += total // 10
+
+        index = 0
+        while index < len(result) and result[index] == 0:
+            index += 1
+
+        return ''.join(map(str, result[index:])) if index < len(result) else '0'
+
+import unittest
+
+class BigNumCalculatorTestMultiply(unittest.TestCase):
+    def test_multiply(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.multiply("12345678901234567890", "98765432109876543210"), "1219326311370217952237463801111263526900")
+
+    def test_multiply_2(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.multiply("123456789012345678922", "98765432109876543210"), "12193263113702179524547477517529919219620")
+
+    def test_multiply_3(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.multiply("123456789012345678934", "98765432109876543"), "12193263113702179499806737010255845162")
+
+    def test_multiply_4(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.multiply("12345678901234567", "98765432109876543210"), "1219326311370217864336229223321140070")
+
+    def test_multiply_5(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.multiply("923456789", "187654321"), "173290656712635269")
+
+    def test_multiply_6(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.multiply("000000001", "000000001"), "1")
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

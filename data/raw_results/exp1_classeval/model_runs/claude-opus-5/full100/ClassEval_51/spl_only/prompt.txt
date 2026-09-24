@@ -1,0 +1,144 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `KappaCalculator.kappa`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes Cohen's kappa coefficient for inter-rater agreement from a k×k confusion matrix by calculating observed agreement P0 from the diagonal and expected agreement Pe from marginal sums, then returning the normalized kappa value." kappa]
+    [INPUTS]
+        <REF> testData </REF>: array-like (list of lists or 2D NumPy array) "A k×k confusion matrix where entry [i,j] represents the count of items assigned to class i by one rater and class j by another; must be non-None and convertible by np.mat"
+        <REF> k </REF>: int "The number of classes (dimension of the square confusion matrix); controls the range of the diagonal-sum loop"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cohens_coefficient </REF>: float "Cohen's kappa coefficient in the range (-inf, 1], where 1 indicates perfect agreement, 0 indicates agreement no better than chance, and negative values indicate worse than chance"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert testData to a NumPy matrix using np.mat and assign the result to dataMat RESULT dataMat]
+            [COMMAND Initialize accumulator P0 to the float literal 0.0 RESULT P0]
+            [COMMAND For each integer i from 0 to k-1 inclusive, add the diagonal element dataMat[i, i] multiplied by 1.0 to P0, accumulating the raw observed-agreement count across all k classes RESULT P0]
+            [COMMAND Compute xsum as the row-wise sum of dataMat along axis=1, producing a column vector of shape (k, 1) RESULT xsum]
+            [COMMAND Compute ysum as the column-wise sum of dataMat along axis=0, producing a row vector of shape (1, k) RESULT ysum]
+            [COMMAND Compute sum as the grand total of all elements in dataMat using np.sum with no axis argument, producing a scalar RESULT sum]
+            [COMMAND Compute Pe as float(ysum * xsum) divided by sum twice in sequence (i.e., divided by sum squared), where ysum * xsum performs a matrix-multiply-style product yielding a scalar under NumPy matrix semantics; Pe represents expected agreement by chance RESULT Pe]
+            [COMMAND Overwrite P0 with float(P0 / sum * 1.0), normalizing the raw diagonal count to a proportion of total observations; the original raw P0 value is consumed and not preserved RESULT P0]
+            [COMMAND Compute cohens_coefficient as float((P0 - Pe) / (1 - Pe)) using the standard Cohen's kappa formula RESULT cohens_coefficient]
+            [COMMAND Return cohens_coefficient RESULT cohens_coefficient]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: testData is None or is not convertible to a 2D NumPy matrix by np.mat]
+        [LOG "np.mat raises a ValueError at runtime when testData cannot be interpreted as a matrix-compatible array-like"]
+        [THROW ValueError "Raised by np.mat when testData is None or an incompatible type that cannot be coerced to a NumPy matrix"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Pe equals exactly 1.0, meaning marginal distributions predict perfect chance agreement (degenerate matrix)]
+        [LOG "The expression (1 - Pe) evaluates to 0.0, causing a ZeroDivisionError when computing (P0 - Pe) / (1 - Pe)"]
+        [THROW ZeroDivisionError "Raised when Pe == 1.0 and the denominator of the kappa formula becomes zero"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `KappaCalculator.fleiss_kappa`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes Fleiss' kappa statistic for inter-rater agreement by calculating the observed agreement P0 and the expected chance agreement Pe from a subject-by-category rating matrix, then returning the normalized kappa value." fleiss_kappa]
+    [INPUTS]
+        <REF> testData </REF>: array-like (nested list or 2D array) "N x k matrix where each row is a subject and each column is a category, with cell values representing the number of raters who assigned that category to that subject"
+        <REF> N </REF>: int "Number of subjects (rows) in testData"
+        <REF> k </REF>: int "Number of categories (columns) in testData"
+        <REF> n </REF>: int or float "Number of raters per subject; used as the normalization denominator in the per-row dispersion formula"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ans[0, 0] </REF>: float "Fleiss' kappa coefficient, a scalar float extracted from a 1x1 matrix; ranges from negative (worse than chance) through 0 (chance) to 1.0 (perfect agreement)"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert testData into a NumPy float64 matrix named dataMat using np.mat with dtype float; this coerces all elements and produces a 2D matrix regardless of the input container type RESULT dataMat]
+            [COMMAND Create a k x 1 column vector of ones named oneMat using np.ones((k, 1)); this will serve as a broadcast helper to collapse row sums in a later matrix multiply RESULT oneMat]
+            [COMMAND Initialize scalar float accumulator sum to 0.0; this will accumulate the grand total of all rating counts across all subjects and categories (note: this name shadows the Python built-in sum) RESULT sum]
+            [COMMAND Initialize scalar float accumulator P0 to 0.0; this will accumulate per-subject observed agreement contributions before normalization RESULT P0]
+            [COMMAND Begin outer for loop over i from 0 to N-1 (inclusive), iterating over each subject row RESULT i]
+            [COMMAND Within the outer loop for each i, reset scalar temp to 0.0 to accumulate the sum of squared rating counts for the current subject row RESULT temp]
+            [COMMAND Within the outer loop for each i, begin inner for loop over j from 0 to k-1 (inclusive), iterating over each category column of the current subject row RESULT j]
+            [COMMAND Within the inner loop for each (i, j), add dataMat[i, j] to sum; sum is not reset per row and accumulates the grand total across all N*k elements RESULT sum]
+            [COMMAND Within the inner loop for each (i, j), add 1.0 * dataMat[i, j] ** 2 to temp; the multiplication by 1.0 ensures float arithmetic; temp accumulates the sum of squared rating counts for subject i RESULT temp]
+            [COMMAND After the inner loop completes for subject i, subtract scalar n from temp; this shifts the squared sum by the number of raters RESULT temp]
+            [COMMAND After subtracting n, divide temp by (n - 1) * n; this normalizes the per-subject statistic to the form (sum_of_squares - n) / (n * (n-1)), which equals the observed proportion of agreeing rater pairs for subject i RESULT temp]
+            [COMMAND Add the normalized temp to P0; after the outer loop completes, P0 holds the sum of per-subject observed agreement proportions across all N subjects RESULT P0]
+            [COMMAND Normalize P0 by dividing by N using 1.0 * P0 / N; the multiplication by 1.0 ensures float division; P0 now holds the mean observed agreement proportion across all subjects RESULT P0]
+            [COMMAND Compute ysum as the column-wise sum of dataMat using np.sum(dataMat, axis=0); ysum is a 1 x k matrix where each element is the total number of raters who assigned category j across all subjects RESULT ysum]
+            [COMMAND Begin a for loop over i from 0 to k-1 (inclusive), iterating over each category to compute its marginal probability squared RESULT i]
+            [COMMAND Within the loop for each i, update ysum[0, i] to (ysum[0, i] / sum) ** 2; this divides the category column total by the grand total sum to get the marginal proportion for category i, then squares it to get the chance-agreement contribution RESULT ysum]
+            [COMMAND Compute Pe as the matrix product ysum * oneMat * 1.0; this collapses the k squared marginal proportions into a single scalar (as a 1x1 matrix) representing the total expected chance agreement probability RESULT Pe]
+            [COMMAND Compute ans as (P0 - Pe) / (1 - Pe); this is the Fleiss kappa formula normalizing the excess of observed agreement over chance by the maximum possible excess over chance, yielding a 1x1 matrix RESULT ans]
+            [COMMAND Return the scalar float ans[0, 0] extracted from the 1x1 result matrix RESULT ans[0, 0]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: testData contains non-numeric values such as strings or None when np.mat is called]
+        [LOG "np.mat raises ValueError at matrix construction time before any computation proceeds"]
+        [THROW ValueError "Raised by NumPy when testData cannot be cast to float64 matrix"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: N is 0, causing division by zero in P0 = 1.0 * P0 / N]
+        [LOG "Python raises ZeroDivisionError; if P0 is a NumPy array type, division silently produces inf or nan instead"]
+        [THROW ZeroDivisionError "Raised when N equals zero and P0 is a plain Python float"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: n equals 1, causing division by zero in temp /= (n - 1) * n because (n-1)*n evaluates to 0]
+        [LOG "Python raises ZeroDivisionError during the per-subject normalization step inside the outer loop"]
+        [THROW ZeroDivisionError "Raised when n equals 1, making the denominator (n-1)*n equal to zero"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Pe equals 1.0, causing division by zero in (P0 - Pe) / (1 - Pe)]
+        [LOG "Python raises ZeroDivisionError; this occurs when all raters assign ratings to a single category with certainty, making chance agreement equal to 1"]
+        [THROW ZeroDivisionError "Raised when Pe equals exactly 1.0, meaning the denominator (1 - Pe) is zero and kappa is undefined"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+

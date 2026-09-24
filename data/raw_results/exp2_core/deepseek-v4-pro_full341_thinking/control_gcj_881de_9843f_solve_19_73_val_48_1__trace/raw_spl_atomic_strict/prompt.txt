@@ -1,0 +1,436 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.OutputStream;
+2   import java.io.IOException;
+3   import java.io.InputStream;
+4   import java.io.PrintWriter;
+5   import java.util.List;
+6   import java.util.Scanner;
+7   import java.util.ArrayList;
+8   public class Solution {
+9       public static void main(String[] args) {
+10          InputStream inputStream = System.in;
+11          OutputStream outputStream = System.out;
+12          Scanner in = new Scanner(inputStream);
+13          PrintWriter out = new PrintWriter(outputStream);
+14          Task solver = new Task();
+15          solver.solve(1, in, out);
+16          out.close();
+17      }
+18      static class Task {
+19          public void solve(int testNumber, Scanner in, PrintWriter out) {
+20              int T = in.nextInt();
+21              for (int t = 1; t <= T; t++) {
+22                  int N, B, F;
+23                  N = in.nextInt();
+24                  B = in.nextInt();
+25                  F = in.nextInt();
+26                  List<String> reply = new ArrayList<>();
+27                  for (int i = 0; i < F; i++) {
+28                      int k = 1 << i;
+29                      for (int j = 0; j < N; j++) {
+30                          if ((j & k) == 0) {
+31                              out.print(0);
+32                          } else {
+33                              out.print(1);
+34                          }
+35                      }
+36                      out.println();
+37                      out.flush();
+38                      reply.add(in.next());
+39                  }
+40                  int p = 0;
+41                  boolean first = true;
+42                  int i;
+43                  for (i = 0; i < N && p + B < N; i++) {
+44                      StringBuilder sb = new StringBuilder();
+45                      for (int j = F - 1; j >= 0; j--) {
+46                          sb.append(reply.get(j).charAt(p));
+47                      }
+48                      int val = Integer.parseInt(sb.toString(), 2);
+49                      if (val != i) {
+50                          for (; i < val; i++) {
+51                              if (!first) {
+52                                  out.print(" ");
+53                              }
+54                              first = false;
+55                              out.print(i);
+56                          }
+57                      }
+58                      p++;
+59                  }
+60                  for (; i < N; i++) {
+61                      if (!first) {
+62                          out.print(" ");
+63                      }
+64                      first = false;
+65                      out.print(i);
+66                  }
+67                  out.println();
+68                  out.flush();
+69                  if (in.nextInt() == -1) {
+70                      return;
+71                  }
+72              }
+73          }
+74      }
+75  }
+```
+
+
+**Question**: Does line `69` have control dependence over line `48` in function `solve`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: solve
+Target source anchor: variable=<none>, line=69
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: solve
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within test case t, read N, B, and F from the Scanner in that order. RESULT N_B_F]
+- [COMMAND After each complete query row, write a newline to out, flush out, read the next String token from in, and append it to reply. RESULT reply]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 21: for (int t = 1; t <= T; t++) {
+- line 27: for (int i = 0; i < F; i++) {
+- line 29: for (int j = 0; j < N; j++) {
+- line 30: if ((j & k) == 0) {
+- line 43: for (i = 0; i < N && p + B < N; i++) {
+- line 45: for (int j = F - 1; j >= 0; j--) {
+- line 49: if (val != i) {
+- line 50: for (; i < val; i++) {
+- line 51: if (!first) {
+- line 60: for (; i < N; i++) {
+- line 61: if (!first) {
+- line 69: if (in.nextInt() == -1) {
+- line 70: return;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["T", "for", "int", "t"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 27, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["F", "for", "i", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["N", "for", "int", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "j", "k"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 43, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["B", "N", "for", "i", "p"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 45, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["F", "for", "int", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 49, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["i", "if", "val"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "val"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 51, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["first", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 60, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["N", "for", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 61, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["first", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 69, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in", "nextInt"], "roles": ["use", "control"], "source_identifiers": ["if", "in", "nextInt"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 70, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["return"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 19-73
+- source signature: `public void solve(int testNumber, Scanner in, PrintWriter out) {`
+- source content hash: `ddeb5e04d2442f5643d9136ea4fe1f8bdaea1eea3271d510f141979e382f6e0e`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+  19          public void solve(int testNumber, Scanner in, PrintWriter out) {
+  20              int T = in.nextInt();
+  21              for (int t = 1; t <= T; t++) {
+  22                  int N, B, F;
+  23                  N = in.nextInt();
+  24                  B = in.nextInt();
+  25                  F = in.nextInt();
+  26                  List<String> reply = new ArrayList<>();
+  27                  for (int i = 0; i < F; i++) {
+  28                      int k = 1 << i;
+  29                      for (int j = 0; j < N; j++) {
+  30                          if ((j & k) == 0) {
+  31                              out.print(0);
+  32                          } else {
+  33                              out.print(1);
+  34                          }
+  35                      }
+  36                      out.println();
+  37                      out.flush();
+  38                      reply.add(in.next());
+  39                  }
+  40                  int p = 0;
+  41                  boolean first = true;
+  42                  int i;
+  43                  for (i = 0; i < N && p + B < N; i++) {
+  44                      StringBuilder sb = new StringBuilder();
+  45                      for (int j = F - 1; j >= 0; j--) {
+  46                          sb.append(reply.get(j).charAt(p));
+  47                      }
+  48                      int val = Integer.parseInt(sb.toString(), 2);
+  49                      if (val != i) {
+  50                          for (; i < val; i++) {
+  51                              if (!first) {
+  52                                  out.print(" ");
+  53                              }
+  54                              first = false;
+  55                              out.print(i);
+  56                          }
+  57                      }
+  58                      p++;
+  59                  }
+  60                  for (; i < N; i++) {
+  61                      if (!first) {
+  62                          out.print(" ");
+  63                      }
+  64                      first = false;
+  65                      out.print(i);
+  66                  }
+  67                  out.println();
+  68                  out.flush();
+  69                  if (in.nextInt() == -1) {
+  70                      return;
+  71                  }
+  72              }
+  73          }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Interactively identifies all broken servers for each test case by sending binary bit queries, reconstructing the original indices of the working servers from the judge's replies, and printing the missing indices in increasing order." solve]
+    [INPUTS]
+        <REF> testNumber </REF>: int "The current test case number; not used by this method except to match the required interactive judge signature."
+        <REF> in </REF>: java.util.Scanner "Scanner used to read the number of test cases, per-test values N, B, F, the F query response strings, and the judge's verification response."
+        <REF> out </REF>: java.io.PrintWriter "PrintWriter used to output each query row, flush after each row, print the broken server indices, and flush the final answer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the total number of test cases T from the Scanner as an integer. RESULT T]
+            [COMMAND For each test case t from 1 to T inclusive, execute the following per-test-case procedure. RESULT none]
+            [COMMAND Within test case t, read N, B, and F from the Scanner in that order. RESULT N_B_F]
+            [COMMAND Create an empty List<String> named reply to hold the F judge response rows. RESULT reply]
+            [COMMAND Within test case t, for each query row i from 0 to F-1 inclusive, compute k = 1 << i; then for each server index j from 0 to N-1 inclusive, write '0' to out if (j & k) == 0 and write '1' otherwise, without any separator or newline between bits. RESULT query_row_output]
+            [COMMAND After each complete query row, write a newline to out, flush out, read the next String token from in, and append it to reply. RESULT reply]
+            [COMMAND Within test case t, initialize p to 0, first to true, and declare integer i for the reconstruction loop. RESULT p_first_i]
+            [COMMAND Run the reconstruction loop with i starting at 0, continuing while i < N && p + B < N (with i < N evaluated before p + B < N), and with i incremented by the loop update after each iteration; in each iteration execute the next three commands. RESULT i_p]
+            [COMMAND Inside the reconstruction loop, build a StringBuilder sb by appending reply.get(j).charAt(p) for j from F-1 down to 0 inclusive, then parse the resulting string as a base-2 integer and store it as val. RESULT val]
+            [COMMAND Inside the reconstruction loop, if val != i, run an inner for loop while i < val: if first is false print a space, set first to false, print i, and increment i; this loop advances i to val and thereby changes the outer loop's i value. RESULT none]
+            [COMMAND Inside the reconstruction loop, after the val != i handling, increment p by 1. RESULT p]
+            [COMMAND After the reconstruction loop exits, run a final loop starting at the current i and continuing while i < N: if first is false print a space, set first to false, print i, and increment i by 1. RESULT none]
+            [COMMAND After the final loop, print a newline to out and flush out. RESULT none]
+            [COMMAND Read the judge's verification integer from in and store it as judge_response. RESULT judge_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: At the end of a test case, after judge_response has been read, judge_response == -1.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return from solve immediately without processing any more test cases. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

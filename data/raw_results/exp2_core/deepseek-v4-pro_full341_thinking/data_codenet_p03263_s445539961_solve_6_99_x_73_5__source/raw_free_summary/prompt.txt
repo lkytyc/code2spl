@@ -1,0 +1,472 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.*;
+2   import java.util.*;
+3   public class Main {
+4   	private static Scanner sc;
+5   	private static Printer pr;
+6   	private static void solve() {
+7   		int h = sc.nextInt();
+8   		int w = sc.nextInt();
+9   		int[][] a = new int[h][w];
+10  		for (int i = 0; i < h; i++) {
+11  			for (int j = 0; j < w; j++) {
+12  				a[i][j] = sc.nextInt();
+13  			}
+14  		}
+15  		List<Integer> x = new ArrayList<>();
+16  		List<Integer> y = new ArrayList<>();
+17  		boolean flag = false;
+18  		int prex = 0;
+19  		int prey = 0;
+20  		boolean odd;
+21  		for (int i = 0; i < h; i++) {
+22  			if (i % 2 == 1) {
+23  				for (int j = w - 1; j >= 0; j--) {
+24  					if (a[i][j] % 2 == 1) {
+25  						odd = true;
+26  					} else {
+27  						odd = false;
+28  					}
+29  					if (odd && flag) {
+30  						flag = !flag;
+31  						x.add(prex);
+32  						y.add(prey);
+33  						x.add(j);
+34  						y.add(i);
+35  						prex = j;
+36  						prey = i;
+37  					} else if (odd && !flag) {
+38  						flag = !flag;
+39  						prex = j;
+40  						prey = i;
+41  					} else if (!odd && flag) {
+42  						x.add(prex);
+43  						y.add(prey);
+44  						x.add(j);
+45  						y.add(i);
+46  						prex = j;
+47  						prey = i;
+48  					} else if (!odd && !flag) {
+49  					}
+50  				}
+51  			} else {
+52  				for (int j = 0; j < w; j++) {
+53  					if (a[i][j] % 2 == 1) {
+54  						odd = true;
+55  					} else {
+56  						odd = false;
+57  					}
+58  					if (odd && flag) {
+59  						flag = !flag;
+60  						x.add(prex);
+61  						y.add(prey);
+62  						x.add(j);
+63  						y.add(i);
+64  						prex = j;
+65  						prey = i;
+66  					} else if (odd && !flag) {
+67  						flag = !flag;
+68  						prex = j;
+69  						prey = i;
+70  					} else if (!odd && flag) {
+71  						x.add(prex);
+72  						y.add(prey);
+73  						x.add(j);
+74  						y.add(i);
+75  						prex = j;
+76  						prey = i;
+77  					} else if (!odd && !flag) {
+78  					}
+79  				}
+80  			}
+81  		}
+82  		pr.println(x.size() / 2);
+83  		for (int i = 0, size = x.size(); i < size / 2 * 2; i++) {
+84  			if (i % 2 == 0) {
+85  				StringBuilder sb = new StringBuilder();
+86  				sb.append(y.get(i) + 1);
+87  				sb.append(' ');
+88  				sb.append(x.get(i) + 1);
+89  				sb.append(' ');
+90  				pr.print(sb.toString());
+91  			} else {
+92  				StringBuilder sb = new StringBuilder();
+93  				sb.append(y.get(i) + 1);
+94  				sb.append(' ');
+95  				sb.append(x.get(i) + 1);
+96  				pr.println(sb.toString());
+97  			}
+98  		}
+99  	}
+100  	public static void main(String[] args) {
+101  		sc = new Scanner(System.in);
+102  		pr = new Printer(System.out);
+103  		solve();
+104  		pr.close();
+105  		sc.close();
+106  	}
+107  	static class Scanner {
+108  		BufferedReader br;
+109  		Scanner (InputStream in) {
+110  			br = new BufferedReader(new InputStreamReader(in));
+111  		}
+112  		private boolean isPrintable(int ch) {
+113  			return ch >= '!' && ch <= '~';
+114  		}
+115  		private boolean isCRLF(int ch) {
+116  			return ch == '\n' || ch == '\r' || ch == -1;
+117  		}
+118  		private int nextPrintable() {
+119  			try {
+120  				int ch;
+121  				while (!isPrintable(ch = br.read())) {
+122  					if (ch == -1) {
+123  						throw new NoSuchElementException();
+124  					}
+125  				}
+126  				return ch;
+127  			} catch (IOException e) {
+128  				throw new NoSuchElementException();
+129  			}
+130  		}
+131  		String next() {
+132  			try {
+133  				int ch = nextPrintable();
+134  				StringBuilder sb = new StringBuilder();
+135  				do {
+136  					sb.appendCodePoint(ch);
+137  				} while (isPrintable(ch = br.read()));
+138  				return sb.toString();
+139  			} catch (IOException e) {
+140  				throw new NoSuchElementException();
+141  			}
+142  		}
+143  		int nextInt() {
+144  			try {
+145  				boolean negative = false;
+146  				int res = 0;
+147  				int limit = -Integer.MAX_VALUE;
+148  				int radix = 10;
+149  				int fc = nextPrintable();
+150  				if (fc < '0') {
+151  					if (fc == '-') {
+152  						negative = true;
+153  						limit = Integer.MIN_VALUE;
+154  					} else if (fc != '+') {
+155  						throw new NumberFormatException();
+156  					}
+157  					fc = br.read();
+158  				}
+159  				int multmin = limit / radix;
+160  				int ch = fc;
+161  				do {
+162  					int digit = ch - '0';
+163  					if (digit < 0 || digit >= radix) {
+164  						throw new NumberFormatException();
+165  					}
+166  					if (res < multmin) {
+167  						throw new NumberFormatException();
+168  					}
+169  					res *= radix;
+170  					if (res < limit + digit) {
+171  						throw new NumberFormatException();
+172  					}
+173  					res -= digit;
+174  				} while (isPrintable(ch = br.read()));
+175  				return negative ? res : -res;
+176  			} catch (IOException e) {
+177  				throw new NoSuchElementException();
+178  			}
+179  		}
+180  		long nextLong() {
+181  			try {
+182  				boolean negative = false;
+183  				long res = 0;
+184  				long limit = -Long.MAX_VALUE;
+185  				int radix = 10;
+186  				int fc = nextPrintable();
+187  				if (fc < '0') {
+188  					if (fc == '-') {
+189  						negative = true;
+190  						limit = Long.MIN_VALUE;
+191  					} else if (fc != '+') {
+192  						throw new NumberFormatException();
+193  					}
+194  					fc = br.read();
+195  				}
+196  				long multmin = limit / radix;
+197  				int ch = fc;
+198  				do {
+199  					int digit = ch - '0';
+200  					if (digit < 0 || digit >= radix) {
+201  						throw new NumberFormatException();
+202  					}
+203  					if (res < multmin) {
+204  						throw new NumberFormatException();
+205  					}
+206  					res *= radix;
+207  					if (res < limit + digit) {
+208  						throw new NumberFormatException();
+209  					}
+210  					res -= digit;
+211  				} while (isPrintable(ch = br.read()));
+212  				return negative ? res : -res;
+213  			} catch (IOException e) {
+214  				throw new NoSuchElementException();
+215  			}
+216  		}
+217  		float nextFloat() {
+218  			return Float.parseFloat(next());
+219  		}
+220  		double nextDouble() {
+221  			return Double.parseDouble(next());
+222  		}
+223  		String nextLine() {
+224  			try {
+225  				int ch;
+226  				while (isCRLF(ch = br.read())) {
+227  					if (ch == -1) {
+228  						throw new NoSuchElementException();
+229  					}
+230  				}
+231  				StringBuilder sb = new StringBuilder();
+232  				do {
+233  					sb.appendCodePoint(ch);
+234  				} while (!isCRLF(ch = br.read()));
+235  				return sb.toString();
+236  			} catch (IOException e) {
+237  				throw new NoSuchElementException();
+238  			}
+239  		}
+240  		void close() {
+241  			try {
+242  				br.close();
+243  			} catch (IOException e) {
+244  			}
+245  		}
+246  	}
+247  	static class Printer extends PrintWriter {
+248  		Printer(OutputStream out) {
+249  			super(out);
+250  		}
+251  	}
+252  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(x,73)` in function `solve`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+This code reads a grid of integers and processes it in a snake-like (zigzag) pattern, identifying cells with odd values. It then outputs a list of coordinate pairs representing moves between consecutive odd-valued cells (or cells adjacent to them) in the traversal order, printing the total number of such moves followed by the coordinates in 1-based format.
+

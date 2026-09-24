@@ -1,0 +1,404 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   import sys,math,collections
+2   from collections import defaultdict
+3   def file():
+4       sys.stdin = open('input.py', 'r')
+5       sys.stdout = open('output.py', 'w') 
+6   def get_array():
+7       l=list(map(int, input().split()))
+8       return l
+9   def get_ints():   
+10      return map(int, input().split())
+11  def get_3_ints():   
+12      a,b,c=map(int, input().split())
+13      return a,b,c    
+14  def sod(n):
+15      n,c=str(n),0
+16      for i in n: 
+17          c+=int(i)
+18      return c    
+19  def isPrime(n):
+20      if (n <= 1):
+21          return False
+22      if (n <= 3):
+23          return True
+24      if (n % 2 == 0 or n % 3 == 0):
+25          return False
+26      i = 5
+27      while(i * i <= n):
+28          if (n % i == 0 or n % (i + 2) == 0):
+29              return False
+30          i = i + 6
+31      return True
+32  def getFloor(A, x):
+33      (left, right) = (0, len(A) - 1)
+34      floor = -1
+35      while left <= right:
+36          mid = (left + right) // 2
+37          if A[mid] == x:
+38              return A[mid]
+39          elif x < A[mid]:
+40              right = mid - 1
+41          else:
+42              floor = A[mid]
+43              left = mid + 1
+44      return floor
+45  def chk(aa,bb):
+46  	f=0
+47  	for i in aa:
+48  		for j in bb:
+49  			if(j[0]>=i[0] and j[1]<=i[1]):
+50  				f+=1
+51  			elif(j[0]<=i[0] and j[1]>=i[1]):	
+52  				f+=1
+53  			elif(i[0]==j[1] or i[1]==j[0]):
+54  				f+=1
+55  			else:
+56  				continue
+57  	return f	
+58  def maxSumRangeQuery(nums, req):
+59      l = []
+60      for _ in range(len(nums)+1):
+61          l.append(0)
+62      nums.sort(reverse=True)
+63      for i in req:
+64          l[i[0]]+=1
+65          l[i[1]+1]-=1
+66      for i in range(1,len(l)):
+67          l[i]+=l[i-1]
+68      l=l[:-1]    
+69      d=collections.defaultdict(list)
+70      for i in range(len(l)):
+71          d[l[i]].append(i)
+72      di=collections.OrderedDict(sorted(d.items()))   
+73      k=0
+74      ans = []
+75      for _ in range(len(nums)):
+76          ans.append(0)
+77      for i in di:
+78          for j in di[i]:
+79              ans[j]=nums[len(nums)-k-1]
+80              k+=1
+81      c=0
+82      for i in req:
+83          st=ans[i[0]:i[1]+1]
+84          c+=sum(st)
+85      return c%(10**9+7)
+86  def main():
+87  	c=0
+88  	a,b=get_ints()
+89  	while(a>0):
+90  		a-=b
+91  		c+=1
+92  	print(c)	
+93  if __name__ == '__main__':
+94      main()
+```
+
+
+**Question**: Which variable instances have information flow over `(ans,79)` in function `maxSumRangeQuery`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function maxSumRangeQuery: Computes the maximum possible sum over all inclusive query ranges after permuting nums by assigning larger values to positions with higher range coverage, and returns the result modulo 1,000,000,007.
+It takes nums (array of integers) — Array of integers to permute for maximizing the range-query sum.; req (array of integer index pairs) — List of inclusive ranges [start, end] for which the sums are accumulated.
+It returns return_value (integer) — Total sum over all requested ranges after optimal permutation, modulo 1,000,000,007.
+The behaviour proceeds in this order:
+1. Initialize a difference array l as a list of zeros with length len(nums) + 1. This produces l.
+2. Sort nums in descending order, in place. This produces nums.
+3. For each request i in req, increment l[i[0]] by 1 and decrement l[i[1] + 1] by 1, where i[1] + 1 is the sentinel position just after the inclusive range end. This produces l.
+4. Convert l into a prefix-count array by iterating i from 1 through len(l) - 1 inclusive and adding l[i - 1] to l[i]. This produces l.
+5. Remove the final sentinel element from l by reassigning l = l[:-1]. This produces l.
+6. Create a defaultdict d with list factory that maps each coverage count to the list of indices having that count, by appending i to d[l[i]] for every index i in l. This produces d.
+7. Create di as an OrderedDict containing d's items sorted ascending by coverage count. This produces di.
+8. Initialize k to 0. This produces k.
+9. Initialize ans as a list of zeros with length len(nums). This produces ans.
+10. For each coverage-count key i in di in ascending order, for each index j stored in di[i], assign ans[j] = nums[len(nums) - k - 1] and then increment k by 1. This produces ans.
+11. Initialize accumulator c to 0. This produces c.
+12. For each request i in req, add sum(ans[i[0]:i[1] + 1]), the inclusive slice from start through end, to c. This produces c.
+13. Return c modulo 10**9 + 7. This produces return_value.

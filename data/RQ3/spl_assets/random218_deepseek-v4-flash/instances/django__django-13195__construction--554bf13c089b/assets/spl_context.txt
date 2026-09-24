@@ -1,0 +1,1415 @@
+# FILE: django/contrib/messages/storage/cookie.py
+# CLASS MessageEncoder
+
+[DEFINE_WORKER: "Serializes a Message object into a compact JSON-ready list, using 0/1 to indicate SafeData message content, and falls back to the superclass default implementation for any other object." default]
+    [INPUTS]
+        <REF> self </REF>: JSONEncoder "The encoder instance that provides message_key and exposes the superclass default() implementation."
+        <REF> obj </REF>: object "The object being serialized; Message instances are converted to a compact JSON-ready list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "A JSON-ready list for Message objects, or the value returned by super().default(obj) for all other objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine whether obj is an instance of Message or a subclass of Message. RESULT is_message]
+            [COMMAND If is_message is false, call super().default(obj) and return the result unchanged. RESULT super_default_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj is an instance of Message or a subclass of Message]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the Message branch, evaluate whether obj.message is an instance of SafeData; set is_safedata to 1 if true, otherwise 0. RESULT is_safedata]
+            [COMMAND Within the Message branch, build a message list containing self.message_key, is_safedata, obj.level, and obj.message. RESULT message]
+            [COMMAND Within the Message branch, if obj.extra_tags is truthy, append obj.extra_tags to the message list. RESULT message]
+            [COMMAND Within the Message branch, return the constructed message list. RESULT message_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS MessageDecoder
+
+[DEFINE_WORKER: "Recursively processes nested data structures, converting specially marked lists into Message objects, recursively processing ordinary lists and dictionaries, and returning all other values unchanged." process_messages]
+    [INPUTS]
+        <REF> obj </REF>: object "The input object to recursively process; can be a list, dict, or any other value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> processed_obj </REF>: object "The recursively processed result: a Message for specially marked lists, a new list for ordinary lists, a new dict for dictionaries, or the original value otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj is a non-empty list using isinstance(obj, list) and obj with short-circuit evaluation. If true, select the matching list alternative flow; otherwise continue. RESULT is_non_empty_list]
+            [COMMAND If the list branch was not taken, check whether obj is an instance of dict. If true, select the dictionary alternative flow; otherwise continue. RESULT is_dict]
+            [COMMAND If obj is neither a non-empty list nor a dict, return obj unchanged. RESULT processed_obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj is a non-empty list and obj[0] equals MessageEncoder.message_key]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the message-key list branch, check whether obj[1] is truthy. RESULT needs_mark_safe]
+            [COMMAND If needs_mark_safe is true, replace obj[3] with mark_safe(obj[3]) before continuing. RESULT obj_with_marked_safe]
+            [COMMAND Return a new Message instance by unpacking the list elements from index 2 onward as positional arguments: Message(*obj[2:]). RESULT message_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj is a non-empty list and obj[0] does not equal MessageEncoder.message_key]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the ordinary-list branch, process each item in obj by calling self.process_messages(item) in list order and collect the results into a new list. RESULT processed_list_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj is an instance of dict]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each key-value pair in obj.items(), compute the processed value with self.process_messages(value); build and return a new dictionary preserving the original keys. RESULT processed_dict_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Decodes input by delegating to the parent class decode method, then processes the decoded messages and returns the result." decode]
+    [INPUTS]
+        <REF> s </REF>: Any "Input data or buffer to be decoded."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to the parent decode method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "The result of processing the decoded messages."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().decode(s, **kwargs) and assign the result to decoded. RESULT decoded]
+            [COMMAND Call self.process_messages(decoded) and return the result directly. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS CookieStorage
+
+[DEFINE_WORKER: "Initializes the object by forwarding all arguments to the superclass initializer and assigning a cookie signer created from the configured key salt." __init__]
+    [INPUTS]
+        <REF> args </REF>: tuple "Positional arguments forwarded unchanged to the superclass initializer."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded unchanged to the superclass initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Forward all positional and keyword arguments unchanged to the superclass initializer via super().__init__(*args, **kwargs). RESULT self]
+            [COMMAND Read the configured key salt from self.key_salt and pass it as the salt argument to signing.get_cookie_signer, then assign the returned signer to self.signer. RESULT self.signer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves messages from the messages cookie, decodes them, removes a trailing not_finished sentinel if one is present, and returns whether all messages were retrieved." _get]
+    [INPUTS]
+        <REF> self </REF>: object "The storage instance providing request, cookie_name, _decode, and not_finished."
+        <REF> args </REF>: tuple "Additional positional arguments accepted by the method; not used by the implementation."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted by the method; not used by the implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (messages, all_retrieved), where messages is the decoded message value with the sentinel removed if necessary, and all_retrieved indicates whether the message list is complete or empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the raw cookie data by calling self.request.COOKIES.get(self.cookie_name) and assign the result to data. RESULT data]
+            [COMMAND Decode the raw cookie data by calling self._decode(data) and assign the decoded value to messages. RESULT messages]
+            [COMMAND Evaluate all_retrieved as not (messages and messages[-1] == self.not_finished), using short-circuit semantics: if messages is falsy, all_retrieved is True; otherwise all_retrieved is True only when the last message is not the sentinel. RESULT all_retrieved]
+            [COMMAND If messages is truthy and all_retrieved is False, remove the trailing not_finished sentinel value by calling messages.pop(). RESULT messages]
+            [COMMAND Return messages and all_retrieved. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the session cookie with the encoded data when it is truthy, otherwise deletes the session cookie." _update_cookie]
+    [INPUTS]
+        <REF> encoded_data </REF>: Any "Data to store in the cookie; if falsy, the cookie is deleted."
+        <REF> response </REF>: HttpResponse "Response object on which the cookie is set or deleted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether encoded_data is truthy. RESULT encoded_data_truthy]
+            [COMMAND If encoded_data is truthy, set the cookie named self.cookie_name on response to encoded_data with domain=settings.SESSION_COOKIE_DOMAIN, secure=settings.SESSION_COOKIE_SECURE or None, httponly=settings.SESSION_COOKIE_HTTPONLY or None, and samesite=settings.SESSION_COOKIE_SAMESITE. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: encoded_data is falsy (for example, None, False, 0, empty string, or empty container).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Delete the cookie named self.cookie_name from response using settings.SESSION_COOKIE_DOMAIN as the domain. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Encodes the given messages into a cookie, trims the oldest or newest messages until the encoded data fits within the configured maximum cookie size, includes the not_finished sentinel when trimming occurs, updates the response cookie, and returns the list of messages that could not be stored." _store]
+    [INPUTS]
+        <REF> messages </REF>: list "List of messages to encode and store. It may be mutated by popping messages when cookie-size trimming occurs."
+        <REF> response </REF>: object "HTTP response object passed to self._update_cookie to attach the final encoded cookie."
+        <REF> remove_oldest </REF>: bool "Whether to remove the oldest messages first when trimming is needed. Defaults to true; when false, the newest messages are removed and inserted at the front of the returned list."
+        <REF> args </REF>: tuple "Additional positional arguments accepted for interface compatibility; they are not used by the method body."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted for interface compatibility; they are not used by the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> unstored_messages </REF>: list "List of messages that could not be stored because the encoded cookie exceeded max_cookie_size. It contains the removed messages in chronological order and does not include the not_finished sentinel."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named `unstored_messages` to collect messages that cannot be stored. RESULT unstored_messages]
+            [COMMAND Encode the current `messages` list by calling `self._encode(messages)` and assign the result to `encoded_data`. RESULT encoded_data]
+            [COMMAND Evaluate whether `self.max_cookie_size` is truthy. If it is falsey (None, zero, or empty), skip the entire cookie-size trimming block and continue directly to updating the cookie. RESULT max_cookie_size_truthy]
+            [COMMAND Inside the `if self.max_cookie_size` block, create a `SimpleCookie()` instance outside the trimming loop to account for cookie serialization overhead. RESULT cookie]
+            [COMMAND Inside the `if self.max_cookie_size` block, define a nested helper `stored_length(val)` that returns `len(cookie.value_encode(val)[1])`, the estimated stored cookie length of the encoded value. RESULT stored_length]
+            [COMMAND Inside the `if self.max_cookie_size` block, evaluate the while-loop condition `encoded_data and stored_length(encoded_data) > self.max_cookie_size`; continue executing the trimming body while it is true, with short-circuit evaluation so `stored_length` is not called when `encoded_data` is empty, and re-evaluate the condition after each body iteration. RESULT loop_active]
+            [COMMAND Inside that while loop, remove exactly one message from `messages` according to `remove_oldest`: if true, pop the front with `messages.pop(0)`; if false, pop the back with `messages.pop()`. RESULT messages]
+            [COMMAND Inside the same while loop, add the removed message to `unstored_messages`: if `remove_oldest` is true, append it; if `remove_oldest` is false, insert it at the front of the list. RESULT unstored_messages]
+            [COMMAND Inside the same while loop, after each removal, recompute `encoded_data` by calling `self._encode(messages + [self.not_finished], encode_empty=unstored_messages)`. RESULT encoded_data]
+            [COMMAND After the trimming loop finishes or is skipped, call `self._update_cookie(encoded_data, response)` to store the final encoded cookie data in the response object. RESULT response]
+            [COMMAND Return the `unstored_messages` list as the messages that could not be stored. RESULT unstored_messages]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the legacy HMAC-SHA1 hash of the provided value as a hexadecimal string using the fixed Django messages salt and the project's SECRET_KEY." _legacy_hash]
+    [INPUTS]
+        <REF> self </REF>: object "The bound instance; not referenced in the method body."
+        <REF> value </REF>: object "The value to be hashed by salted_hmac."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "Hexadecimal HMAC-SHA1 digest of the salted value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the constant string 'django.contrib.messages' to key_salt. RESULT key_salt]
+            [COMMAND Call salted_hmac(key_salt, value), invoke hexdigest() on the returned HMAC object, and return the resulting hexadecimal string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Encodes the messages list into a compact JSON string and signs it with the signer, unless messages is empty and encode_empty is false, in which case the method returns None." _encode]
+    [INPUTS]
+        <REF> messages </REF>: list "The message payload to be encoded and signed; its truthiness controls whether encoding runs when encode_empty is false."
+        <REF> encode_empty </REF>: bool "When true, forces encoding and signing even if messages is empty or falsy."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str or None "The signed compact JSON string when the if body executes; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the condition 'messages or encode_empty' using Python truthiness; if messages is truthy the condition is true without evaluating encode_empty, and if messages is falsy the condition is true only when encode_empty is true. RESULT condition_met]
+            [COMMAND If condition_met is true, create a MessageEncoder instance using separators=(',', ':'). RESULT encoder]
+            [COMMAND Encode messages by calling encoder.encode(messages) and store the resulting compact JSON string in value. RESULT value]
+            [COMMAND Return self.signer.sign(value) immediately, exiting the method with the signed value. RESULT signed_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: messages is falsy and encode_empty is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the if body and reach the end of the method. RESULT reached_end]
+            [COMMAND Return None implicitly because no explicit return statement exists after the if block. RESULT implicit_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Safely decodes a signed encoded text stream into a list of messages by verifying its signature and parsing JSON, returning None for empty, invalid, or malformed data." _decode]
+    [INPUTS]
+        <REF> data </REF>: str "The signed encoded text stream to decode into messages."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or None "The decoded list of messages, or None if the data is empty, the signature is invalid, or the payload is not valid JSON."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to unsign the incoming data by calling self.signer.unsign(data) and store the result as decoded. RESULT decoded]
+            [COMMAND When decoded is truthy, parse it as JSON using json.loads(decoded, cls=MessageDecoder) and store the parsed messages. RESULT parsed_messages]
+            [COMMAND Return parsed_messages. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: At the very beginning, data is empty or otherwise falsy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without attempting to unsign the data. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: While attempting to unsign, self.signer.unsign(data) raises signing.BadSignature.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set decoded to self._legacy_decode(data). RESULT decoded]
+            [COMMAND When decoded is truthy, parse it as JSON using json.loads(decoded, cls=MessageDecoder) and store the parsed messages. RESULT parsed_messages]
+            [COMMAND If JSON parsing succeeds, return parsed_messages. RESULT return_value]
+            [COMMAND If JSON parsing fails with json.JSONDecodeError, ignore the error and continue. RESULT none]
+            [COMMAND Set self.used = True to mark the data as used because something was wrong. RESULT used_flag]
+            [COMMAND Return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After unsigning or legacy decoding, decoded is falsy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip JSON parsing. RESULT none]
+            [COMMAND Set self.used = True to mark the data as used because something was wrong. RESULT used_flag]
+            [COMMAND Return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: While parsing a truthy decoded value, json.loads raises json.JSONDecodeError.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ignore the JSONDecodeError and continue after the try/except block. RESULT none]
+            [COMMAND Set self.used = True to mark the data as used because something was wrong. RESULT used_flag]
+            [COMMAND Return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Decodes a legacy hash-prefixed value by splitting data on the first '$', verifying the supplied hash with constant_time_compare against self._legacy_hash(value), and returning value only when valid; otherwise returns None." _legacy_decode]
+    [INPUTS]
+        <REF> data </REF>: str "String containing the legacy hash and value separated by the first '$' delimiter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str or None "The decoded value when the hash is valid; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split the input data string on the first '$' delimiter using maxsplit=1 and assign the resulting list to bits. RESULT bits]
+            [COMMAND Check whether bits has exactly two elements; if it does not, skip the hash verification and proceed to the final None return. RESULT len_bits_equals_2]
+            [COMMAND Within the outer branch where bits has exactly two elements, unpack bits into hash_ and value. RESULT hash_value_pair]
+            [COMMAND Within the outer branch where bits has exactly two elements, call self._legacy_hash(value) and compare it with hash_ using constant_time_compare; if they match, return value immediately. RESULT returned_value]
+            [COMMAND If no earlier return occurred, return None. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: bits does not contain exactly two elements after splitting]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: bits contains exactly two elements but constant_time_compare(hash_, self._legacy_hash(value)) returns false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the outer branch where bits has exactly two elements, unpack bits into hash_ and value. RESULT hash_value_pair]
+            [COMMAND Return None because the hash comparison failed. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# FILE: django/contrib/sessions/middleware.py
+# CLASS SessionMiddleware
+
+[DEFINE_WORKER: "Initializes the instance by performing the get_response deprecation check, storing get_response, performing the async compatibility check, and loading the configured session store class from settings." __init__]
+    [INPUTS]
+        <REF> get_response </REF>: callable or None "The next middleware or view callable in the chain; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._get_response_none_deprecation(get_response) to perform the deprecation check for a None get_response. RESULT None]
+            [COMMAND Assign get_response to self.get_response. RESULT self.get_response]
+            [COMMAND Call self._async_check() to validate async compatibility. RESULT None]
+            [COMMAND Import the module specified by settings.SESSION_ENGINE using import_module and assign it to engine. RESULT engine]
+            [COMMAND Assign engine.SessionStore to self.SessionStore. RESULT self.SessionStore]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: settings.SESSION_ENGINE is None, empty, or not a valid module path when import_module is called.]
+        [LOG "Failed to import session engine module from settings.SESSION_ENGINE."]
+        [THROW ImportError "Raised when the configured SESSION_ENGINE setting cannot be imported."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: The imported session engine module does not expose a SessionStore attribute.]
+        [LOG "Imported session engine module does not provide SessionStore."]
+        [THROW AttributeError "Raised when engine.SessionStore is not present on the imported module."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Loads the request's session store from the session cookie and attaches it to request.session." process_request]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Incoming HTTP request whose COOKIES are read and whose session attribute is assigned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read session_key from request.COOKIES using settings.SESSION_COOKIE_NAME as the dictionary key; use None as the default if the cookie is absent. RESULT session_key]
+            [COMMAND Create self.SessionStore(session_key) and assign the resulting session store to request.session. RESULT request.session]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# FILE: django/http/response.py
+# CLASS BadHeaderError
+
+# CLASS HttpResponseBase
+
+[DEFINE_WORKER: "Initializes the response object by creating internal header, resource, cookie, and closure state, validating and storing the HTTP status code if provided, storing reason and charset, defaulting Content-Type, and assigning the Content-Type header." __init__]
+    [INPUTS]
+        <REF> content_type </REF>: str or None "Initial value for the Content-Type header; defaults to text/html with the instance charset when None."
+        <REF> status </REF>: int or None "HTTP status code to store; must be an integer from 100 to 599 inclusive when provided."
+        <REF> reason </REF>: str or None "Reason phrase to store in self._reason_phrase."
+        <REF> charset </REF>: str or None "Charset to store in self._charset and use in the default Content-Type value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize instance state: set self._headers to an empty dict, self._resource_closers to an empty list, self._handler_class to None, self.cookies to a new SimpleCookie(), and self.closed to False. RESULT self]
+            [COMMAND If status is not None, try to convert status with int(status) and assign the result to self.status_code; if int(status) raises ValueError or TypeError, raise TypeError as described in exception_flows. RESULT self.status_code]
+            [COMMAND After a successful conversion inside the same if status is not None block, check whether self.status_code is outside the inclusive range 100 to 599; if it is, raise ValueError as described in exception_flows. RESULT self.status_code]
+            [COMMAND Set self._reason_phrase to reason and self._charset to charset. RESULT self]
+            [COMMAND If content_type is None, set content_type to the string 'text/html; charset=%s' formatted with self.charset. RESULT content_type]
+            [COMMAND Set the Content-Type header by assigning self['Content-Type'] to content_type. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: status is not None and int(status) raises ValueError or TypeError]
+        [LOG "HTTP status code must be an integer."]
+        [THROW TypeError "Raised when the provided status cannot be converted to an integer."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: status is not None, int(status) succeeds, and self.status_code is not in the inclusive range 100 to 599]
+        [LOG "HTTP status code must be an integer from 100 to 599."]
+        [THROW ValueError "Raised when the provided status is outside the valid HTTP status code range."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the cached reason phrase if it has already been set; otherwise falls back to the status code lookup table and returns 'Unknown Status Code' when the status code is not mapped." reason_phrase]
+    [INPUTS]
+        <REF> self </REF>: object "Instance containing the _reason_phrase attribute and the status_code attribute."
+        <REF> responses </REF>: Mapping[int, str] "External mapping from numeric status codes to reason phrases; used only when _reason_phrase is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> reason_phrase </REF>: str "The cached _reason_phrase if it is not None; otherwise the mapped value from responses for self.status_code, or the literal 'Unknown Status Code' if self.status_code is not a key in responses."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return responses.get(self.status_code, 'Unknown Status Code') as the fallback reason phrase. RESULT reason_phrase]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self._reason_phrase is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._reason_phrase as the cached reason phrase. RESULT reason_phrase]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Assigns the provided value to the instance attribute _reason_phrase without transformation." reason_phrase]
+    [INPUTS]
+        <REF> value </REF>: Any "The value to store in the instance attribute _reason_phrase."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the value of the parameter value to the instance attribute _reason_phrase. RESULT self._reason_phrase]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the response charset by first using the cached value if set, otherwise extracting the charset from the Content-Type header with double quotes removed, and falling back to settings.DEFAULT_CHARSET." charset]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> resolved_charset </REF>: str "The determined charset: the cached self._charset if not None, otherwise the cleaned charset captured from Content-Type, otherwise settings.DEFAULT_CHARSET."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the cached charset self._charset and check whether it is not None. RESULT cached_charset]
+            [COMMAND If cached_charset is not None, return cached_charset immediately as the resolved charset. RESULT resolved_charset]
+            [COMMAND Fetch the Content-Type header value with self.get('Content-Type', ''), defaulting to an empty string when the header is absent. RESULT content_type]
+            [COMMAND Search content_type with _charset_from_content_type_re.search(content_type) and store the resulting match object or None. RESULT matched]
+            [COMMAND If matched is truthy, extract the 'charset' capture group from matched, remove all double quote characters by calling matched['charset'].replace('"', ''), and return the cleaned value as the resolved charset. RESULT resolved_charset]
+            [COMMAND If matched is falsy, return settings.DEFAULT_CHARSET as the resolved charset. RESULT resolved_charset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Assigns the provided value to the instance attribute self._charset." charset]
+    [INPUTS]
+        <REF> value </REF>: Any "The value to assign as the charset."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the value parameter to the instance attribute self._charset. RESULT self._charset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Serializes the HTTP headers from self._headers into a bytes object by joining each header line formatted as b'<ascii key>: <latin-1 value>' with CRLF separators." serialize_headers]
+    [INPUTS]
+        <REF> self </REF>: object "The object whose _headers collection contains the HTTP header key-value pairs to serialize."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bytes "The CRLF-separated bytes representation of the serialized HTTP headers."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the local helper function to_bytes(val, encoding) that returns val unchanged if val is bytes, otherwise returns val encoded using the specified encoding. RESULT to_bytes]
+            [COMMAND For each item in self._headers.values(), unpack the item into key and value, encode key with to_bytes(key, 'ascii'), encode value with to_bytes(value, 'latin-1'), concatenate the encoded key, b': ', and the encoded value to form one bytes line, and collect all lines into the headers list. RESULT headers]
+            [COMMAND Join all collected header lines in headers with b'\r\n' and return the resulting bytes value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: A header key contains non-ASCII characters, so to_bytes(key, 'ascii') raises UnicodeEncodeError.]
+        [LOG "UnicodeEncodeError while encoding the header key as ASCII."]
+        [THROW UnicodeEncodeError "Raised when a header key cannot be represented in ASCII."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: A header value contains characters outside the Latin-1 range, so to_bytes(value, 'latin-1') raises UnicodeEncodeError.]
+        [LOG "UnicodeEncodeError while encoding the header value as Latin-1."]
+        [THROW UnicodeEncodeError "Raised when a header value cannot be represented in Latin-1."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: An item from self._headers.values() does not unpack into exactly two elements.]
+        [LOG "ValueError while unpacking a header pair from self._headers.values()."]
+        [THROW ValueError "Raised when a header pair does not contain exactly two values for key, value unpacking."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: A header key or value is not bytes and lacks a compatible encode method, so to_bytes raises TypeError.]
+        [LOG "TypeError while converting a header key or value to bytes."]
+        [THROW TypeError "Raised when a header key or value is not compatible with the to_bytes conversion."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a comma-and-quoted Content-Type representation from self when the key exists, and an empty string otherwise." _content_type_for_repr]
+    [INPUTS]
+        <REF> self </REF>: mapping "Mapping-like object that may contain the key 'Content-Type'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The formatted Content-Type string when the key exists, otherwise the empty string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If 'Content-Type' is present in self, format the constant string ', "%s"' with self['Content-Type'] and return the formatted string. RESULT content_type_repr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: 'Content-Type' is not present in self]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the empty string ''. RESULT empty_string]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a header value to a native ASCII or Latin-1 string, rejects raw newline/carriage-return characters, and optionally applies MIME encoding when the value cannot be represented in the target charset." _convert_to_charset]
+    [INPUTS]
+        <REF> value </REF>: any "Header value to convert; byte strings are decoded with the target charset, text strings are validated against it, and any other type is first converted via str(value)."
+        <REF> charset </REF>: str "Target charset; must be 'ascii' or 'latin-1'."
+        <REF> mime_encode </REF>: bool "If true, apply MIME encoding using UTF-8 when the value cannot be represented in the target charset; defaults to false."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The converted native string in the target charset, or the MIME-encoded header string when MIME encoding is applied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If value is neither a bytes instance nor a str instance, convert it to a string using value = str(value). RESULT value]
+            [COMMAND Evaluate the newline guard with Python precedence and short-circuiting: if (isinstance(value, bytes) and (b'\n' in value or b'\r' in value)) or (isinstance(value, str) and ('\n' in value or '\r' in value)), raise BadHeaderError; otherwise continue. RESULT none]
+            [COMMAND Inside the try block, attempt charset conversion: if value is a str, call value.encode(charset) and discard the returned bytes to verify the value is representable; otherwise, since value is bytes, decode it with value.decode(charset) and assign the decoded native string to value. RESULT value]
+            [COMMAND On the success path, return value as the converted native string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: A UnicodeError occurs during charset conversion and mime_encode is True.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Encode value as a MIME-encoded header using Header(value, 'utf-8', maxlinelen=sys.maxsize).encode(), assign the encoded string to value, and continue with the final return step. RESULT value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The newline guard detects that value is bytes and contains b'\n' or b'\r', or value is str and contains '\n' or '\r'.]
+        [LOG "BadHeaderError: Header values can't contain newlines (got %r) formatted with the value's repr."]
+        [THROW BadHeaderError "Raised because header values cannot contain newline or carriage-return characters."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: A UnicodeError occurs during charset conversion and mime_encode is False.]
+        [LOG "UnicodeError re-raised after appending ', HTTP response headers must be in %s format' % charset to e.reason."]
+        [THROW UnicodeError "Re-raised after extending its reason to state that HTTP response headers must be in the target charset format."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a given header name exists in the stored headers after lowercasing it for a case-insensitive comparison." has_header]
+    [INPUTS]
+        <REF> header </REF>: str "Header name to look up in a case-insensitive manner."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the lowercased header is found in self._headers; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize header to lowercase by calling header.lower(). RESULT lowercased_header]
+            [COMMAND Check whether lowercased_header is present in self._headers using the in operator. RESULT contains_result]
+            [COMMAND Return contains_result from the method. RESULT method_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a dynamic view of all values stored in the headers dictionary." items]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ValuesView "A dynamic view of all values in self._headers, linked to the original dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the values view obtained from self._headers. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the second element of the header entry matching the lowercased header key, or alternate when no matching entry exists." get]
+    [INPUTS]
+        <REF> header </REF>: str "Header name to be lowercased and used as the lookup key."
+        <REF> alternate </REF>: object "Fallback value returned when the lowercased header key is not present in self._headers."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "Second element of the stored value for the header key, or alternate if the key is absent."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the header argument to lowercase and store it as lookup_key. RESULT lookup_key]
+            [COMMAND When lookup_key exists in self._headers, retrieve its stored value and assign it to header_entry. RESULT header_entry]
+            [COMMAND Return the second element of header_entry. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: lookup_key does not exist in self._headers.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the default tuple (None, alternate) to header_entry. RESULT header_entry]
+            [COMMAND Return the second element of header_entry, which is alternate. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Stores a cookie value and configures optional expires/max-age, path, domain, secure, HttpOnly, and SameSite attributes on the cookie jar, converting datetime expires values into a max-age when necessary." set_cookie]
+    [INPUTS]
+        <REF> key </REF>: string "Cookie name used as the key into self.cookies."
+        <REF> value </REF>: string "Cookie value to store; defaults to an empty string."
+        <REF> max_age </REF>: integer or None "Cookie max-age in seconds; optional."
+        <REF> expires </REF>: string, datetime.datetime, or None "Expiration as an HTTP date string, a naive datetime in UTC, an aware datetime in any timezone, or None."
+        <REF> path </REF>: string or None "Cookie path attribute; defaults to '/'."
+        <REF> domain </REF>: string or None "Cookie domain attribute; optional."
+        <REF> secure </REF>: boolean "If true, sets the Secure flag."
+        <REF> httponly </REF>: boolean "If true, sets the HttpOnly flag."
+        <REF> samesite </REF>: string or None "SameSite attribute; must be 'lax', 'none', or 'strict' when provided, case-insensitively."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store value in self.cookies at key. RESULT cookie_value_set]
+            [COMMAND If expires is None, set self.cookies[key]['expires'] to an empty string. RESULT expires_cleared]
+            [COMMAND If expires is not None and expires is not an instance of datetime.datetime, set self.cookies[key]['expires'] to expires. RESULT expires_literal_set]
+            [COMMAND If expires is an instance of datetime.datetime, within that datetime branch: if timezone.is_aware(expires), set expires = timezone.make_naive(expires, timezone.utc); then compute delta = expires - expires.utcnow(); add datetime.timedelta(seconds=1) to delta; set expires = None; set max_age = max(0, delta.days * 86400 + delta.seconds). RESULT expires_datetime_processed]
+            [COMMAND If max_age is not None, set self.cookies[key]['max-age'] to max_age; then, if expires is falsy, set self.cookies[key]['expires'] to http_date(time.time() + max_age). RESULT max_age_applied]
+            [COMMAND If path is not None, set self.cookies[key]['path'] to path. RESULT path_set]
+            [COMMAND If domain is not None, set self.cookies[key]['domain'] to domain. RESULT domain_set]
+            [COMMAND If secure is truthy, set self.cookies[key]['secure'] to True. RESULT secure_set]
+            [COMMAND If httponly is truthy, set self.cookies[key]['httponly'] to True. RESULT httponly_set]
+            [COMMAND If samesite is truthy, check samesite.lower() against the tuple ('lax', 'none', 'strict'); if it is valid, set self.cookies[key]['samesite'] to samesite, preserving its original casing. RESULT samesite_set]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: samesite is truthy and samesite.lower() is not in ('lax', 'none', 'strict')]
+        [LOG "samesite must be 'lax', 'none', or 'strict'."]
+        [THROW ValueError "Raised when the samesite argument is provided and its lowercased value is not one of the allowed SameSite values."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets a header value under the given key only if the key is not already present, preserving existing header values." setdefault]
+    [INPUTS]
+        <REF> self </REF>: mapping "The mutable header collection or mapping being updated."
+        <REF> key </REF>: object "The header name or key to set."
+        <REF> value </REF>: object "The value to store for key if key is absent."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the method, check whether key is not present in self. RESULT key_absent]
+            [COMMAND If key_absent is true, assign self[key] to value; otherwise, do nothing and leave self unchanged. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Signs the cookie value using a signer salted with the key and optional salt, then sets the cookie and returns the result of set_cookie." set_signed_cookie]
+    [INPUTS]
+        <REF> key </REF>: str "Cookie name/key used as the cookie name and as part of the signing salt."
+        <REF> value </REF>: Any "Cookie value to be signed before being set."
+        <REF> salt </REF>: str "Optional extra salt string appended to key when creating the cookie signer; defaults to empty string."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to self.set_cookie."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "Return value of self.set_cookie after setting the signed cookie."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a signer object by calling signing.get_cookie_signer with the salt computed as the concatenation of key and salt. RESULT signer]
+            [COMMAND Sign the current value by calling signer.sign(value) and overwrite value with the signed result. RESULT value]
+            [COMMAND Call self.set_cookie with key, the signed value, and the forwarded keyword arguments, returning its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deletes a cookie by setting max_age to 0 and expires to the Unix epoch, and enables the Secure flag when the cookie name starts with the reserved __Secure- or __Host- prefix." delete_cookie]
+    [INPUTS]
+        <REF> key </REF>: string "The name of the cookie to delete; also used to determine whether the Secure flag should be set."
+        <REF> path </REF>: string "The cookie path. Defaults to '/'."
+        <REF> domain </REF>: string|null "The optional cookie domain. Defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check case-sensitively whether key starts with either the exact prefix '__Secure-' or '__Host-' and assign the boolean result to the secure variable. RESULT secure]
+            [COMMAND Call self.set_cookie with key, max_age=0, path=path, domain=domain, secure=secure, and expires='Thu, 01 Jan 1970 00:00:00 GMT' to delete the cookie. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts an input value into a plain bytes object using self.charset, with early direct conversion for bytes/memoryview, encoded conversion for strings, and str(value) encoding for other types." make_bytes]
+    [INPUTS]
+        <REF> value </REF>: Any "The value to convert into a bytestring response body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bytes "A plain bytes object containing the converted value encoded in self.charset."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If value is an instance of bytes or memoryview, convert value to a plain bytes object using bytes(value) and return it immediately. RESULT return_value]
+            [COMMAND Otherwise, if value is an instance of str, encode value with self.charset using value.encode(self.charset), wrap the result in bytes(), and return it immediately. RESULT return_value]
+            [COMMAND If neither prior branch returns, convert value to a string using str(value), encode that string with self.charset, and return the resulting bytes object. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Closes all registered resource closers while suppressing per-closer exceptions, clears the resource closer list, marks the instance as closed, and emits the request_finished signal with the handler class as sender." close]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each closer in self._resource_closers, try to call closer(); if calling it raises an Exception, catch the exception and continue with the next closer. RESULT resource_closers_processed]
+            [COMMAND Clear self._resource_closers to release any resources still referenced. RESULT resource_closers_cleared]
+            [COMMAND Set self.closed to True. RESULT closed_flag_set]
+            [COMMAND Send the request_finished signal with sender set to self._handler_class. RESULT request_finished_signal_sent]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises an OSError whenever write is called, stating that the current stream instance is not writable." write]
+    [INPUTS]
+        <REF> self </REF>: object "The stream instance on which write is invoked."
+        <REF> content </REF>: object "The content requested to be written; it is ignored because the method always raises an exception."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enter the write method and immediately transition to the exception flow because the current instance is not writable. RESULT _exception_flow]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The write method is invoked, which is unconditional for this implementation.]
+        [LOG "This {self.__class__.__name__} instance is not writable"]
+        [THROW OSError "Indicates that the stream does not support write operations."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Flush is a no-op method that performs no operations and returns None." flush]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do nothing and implicitly return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises an OSError indicating that this instance cannot report its current position." tell]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Signal that the object cannot tell its position RESULT exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: always]
+        [LOG "This {class_name} instance cannot tell its position"]
+        [THROW OSError "Indicates that the object does not support telling its position."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the object is readable and always returns False." readable]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the readable method is invoked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "Always False because the method unconditionally returns False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean literal False to the caller and exit the method immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns False to indicate that the file-like object is not seekable." seekable]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "Always False, indicating the stream is not seekable."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean literal False immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns False to indicate that the object is not writable." writable]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "Always False, indicating that the object is not writable."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean literal False as the unconditional result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises an OSError whenever writelines is called, indicating that this stream instance is not writable." writelines]
+    [INPUTS]
+        <REF> lines </REF>: Iterable[str] or Iterable[bytes] "The lines that would be written to the stream if it were writable."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When this method is invoked, because this stream instance is not writable]
+        [LOG "This {self.__class__.__name__} instance is not writable"]
+        [THROW OSError "Indicates that the stream does not support write operations."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS HttpResponse
+
+[DEFINE_WORKER: "Initializes a new instance by forwarding arguments to the parent initializer and assigning the content bytestring to self.content." __init__]
+    [INPUTS]
+        <REF> content </REF>: bytes "Initial content bytestring to store on the instance; defaults to an empty bytestring."
+        <REF> args </REF>: tuple "Positional arguments forwarded to the parent class initializer."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to the parent class initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the parent class initializer, forwarding the supplied positional arguments and keyword arguments. RESULT parent_initialization]
+            [COMMAND Assign the content value to self.content, preserving the default empty bytestring when no content was supplied. RESULT self.content]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Serializes the full HTTP message by concatenating the serialized headers, the standard header/body separator, and the content into a single bytestring." serialize]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bytes "Complete HTTP message as a bytestring, including headers, header/body separator, and content."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call serialize_headers on the current object to obtain the byte string containing the serialized HTTP headers. RESULT headers_bytes]
+            [COMMAND Append the constant byte sequence b'\r\n\r\n' to headers_bytes as the header/body separator. RESULT headers_with_separator]
+            [COMMAND Append the current object's content to headers_with_separator to form the complete HTTP message. RESULT message_bytes]
+            [COMMAND Return message_bytes as the bytestring result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the concatenation of all bytes-like elements in the container attribute into a single bytes object with no separator." content]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bytes "A new bytes object containing the concatenated elements of the container attribute in iteration order; if the container is empty, this is an empty bytes object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current value of the container attribute self._container. RESULT container_value]
+            [COMMAND Call the join method of the empty bytes literal b'' with container_value as the iterable argument, iterating over container_value in order and concatenating its bytes-like elements into a new bytes object without any separator bytes; if container_value is empty, produce an empty bytes object. RESULT joined_bytes]
+            [COMMAND Return joined_bytes as the final result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: container_value is None or is not iterable]
+        [LOG "TypeError raised because bytes.join requires an iterable of bytes-like objects."]
+        [THROW TypeError "The container attribute must be iterable; None and other non-iterable values are not accepted."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: An element yielded by container_value is not a bytes-like object]
+        [LOG "TypeError raised by bytes.join because an element is not bytes-like."]
+        [THROW TypeError "Every element of the container attribute must be bytes-like to be concatenated."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a value to bytes by consuming iterable chunks through self.make_bytes and joining them, or by converting the value directly, then stores the resulting bytes as a one-element list in self._container." content]
+    [INPUTS]
+        <REF> value </REF>: any "Value to convert to bytes: an iterable whose chunks are accepted by self.make_bytes, or a single value accepted by self.make_bytes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the outer condition using short-circuit logical AND: if value has an __iter__ attribute and is not an instance of bytes or str, take the iterable conversion path; otherwise take the direct conversion path. RESULT condition_result]
+            [COMMAND After the selected conversion path has set content, assign self._container to a list containing content. RESULT self._container]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value has an __iter__ attribute and is not an instance of bytes or str]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Consume value by iterating over it, convert each chunk with self.make_bytes(chunk), join all converted chunks with an empty bytes separator b'', and assign the resulting bytes to content. RESULT content]
+            [COMMAND After content is set, if value has a close attribute, attempt to call value.close() inside a try block. If the call raises any Exception, catch and ignore the exception. RESULT close_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: value does not have an __iter__ attribute, or value is an instance of bytes or str]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert value as a whole by calling self.make_bytes(value) and assign the resulting bytes to content. RESULT content]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the supplied content to bytes and appends those bytes to the internal container." write]
+    [INPUTS]
+        <REF> content </REF>: object "The content to be converted into a bytes-like value by self.make_bytes and appended to self._container."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert content to a bytes-like value by calling self.make_bytes(content). RESULT converted_bytes]
+            [COMMAND Append converted_bytes to the end of self._container using self._container.append(converted_bytes); the append return value is discarded. RESULT self._container]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the length of the instance attribute self.content as an integer." tell]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> length </REF>: int "The number of elements in self.content; 0 when self.content is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the instance attribute self.content. RESULT content]
+            [COMMAND Call len() on content to compute its integer length. RESULT length]
+            [COMMAND Return length to the caller. RESULT length]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.content has not been initialized before tell() is called.]
+        [LOG "AttributeError: instance has no attribute 'content'"]
+        [THROW AttributeError "Raised when self.content is missing."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.content is None or does not support the Python len() protocol.]
+        [LOG "TypeError: object of type ... has no len()"]
+        [THROW TypeError "Raised when self.content is not a sized object compatible with len()."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the value of the content attribute of the object." getvalue]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "The value of self.content."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value stored in the attribute self.content. RESULT content]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Indicates whether the object is writable by unconditionally returning True." writable]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "Always True, indicating the object is writable."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean literal True unconditionally from the enclosing method. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Writes every line from the lines collection to the underlying output stream by calling self.write for each line." writelines]
+    [INPUTS]
+        <REF> self </REF>: object "The object on which writelines is invoked; its write method is called for each line."
+        <REF> lines </REF>: Iterable[str] "A collection of line strings to be written in order."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each line in lines, call self.write(line) to write the line to the underlying output stream. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS StreamingHttpResponse
+
+[DEFINE_WORKER: "Initializes the object by forwarding all positional and keyword arguments to the parent initializer and storing the supplied streaming_content iterable, defaulting to an empty tuple, as self.streaming_content." __init__]
+    [INPUTS]
+        <REF> streaming_content </REF>: iterable of bytestrings "An iterable of bytestrings to store as self.streaming_content; defaults to an empty tuple."
+        <REF> args </REF>: tuple "Positional arguments forwarded unchanged to the parent class initializer."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded unchanged to the parent class initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().__init__(*args, **kwargs), forwarding the same positional and keyword arguments. RESULT None]
+            [COMMAND Assign streaming_content to self.streaming_content, or use the default empty tuple if no value was supplied, without any validation or transformation. RESULT self.streaming_content]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises an AttributeError explaining that this instance has no content attribute and directing callers to use streaming_content instead." content]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the current instance class name using self.__class__.__name__. RESULT class_name]
+            [COMMAND Format the message 'This %s instance has no `content` attribute. Use `streaming_content` instead.' with class_name. RESULT error_message]
+            [COMMAND Raise AttributeError with error_message. RESULT raised_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Whenever this method is invoked, because the instance does not support a content attribute.]
+        [LOG "This %s instance has no `content` attribute. Use `streaming_content` instead."]
+        [THROW AttributeError "Indicates that the content attribute is absent and that streaming_content should be used instead."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a lazy map object that applies self.make_bytes to each item from self._iterator, yielding streamed content only as the result is iterated." streaming_content]
+    [INPUTS]
+        <REF> self </REF>: object "The object providing the callable make_bytes and the iterable _iterator used by the mapping."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> streaming_content_result </REF>: map "A lazy map object yielding self.make_bytes(item) for each item in self._iterator; if self._iterator is empty, the map yields no elements."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a new map object that lazily applies self.make_bytes to each element yielded by self._iterator. RESULT streaming_content_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the streaming content by delegating the provided value to the internal setter method." streaming_content]
+    [INPUTS]
+        <REF> value </REF>: any "The value to set as streaming content."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the internal setter _set_streaming_content with the provided value to update the streaming content state. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets self._iterator to a one-shot iterator over value and registers value.close as a resource closer when value has a close attribute." _set_streaming_content]
+    [INPUTS]
+        <REF> value </REF>: Iterable "The source content to be streamed; must be iterable and may optionally provide a close() method for resource cleanup."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: None "The method returns None; it updates self._iterator and may append value.close to self._resource_closers."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self._iterator to the result of iter(value), creating a single iterator over value so that value is never iterated more than once. RESULT self._iterator]
+            [COMMAND Check whether value has a close attribute by evaluating hasattr(value, 'close'). RESULT has_close]
+            [COMMAND If value has a close attribute, append value.close to self._resource_closers. RESULT self._resource_closers]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: value is not iterable, so iter(value) raises TypeError]
+        [LOG "TypeError: value is not iterable"]
+        [THROW TypeError "Raised by iter(value) when value does not support iteration."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the accumulated streaming content as a single bytes object by joining all chunks in order." getvalue]
+    [INPUTS]
+        <REF> self </REF>: object "Object that exposes streaming_content as an iterable of bytes-like chunks."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bytes "The concatenated bytes produced from all items in self.streaming_content."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Concatenate all items in self.streaming_content using bytes.join with an empty bytes literal as the separator, preserving iteration order, and return the resulting bytes object. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS FileResponse
+
+[DEFINE_WORKER: "Initializes the object by setting the as_attachment and filename attributes from the provided arguments and then forwards all remaining positional and keyword arguments to the parent class initializer." __init__]
+    [INPUTS]
+        <REF> args </REF>: tuple "Positional arguments to be forwarded to the parent class initializer."
+        <REF> as_attachment </REF>: bool "Flag indicating whether the object is created as an attachment; defaults to False."
+        <REF> filename </REF>: str "Filename to store on the instance; defaults to an empty string."
+        <REF> kwargs </REF>: dict "Keyword arguments to be forwarded to the parent class initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.as_attachment to the value of the as_attachment parameter, preserving the default False when no argument is provided. RESULT self.as_attachment]
+            [COMMAND Set self.filename to the value of the filename parameter, preserving the default empty string when no argument is provided. RESULT self.filename]
+            [COMMAND Call the parent class initializer with the positional arguments *args and the keyword arguments **kwargs to complete initialization. RESULT super().__init__]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Configures streaming content by delegating non-file-like values to the parent implementation and converting file-like values into a lazily-read chunk iterator with cleanup and header setup before delegating to the parent." _set_streaming_content]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance whose file_to_stream, _resource_closers, block_size, and headers are used or modified."
+        <REF> value </REF>: object "The content to set as streaming content; file-like values expose read and may expose close."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object|null "Returns the parent implementation's result when value lacks read; otherwise returns None after delegating to the parent."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND When value has a read attribute, assign self.file_to_stream = filelike = value. RESULT filelike]
+            [COMMAND If filelike has a close attribute, append filelike.close to self._resource_closers. RESULT resource_closers]
+            [COMMAND Replace value with iter(lambda: filelike.read(self.block_size), b''), a lazy byte-chunk iterator that stops when read returns b''. RESULT value]
+            [COMMAND Call self.set_headers(filelike). RESULT headers_set]
+            [COMMAND Call super()._set_streaming_content(value) with the chunk iterator. RESULT super_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value does not have a read attribute]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.file_to_stream = None. RESULT file_to_stream]
+            [COMMAND Return super()._set_streaming_content(value) immediately, delegating to the parent implementation. RESULT fallback_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the Content-Length, Content-Type, and Content-Disposition response headers based on the filelike object, the configured filename, and the attachment mode." set_headers]
+    [INPUTS]
+        <REF> self </REF>: object "Response object that provides header storage, filename, and as_attachment state."
+        <REF> filelike </REF>: file-like object "Response content object used to infer the file name, buffer size, and MIME type."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create encoding_map with the exact mappings 'bzip2' to 'application/x-bzip', 'gzip' to 'application/gzip', and 'xz' to 'application/x-xz'. RESULT encoding_map]
+            [COMMAND Set filename to getattr(filelike, 'name', None). RESULT filename]
+            [COMMAND Reassign filename to the current filename only if it is a non-empty string; otherwise assign self.filename. RESULT filename]
+            [COMMAND If os.path.isabs(filename) is true, set self['Content-Length'] to os.path.getsize(filelike.name). RESULT self['Content-Length']]
+            [COMMAND If os.path.isabs(filename) is false and filelike has a getbuffer method, set self['Content-Length'] to filelike.getbuffer().nbytes. RESULT self['Content-Length']]
+            [COMMAND If os.path.isabs(filename) is false and filelike does not have a getbuffer method, leave self['Content-Length'] unchanged. RESULT self['Content-Length']]
+            [COMMAND If self.get('Content-Type', '').startswith('text/html') and filename is truthy, call mimetypes.guess_type(filename) to obtain content_type and encoding, then set content_type to encoding_map.get(encoding, content_type). RESULT content_type]
+            [COMMAND If self.get('Content-Type', '').startswith('text/html') and filename is truthy, set self['Content-Type'] to content_type if content_type is truthy, otherwise 'application/octet-stream'. RESULT self['Content-Type']]
+            [COMMAND If self.get('Content-Type', '').startswith('text/html') and filename is falsy, set self['Content-Type'] to 'application/octet-stream'. RESULT self['Content-Type']]
+            [COMMAND If self.get('Content-Type', '').startswith('text/html') is false, leave self['Content-Type'] unchanged. RESULT self['Content-Type']]
+            [COMMAND Set filename to self.filename if self.filename is truthy, otherwise os.path.basename(filename). RESULT filename]
+            [COMMAND If filename is truthy, set disposition to 'attachment' if self.as_attachment is truthy, otherwise 'inline'. RESULT disposition]
+            [COMMAND If filename is truthy, attempt filename.encode('ascii'); on success set file_expr to 'filename="{}"'.format(filename), and on UnicodeEncodeError set file_expr to "filename*=utf-8''{}".format(quote(filename)). RESULT file_expr]
+            [COMMAND If filename is truthy, set self['Content-Disposition'] to '{}; {}'.format(disposition, file_expr). RESULT self['Content-Disposition']]
+            [COMMAND If filename is falsy and self.as_attachment is truthy, set self['Content-Disposition'] to 'attachment'. RESULT self['Content-Disposition']]
+            [COMMAND If filename is falsy and self.as_attachment is falsy, leave self['Content-Disposition'] unchanged. RESULT self['Content-Disposition']]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS HttpResponseRedirectBase
+
+[DEFINE_WORKER: "Initializes the parent class with forwarded arguments and removes the 'content-type' key from the instance mapping." __init__]
+    [INPUTS]
+        <REF> self </REF>: object "The instance being initialized; expected to support item deletion via self['content-type']."
+        <REF> args </REF>: tuple "Positional arguments forwarded unchanged to the parent class initializer."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded unchanged to the parent class initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Forward all positional arguments in args and keyword arguments in kwargs unchanged to the parent class initializer by calling super().__init__(*args, **kwargs), and discard the return value. RESULT parent_initialized]
+            [COMMAND Delete the key 'content-type' from self using del self['content-type']. RESULT content_type_key_removed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the internal `_container` to a new empty list when the provided value is falsy, and raises an `AttributeError` when the value is truthy." content]
+    [INPUTS]
+        <REF> value </REF>: any "Incoming value to validate; if truthy, the method raises an AttributeError, otherwise the internal container is reset to an empty list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of the incoming `value`. RESULT value_is_truthy]
+            [COMMAND If `value_is_truthy` is false, set `self._container` to a new empty list `[]`. RESULT self._container]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: `value` is truthy]
+        [LOG "You cannot set content to a 304 (Not Modified) response"]
+        [THROW AttributeError "Raises an AttributeError to reject setting content when a truthy value is provided."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS HttpResponseBadRequest
+
+# CLASS HttpResponseNotFound
+
+# CLASS HttpResponseForbidden
+
+# CLASS HttpResponseNotAllowed
+
+[DEFINE_WORKER: "Initializes the object by forwarding *args and **kwargs to the parent initializer and assigning the comma-separated join of permitted_methods to the 'Allow' key." __init__]
+    [INPUTS]
+        <REF> permitted_methods </REF>: iterable of strings "Iterable of strings to be joined with ', ' and stored in the 'Allow' key."
+        <REF> args </REF>: tuple "Positional arguments forwarded unchanged to the parent initializer."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded unchanged to the parent initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke the parent class initializer with the positional arguments *args and keyword arguments **kwargs to initialize inherited state. RESULT super_result]
+            [COMMAND Join every element of permitted_methods in iteration order with ', ' as the separator and assign the resulting string to self['Allow']; an empty iterable produces an empty string and a one-element iterable is left unchanged. RESULT self['Allow']]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: permitted_methods is None, is not iterable, or contains a non-string element when the join operation runs.]
+        [LOG "TypeError: permitted_methods must be an iterable of strings for str.join."]
+        [THROW TypeError "str.join raises TypeError because permitted_methods is None, is not iterable, or contains non-string values."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS HttpResponseGone
+
+# CLASS HttpResponseServerError
+
+# CLASS Http404
+
+# CLASS JsonResponse
+
+[DEFINE_WORKER: "Initializes a JSON response object by validating that dict data is provided when safe is enabled, serializing the data with the configured JSON encoder, and delegating to the parent initializer with an application/json content type." JsonResponse.__init__]
+    [INPUTS]
+        <REF> data </REF>: object "The Python object to serialize into JSON."
+        <REF> encoder </REF>: type "JSON encoder class used by json.dumps; defaults to DjangoJSONEncoder."
+        <REF> safe </REF>: bool "If True, data must be a dict; otherwise a TypeError is raised."
+        <REF> json_dumps_params </REF>: dict "Extra keyword arguments forwarded to json.dumps; None is replaced with an empty dictionary."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to the parent initializer; content_type is set to 'application/json' if absent."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate the safe flag. If safe is truthy and data is not a dict, raise a TypeError; otherwise continue. RESULT validation_passed]
+            [COMMAND If json_dumps_params is None, assign an empty dictionary to json_dumps_params. RESULT json_dumps_params]
+            [COMMAND Set kwargs['content_type'] to 'application/json' if 'content_type' is not already present in kwargs. RESULT kwargs]
+            [COMMAND Serialize data to a JSON string by calling json.dumps(data, cls=encoder, **json_dumps_params), and assign the returned string back to data. RESULT data]
+            [COMMAND Call the parent initializer with super().__init__(content=data, **kwargs). RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: safe is truthy and data is not a dict (safe is evaluated first due to short-circuiting)]
+        [LOG "In order to allow non-dict objects to be serialized set the safe parameter to False."]
+        [THROW TypeError "Raised to reject non-dict data when the safe flag is enabled."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

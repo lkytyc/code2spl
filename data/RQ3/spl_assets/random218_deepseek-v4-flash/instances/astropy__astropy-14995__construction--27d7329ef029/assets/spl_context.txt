@@ -1,0 +1,333 @@
+# FILE: astropy/nddata/mixins/ndarithmetic.py
+# CLASS NDArithmeticMixin
+
+[DEFINE_WORKER: "Calculates the result data of a unit-aware arithmetic operation by selecting the appropriate unit conversion for self and operand, with an axis-reduction fallback when operand is None." _arithmetic_data]
+    [INPUTS]
+        <REF> self </REF>: NDData-like "The instance on which the method is called; provides data and unit attributes."
+        <REF> operation </REF>: callable "The arithmetic operation to apply to the data and unit expressions."
+        <REF> operand </REF>: NDData-like or None "The second operand wrapped in an instance of the same class as self. When None, the operation is performed as an axis reduction."
+        <REF> kwds </REF>: dict "Additional keyword arguments. In the axis-reduction branch, must contain axis."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ndarray or astropy.units.Quantity "The result data. If either operand has a unit, it is a Quantity; otherwise it is a plain ndarray."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether `self.unit is None`. RESULT self_unit_is_none]
+            [COMMAND In the case where `self.unit is None`, check whether `operand.unit is None`. RESULT operand_unit_is_none]
+            [COMMAND In the case where `self.unit is None` and `operand.unit is None`, set `result` to `operation(self.data, operand.data)`. RESULT result]
+            [COMMAND In the case where `self.unit is None` and `operand.unit is not None`, set `result` to `operation(self.data << dimensionless_unscaled, operand.data << operand.unit)`. RESULT result]
+            [COMMAND In the case where `self.unit is not None`, check whether `operand` has a `unit` attribute using `hasattr(operand, 'unit')`. RESULT operand_has_unit]
+            [COMMAND In the case where `self.unit is not None` and `operand` has a `unit` attribute, check whether `operand.unit is not None`. RESULT operand_unit_is_not_none]
+            [COMMAND In the case where `self.unit is not None`, `operand` has a `unit` attribute, and `operand.unit is not None`, set `result` to `operation(self.data << self.unit, operand.data << operand.unit)`. RESULT result]
+            [COMMAND In the case where `self.unit is not None`, `operand` has a `unit` attribute, and `operand.unit is None`, set `result` to `operation(self.data << self.unit, operand.data << dimensionless_unscaled)`. RESULT result]
+            [COMMAND In the case where `self.unit is not None`, `operand` does not have a `unit` attribute, and `operand is not None`, set `result` to `operation(self.data << self.unit, operand.data << operand.unit)`. RESULT result]
+            [COMMAND In the case where `self.unit is not None`, `operand` does not have a `unit` attribute, and `operand is None`, set `result` to `operation(self.data, axis=kwds['axis'])`. RESULT result]
+            [COMMAND Return `result`. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Calculates the resulting uncertainty for an arithmetic operation by validating that all non-None uncertainties are NDUncertainty instances and then propagating uncertainty from self, operand, or both while returning None when neither has uncertainty." _arithmetic_uncertainty]
+    [INPUTS]
+        <REF> operation </REF>: callable "The arithmetic operation used in propagation."
+        <REF> operand </REF>: NDData-like instance "The second operand wrapped in an instance of the same class as self."
+        <REF> result </REF>: ~astropy.units.Quantity or ~numpy.ndarray "The data result of the arithmetic operation."
+        <REF> correlation </REF>: number or ~numpy.ndarray "Correlation factor used during uncertainty propagation."
+        <REF> kwds </REF>: dict "Additional keyword parameters, such as axis for collapsing operations."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result_uncertainty </REF>: NDUncertainty subclass instance or None "The propagated uncertainty, or None if neither input has uncertainty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that self.uncertainty is either None or an instance of NDUncertainty. RESULT self_uncertainty_type_validated]
+            [COMMAND Check that operand, if it has an uncertainty, has either a None uncertainty or an NDUncertainty instance. RESULT operand_uncertainty_type_validated]
+            [COMMAND Select the uncertainty propagation path based on whether self.uncertainty is None and whether operand is present with a non-None uncertainty. RESULT propagation_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.uncertainty is None and (operand has no 'uncertainty' attribute or operand.uncertainty is None)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None because neither self nor operand has an uncertainty to propagate. RESULT result_uncertainty]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.uncertainty is None and operand is not None and operand.uncertainty is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a temporary uncertainty on self using operand.uncertainty.__class__(None). RESULT self.uncertainty]
+            [COMMAND Call self.uncertainty.propagate(operation, operand, result, correlation) and assign the returned value to result_uncert. RESULT result_uncert]
+            [COMMAND Restore self.uncertainty to None to remove the temporary uncertainty. RESULT self.uncertainty]
+            [COMMAND Return result_uncert as the propagated uncertainty. RESULT result_uncert]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.uncertainty is not None and operand is not None and operand.uncertainty is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a temporary uncertainty on operand using self.uncertainty.__class__(None). RESULT operand.uncertainty]
+            [COMMAND Call self.uncertainty.propagate(operation, operand, result, correlation) and assign the returned value to result_uncert. RESULT result_uncert]
+            [COMMAND Restore operand.uncertainty to None to remove the temporary uncertainty. RESULT operand.uncertainty]
+            [COMMAND Return result_uncert as the propagated uncertainty. RESULT result_uncert]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.uncertainty is not None and (operand is None or operand.uncertainty is not None)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute axis_kwarg as dict(axis=kwds['axis']) if 'axis' is present in kwds, otherwise as an empty dict. RESULT axis_kwarg]
+            [COMMAND Call self.uncertainty.propagate(operation, operand, result, correlation, **axis_kwarg) and return the resulting uncertainty. RESULT result_uncertainty]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.uncertainty is not None and not isinstance(self.uncertainty, NDUncertainty)]
+        [LOG "Uncertainty propagation is only defined for subclasses of NDUncertainty."]
+        [THROW TypeError "self.uncertainty is not None but is not an NDUncertainty subclass."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: operand is not None and operand.uncertainty is not None and not isinstance(operand.uncertainty, NDUncertainty)]
+        [LOG "Uncertainty propagation is only defined for subclasses of NDUncertainty."]
+        [THROW TypeError "operand.uncertainty is not None but is not an NDUncertainty subclass."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compute the resulting mask by evaluating the mask-presence guard chain: return None for the no-handler or both-masks-absent condition, return deep copies in the single-mask branches, and otherwise call handle_mask with the two mask values." _arithmetic_mask]
+    [INPUTS]
+        <REF> operation </REF>: callable "Arithmetic operation being performed; ignored by this mask calculation."
+        <REF> operand </REF>: NDData-like or None "Second operand wrapped in an instance of the same class as self; may be None for unary operations."
+        <REF> handle_mask </REF>: callable or None "Function used to combine masks; if None, the result mask is None."
+        <REF> axis </REF>: object or None "Unused axis parameter accepted for interface compatibility."
+        <REF> kwds </REF>: dict "Additional keyword arguments passed through to handle_mask."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result_mask </REF>: any "The combined mask, a deep copy of a single existing mask, or None when no mask or no handler is available."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the early-exit guard using short-circuit semantics: (self.mask is None and operand is not None and operand.mask is None) or handle_mask is None. If it is true, return None immediately. RESULT None]
+            [COMMAND If the early-exit guard was false and self.mask is None and operand is not None, return deepcopy(operand.mask) immediately. RESULT deepcopy(operand.mask)]
+            [COMMAND If the previous guards were false and operand is None, return deepcopy(self.mask) immediately. RESULT deepcopy(self.mask)]
+            [COMMAND Otherwise, return handle_mask(self.mask, operand.mask, **kwds). RESULT handle_mask(self.mask, operand.mask, **kwds)]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compares the WCS of two operands using compare_wcs and returns a deep copy of self.wcs when they are considered equal." _arithmetic_wcs]
+    [INPUTS]
+        <REF> operation </REF>: callable "Arithmetic operation; ignored by this method."
+        <REF> operand </REF>: NDData instance or subclass "Second operand wrapped in an instance of the same class as self."
+        <REF> compare_wcs </REF>: callable "Callable that compares self.wcs and operand.wcs and accepts additional keyword arguments."
+        <REF> kwds </REF>: dict "Additional keyword arguments passed to compare_wcs."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result_wcs </REF>: any type "A deep copy of self.wcs returned when the WCS comparison succeeds."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call compare_wcs with self.wcs, operand.wcs, and **kwds and evaluate whether the result is truthy. RESULT wcs_equal]
+            [COMMAND Return a deep copy of self.wcs. RESULT result_wcs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When compare_wcs is called with self.wcs, operand.wcs, and **kwds and returns a false-like value, indicating that the two WCS objects are not equal.]
+        [LOG "WCS are not equal."]
+        [THROW ValueError "Raised when compare_wcs returns a false-like value, stopping execution because the WCS objects are not equal."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates metadata processing to handle_meta by passing self.meta and operand.meta with additional keyword arguments and returning the result unchanged." _arithmetic_meta]
+    [INPUTS]
+        <REF> operation </REF>: callable "Callable operation supplied by NDArithmeticMixin._arithmetic; ignored by this method."
+        <REF> operand </REF>: NDData-like instance "Second operand wrapped in an instance of the same class as self; its meta attribute is forwarded to handle_meta."
+        <REF> handle_meta </REF>: callable "Callable invoked with self.meta, operand.meta, and expanded kwds to produce the resulting metadata."
+        <REF> kwds </REF>: dict "Additional keyword arguments forwarded to handle_meta."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result_meta </REF>: any type "The value returned by handle_meta after processing both metadata objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ignore the operation parameter because it is not used by this method. RESULT none]
+            [COMMAND Call handle_meta with self.meta as the first positional argument, operand.meta as the second positional argument, and the expanded kwds as keyword arguments. RESULT result_meta]
+            [COMMAND Return result_meta unchanged to the caller. RESULT result_meta]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates addition to _prepare_then_do_arithmetic, passing np.add and the supplied operands and keyword arguments, and returns the result." add]
+    [INPUTS]
+        <REF> self </REF>: object "Current instance providing access to _prepare_then_do_arithmetic."
+        <REF> operand </REF>: numeric or array-like "First operand for the addition operation."
+        <REF> operand2 </REF>: numeric or array-like or None "Second operand for the addition operation; defaults to None when omitted."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to _prepare_then_do_arithmetic."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Return value of _prepare_then_do_arithmetic after applying np.add to the prepared operands."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._prepare_then_do_arithmetic with np.add as the operation, passing operand, operand2, and **kwargs, then return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Subtracts operand2 from operand by delegating to _prepare_then_do_arithmetic with np.subtract and forwarding the optional right operand and keyword arguments." subtract]
+    [INPUTS]
+        <REF> operand </REF>: object "Left operand for subtraction; array-like or scalar."
+        <REF> operand2 </REF>: object "Optional right operand for subtraction; defaults to None."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to the helper and ultimately to np.subtract."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Element-wise subtraction result produced by _prepare_then_do_arithmetic."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self._prepare_then_do_arithmetic with np.subtract as the operation, operand as the left operand, operand2 as the right operand, and kwargs as additional keyword arguments. RESULT result]
+            [COMMAND Return the result of the _prepare_then_do_arithmetic call to the caller. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Multiplies operand by operand2 using np.multiply through the prepared arithmetic helper, forwarding any additional keyword arguments." multiply]
+    [INPUTS]
+        <REF> operand </REF>: Any "Left operand for multiplication."
+        <REF> operand2 </REF>: Any "Right operand for multiplication; defaults to None."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to the arithmetic preparation helper."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "Result of self._prepare_then_do_arithmetic(np.multiply, operand, operand2, **kwargs)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._prepare_then_do_arithmetic with np.multiply as the binary operation, operand and operand2 as the operands, and **kwargs forwarded as additional keyword arguments. RESULT _prepared_result]
+            [COMMAND Return _prepared_result as the result of the multiply method. RESULT _return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes true division of operand by operand2 by forwarding the operation to the internal arithmetic preparation helper with np.true_divide and all keyword arguments." divide]
+    [INPUTS]
+        <REF> operand </REF>: object "Dividend; can be a scalar or array-like value for the true division operation."
+        <REF> operand2 </REF>: object "Optional divisor; if omitted, defaults to None and is still passed to the internal helper."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to the arithmetic helper, such as dtype, out, where, or casting."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "Result of np.true_divide prepared and produced by self._prepare_then_do_arithmetic; scalar, ndarray, or helper-dependent type."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self._prepare_then_do_arithmetic with np.true_divide as the operation, operand as the dividend, operand2 as the divisor, and **kwargs as additional keyword arguments, then return the result directly to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the sum of the instance's prepared internal data by delegating to _prepare_then_do_arithmetic with np.sum as the arithmetic operation and forwarding all keyword arguments." sum]
+    [INPUTS]
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to _prepare_then_do_arithmetic and ultimately to np.sum, such as axis, dtype, keepdims, initial, and where."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "The value returned by _prepare_then_do_arithmetic after applying np.sum to the prepared internal data."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of calling self._prepare_then_do_arithmetic with np.sum as the first positional argument and the unpacked keyword arguments from kwargs. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the arithmetic mean by delegating to _prepare_then_do_arithmetic with NumPy's mean function and the supplied keyword arguments." mean]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the mean method is called."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to _prepare_then_do_arithmetic; accepted keys depend on that method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "The value returned by _prepare_then_do_arithmetic, typically a numeric scalar or NumPy array representing the mean."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._prepare_then_do_arithmetic with np.mean as the first positional argument and all keyword arguments from kwargs expanded at the call site, then return the resulting value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the minimum value for the object by extracting the optional propagate_uncertainties keyword argument from kwargs and delegating to the arithmetic helper with np.min." min]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is invoked."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to the underlying arithmetic operation. May include propagate_uncertainties to control uncertainty propagation."
+        <REF> propagate_uncertainties </REF>: boolean or None "Optional keyword argument controlling uncertainty propagation. It is removed from kwargs and passed explicitly. Defaults to None when absent."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Result of applying np.min through self._prepare_then_do_arithmetic with the given propagate_uncertainties value and remaining keyword arguments."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Pop the key "propagate_uncertainties" from kwargs using a default of None, storing the value in propagate_uncertainties and mutating kwargs by removing the key if it was present. RESULT propagate_uncertainties]
+            [COMMAND Call self._prepare_then_do_arithmetic with np.min as the first positional argument, propagate_uncertainties=propagate_uncertainties, and the remaining **kwargs expanded as keyword arguments. RESULT return_value]
+            [COMMAND Return the value returned by self._prepare_then_do_arithmetic. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the maximum of the data by consuming the optional propagate_uncertainties keyword from kwargs and delegating to _prepare_then_do_arithmetic with np.max while forwarding the remaining keyword arguments." max]
+    [INPUTS]
+        <REF> kwargs </REF>: dict "Optional keyword arguments forwarded to _prepare_then_do_arithmetic after removing propagate_uncertainties, if present."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "Return value from _prepare_then_do_arithmetic, representing the computed maximum with optional uncertainty propagation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Remove the 'propagate_uncertainties' key from kwargs using pop with default None and assign the resulting value to propagate_uncertainties. RESULT propagate_uncertainties]
+            [COMMAND Call self._prepare_then_do_arithmetic with np.max, propagate_uncertainties passed explicitly, and the remaining kwargs forwarded as keyword arguments. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If 'propagate_uncertainties' is absent from kwargs]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign None to propagate_uncertainties without mutating kwargs. RESULT propagate_uncertainties]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If 'propagate_uncertainties' is present in kwargs]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Remove the key from kwargs and assign its value to propagate_uncertainties, even if the value is None or falsey. RESULT propagate_uncertainties]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

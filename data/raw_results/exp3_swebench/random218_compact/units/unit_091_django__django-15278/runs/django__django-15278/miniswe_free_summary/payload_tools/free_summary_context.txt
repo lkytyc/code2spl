@@ -1,0 +1,16 @@
+# FILE: django/db/backends/sqlite3/schema.py
+This is a custom database schema editor for SQLite, extending Django’s base schema editor. It adapts schema changes to SQLite’s limitations, such as rebuilding tables for most column alterations and manually managing foreign key constraints.
+
+The editor temporarily disables foreign key constraint checks when entering a schema-editing transaction and re-enables them on exit, ensuring SQLite does not enforce constraints mid-alteration. It also provides custom SQL quoting for parameter values, supporting booleans, numbers, strings, nulls, and binary data as blob literals.
+
+For table renames, if the old table is referenced by foreign keys and the SQLite version cannot atomically rename references, it disables constraint checking around the rename; inside a transaction this raises an error. Column renames involving foreign keys use a workaround: after the rename, it directly updates `sqlite_master` to replace old column references, then runs a `VACUUM`.
+
+The core mechanism is `_remake_table`, which rebuilds a table when schema changes cannot be done in place. It creates a temporary new table with the updated field definitions, copies existing data over, drops the original table, renames the temporary table back, and restores indexes and constraints. It handles adding, altering, and deleting fields, including primary key transitions, unique/index constraints, and self-referential fields.
+
+Field additions with defaults or non-null requirements trigger a table remake; nullable fields without defaults use the standard SQLite add-column path. Field removal remakes the table, with special handling for many-to-many fields: implicit through tables are deleted, while explicit through tables are left alone.
+
+Physical field changes remakes the table, unless the only change is a column rename that can use `ALTER TABLE ... RENAME COLUMN` without affecting constraints. After making a field unique and changing its type, it also rebuilds related tables with foreign keys pointing to that field.
+
+Many-to-many alterations either update an existing through table by remaking it with a changed reverse field, or if the through table changes, create a new through table, copy data from the old one, and delete the old through table.
+
+Adding or removing unique constraints with special options—conditions, expressions, included columns, or deferrability—uses the default descriptor behavior; all other constraints trigger a table remake. Collation clauses are emitted with the `COLLATE` prefix.

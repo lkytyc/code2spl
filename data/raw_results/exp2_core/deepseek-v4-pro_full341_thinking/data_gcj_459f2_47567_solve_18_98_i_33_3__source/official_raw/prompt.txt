@@ -1,0 +1,335 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.ArrayList;
+2   import java.util.Arrays;
+3   import java.util.HashMap;
+4   import java.util.List;
+5   import java.util.Map;
+6   import java.util.Scanner;
+7   import java.util.Set;
+8   public class Solution {
+9   	public static void main(String[] args) {
+10  		Scanner sc = new Scanner(System.in);
+11  		int t = sc.nextInt();
+12  		for (int i = 0; i < t; i++) {
+13  			solve(sc, i + 1);
+14  		}
+15  	}
+16  	static Map<Integer, Set<Integer>> all;
+17  	static int l;
+18  	private static void solve(Scanner sc, int num) {
+19  		boolean result = false;
+20  		int c = sc.nextInt();
+21  		int[] b = new int[c];
+22  		int[] r = new int[c];
+23  		for (int i = 0; i < c; i++) {
+24  			b[i] = sc.nextInt();
+25  			r[i] = 1;
+26  		}
+27  		int[] d = new int[c];
+28  		List<String> l = new ArrayList<>();
+29  		boolean good = false;
+30  		String s = "";
+31  		while (true) {
+32  			result = true;
+33  			for (int i = 0; i < c; i++) {
+34  				if (b[i] != r[i]) {
+35  					result = false;
+36  				}
+37  			}
+38  			if (result) {
+39  				break;
+40  			}
+41  			int cl = 0;
+42  			int last = 0;
+43  			int[] z = new int[c];
+44  			 good = false;
+45  			  s = "";
+46  			  int[] rr = new int[c];
+47  			for (int i = 0; i < c; i++) {
+48  				if (b[i] > 0) {
+49  					int want = b[i];
+50  					int nexttmp = 0;
+51  					for (int j = last; j < c ; j++) {
+52  						nexttmp = 0;
+53  						if (r[j] == 0) {
+54  							s += ".";
+55  							continue;
+56  						}
+57  						want-=r[j];
+58  						if (j > i && j > 0&& j  < c-1) {
+59  							z[j] = -1;
+60  							rr[j-1] += r[j];
+61  							good = true;
+62  							s += "/";
+63  						} else 
+64  						if (j < i && j > 0&& j  < c-1) {
+65  							z[j] = 1;
+66  							rr[j+1]+= r[j];
+67  							good = true;
+68  							s += "\\";
+69  						} else {
+70  							s += ".";
+71  							rr[j]+=r[j];
+72  						}
+73  						if (want <= 0) {
+74  							last = j+1;
+75  							break;
+76  						}
+77  					}
+78  				}
+79  			}
+80  			r = rr;
+81  			l.add(s);
+82  			if (!good)
+83  			break;
+84  		}
+85  		if (!result) {
+86  			System.out.println("Case #" + num + ": IMPOSSIBLE");
+87  		} else {
+88  			s = "";
+89  			for (int i = 0; i < c ; i++) {
+90  				s+=".";
+91  			}
+92  			l.add(s);
+93  			System.out.println("Case #" + num + ": " + l.size());
+94  			for (String string : l) {
+95  				System.out.println(string);
+96  			}
+97  		}
+98  	}
+99  	private static String find(Node root, int h) {
+100  		if (h == l) {
+101  			return null;
+102  		}
+103  		if (root.map.size() < all.get(h).size()) {
+104  			for (Integer ii : all.get(h)) {
+105  				if (root.map.get(ii) == null) {
+106  					char rr = (char) ('A' + ii);
+107  					return Character.toString(rr);
+108  				}
+109  			}
+110  		} else {
+111  			for (Map.Entry<Integer, Node> node : root.map.entrySet()) {
+112  				String res = find(node.getValue(), h + 1);
+113  				if (res != null) {
+114  					char rr = (char) ('A' + node.getKey());
+115  					return Character.toString(rr) + res;
+116  				}
+117  			}
+118  		}
+119  		return null;
+120  	}
+121  }
+122  class Node {
+123  	public Map<Integer, Node> map = new HashMap<>();
+124  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(i,33)` in function `solve`? List all such variables.
+
+**Output**:
+

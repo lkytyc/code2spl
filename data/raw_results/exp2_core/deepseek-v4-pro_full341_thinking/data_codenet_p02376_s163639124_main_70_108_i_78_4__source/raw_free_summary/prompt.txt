@@ -1,0 +1,328 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include<stdio.h>
+2   #include<stdlib.h>
+3   typedef struct{
+4     int fmax;
+5     int flow;
+6     int n[2];
+7   }TEdge;
+8   typedef struct{
+9     int num;
+10    int e[1200];
+11  }TVertex;
+12  TEdge e[1200];
+13  TVertex v[120];
+14  #define MIN(x,y) ((x)<(y)?(x):(y))
+15  int V,E;
+16  int et[120];
+17  int route(int s, int ed,int c){
+18    int res=0,r=-1,m=0,i=0;
+19    r=-1;
+20    et[s]=1;
+21    for(i=0;i<v[s].num;i++){
+22      if(e[v[s].e[i]].n[0]==s){
+23        if(et[e[v[s].e[i]].n[1]]==0){
+24          if(e[v[s].e[i]].fmax-e[v[s].e[i]].flow>0){
+25            m=MIN(c,e[v[s].e[i]].fmax-e[v[s].e[i]].flow);
+26            if(e[v[s].e[i]].n[1]==ed){
+27              r=m;
+28              e[v[s].e[i]].flow+=r;
+29              res+=r;
+30              if(res>=c){
+31                et[s]=0;
+32                return res;
+33              }
+34              c-=r;
+35            }else{
+36              r=route(e[v[s].e[i]].n[1],ed,m);
+37              if(r>0){
+38                e[v[s].e[i]].flow+=r;
+39                res+=r;
+40                if(res>=c){
+41                  et[s]=0;
+42                  return res;
+43                }
+44                c-=r;
+45              }
+46            }
+47          }
+48        }
+49      }else{
+50        if(et[e[v[s].e[i]].n[0]]==0){
+51          if(e[v[s].e[i]].flow>0){
+52            m=MIN(c,e[v[s].e[i]].flow);
+53            r=route(e[v[s].e[i]].n[0],ed,m);
+54            if(r>0){
+55              e[v[s].e[i]].flow-=r;
+56              res+=r;
+57              if(res>=c){
+58                et[s]=0;
+59                return res;
+60              }
+61              c-=r;
+62            }
+63          }
+64        }
+65      }
+66    }
+67    et[s]=0;
+68    return res;
+69  }
+70  int main(){
+71    int i;
+72    int res,cmax;
+73    scanf("%d %d",&V,&E);
+74    for(i=0;i<V;i++){
+75      v[i].num=0;
+76    }
+77    cmax=0;
+78    for(i=0;i<E;i++){
+79      int a,b,c;
+80      scanf("%d %d %d",&a,&b,&c);
+81      e[i].n[0]=a;
+82      e[i].n[1]=b;
+83      v[a].e[v[a].num++]=i;
+84      v[b].e[v[b].num++]=i;
+85      e[i].fmax=c;
+86      e[i].flow=0;
+87      if(b==V-1){
+88        v[a].e[v[a].num-1]=v[a].e[0];
+89        v[a].e[0]=i;
+90        cmax+=c;
+91      }
+92    }
+93    res=0;
+94    for(i=0;i<100;i++){
+95      et[i]=0;
+96    }
+97    for(i=0;i<3;i++){
+98      int x;
+99      x=route(0,V-1,cmax);
+100      if(x<=0){
+101        printf("%d\n",res);
+102        return 0;
+103      }
+104      res+=x;
+105    }
+106    printf("er\n");
+107    return 0;
+108  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(i,78)` in function `main`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+This code implements a maximum flow algorithm (likely Ford-Fulkerson with DFS) on a graph with up to 120 vertices and 1200 edges. It reads graph data, computes the maximum flow from source node 0 to sink node V-1, and attempts to find up to 3 augmenting paths. If no more flow can be added, it prints the total flow; otherwise, it prints "er" as an error indicator.
+

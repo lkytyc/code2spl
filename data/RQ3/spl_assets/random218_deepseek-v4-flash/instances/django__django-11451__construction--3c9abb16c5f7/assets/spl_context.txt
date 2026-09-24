@@ -1,0 +1,509 @@
+# FILE: django/contrib/auth/backends.py
+# CLASS BaseBackend
+
+[DEFINE_WORKER: "Authenticates the request by unconditionally returning None without performing any authentication logic." authenticate]
+    [INPUTS]
+        <REF> request </REF>: object "HTTP request object to authenticate."
+        <REF> kwargs </REF>: dict "Additional keyword arguments provided for authentication."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Always None, indicating no authentication is performed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unconditionally return None from the authenticate method. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns None for any user_id without performing any lookup or computation." get_user]
+    [INPUTS]
+        <REF> user_id </REF>: any "The user identifier passed to the method; it is ignored and does not affect the result."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: NoneType "Always returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant value None as the method result. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Always returns an empty set of permissions for the given user and optional object." get_user_permissions]
+    [INPUTS]
+        <REF> user_obj </REF>: object "The user whose permissions are being queried."
+        <REF> obj </REF>: object "Optional object to scope the permission query; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: set "An empty set containing no permissions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a new empty set by calling set() and return it immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty set of group permissions for the given user and optional object, ignoring both arguments." get_group_permissions]
+    [INPUTS]
+        <REF> self </REF>: object "The class instance on which the method is called."
+        <REF> user_obj </REF>: object "The user for whom group permissions are requested; ignored by this implementation."
+        <REF> obj </REF>: object or None "An optional object for object-level permissions; ignored by this implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: set "An empty set of group permissions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new empty set by calling set() with no arguments and return it immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the set of permissions for the given user object by merging the user-specific permissions and group-specific permissions, removing duplicates." get_all_permissions]
+    [INPUTS]
+        <REF> user_obj </REF>: object "The user for whom permissions are collected."
+        <REF> obj </REF>: object "Optional object to which the permissions apply; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permissions </REF>: set "Set of permissions obtained by unpacking the user and group permission iterables; duplicates are removed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the user-specific permissions by calling self.get_user_permissions(user_obj, obj=obj). RESULT user_permissions]
+            [COMMAND Obtain the group-specific permissions by calling self.get_group_permissions(user_obj, obj=obj). RESULT group_permissions]
+            [COMMAND Build the returned set by unpacking user_permissions and group_permissions into a new set, so duplicate permissions are collapsed. RESULT all_permissions]
+            [COMMAND Return all_permissions as the result of the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the given permission is included in the permission set for the specified user and optional object." has_perm]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance providing access to get_all_permissions."
+        <REF> user_obj </REF>: object "The user whose permissions are being checked."
+        <REF> perm </REF>: object "The permission identifier to test for membership."
+        <REF> obj </REF>: object "The optional target object for which permissions are evaluated; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if perm is in the permissions returned by get_all_permissions, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_all_permissions(user_obj, obj=obj) and store the returned permission iterable. RESULT permissions]
+            [COMMAND Test whether perm is contained in permissions. RESULT has_permission]
+            [COMMAND Return has_permission as the boolean result of has_perm. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS ModelBackend
+
+[DEFINE_WORKER: "Authenticates a user by resolving the username from kwargs when it is None, loading the user via UserModel._default_manager.get_by_natural_key, and returning that user only if the password check and user_can_authenticate both succeed; if the user does not exist, a dummy password hash is computed to reduce timing differences and the method returns None." authenticate]
+    [INPUTS]
+        <REF> self </REF>: object "The authentication backend instance used to call user_can_authenticate."
+        <REF> request </REF>: HttpRequest "The HTTP request associated with the authentication attempt."
+        <REF> username </REF>: str | None "Optional username to authenticate; if None, it is replaced with kwargs.get(UserModel.USERNAME_FIELD)."
+        <REF> password </REF>: str "Plain-text password to verify against the user's stored password hash."
+        <REF> kwargs </REF>: dict "Additional keyword arguments; may contain the username field when username is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: UserModel | None "The authenticated user when lookup succeeds, password check passes, and user_can_authenticate returns true; otherwise None is returned implicitly."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If username is None using an identity comparison, set username to the result of kwargs.get(UserModel.USERNAME_FIELD); this may still be None if the key is absent or maps to None. RESULT username]
+            [COMMAND Attempt to retrieve user by calling UserModel._default_manager.get_by_natural_key(username). If UserModel.DoesNotExist is raised, use the alternative flow for a missing user; otherwise continue with the retrieved user. RESULT user]
+            [COMMAND Within the successful-lookup path, evaluate user.check_password(password) and self.user_can_authenticate(user) using short-circuit AND; if both are true, return user. If either condition is false, use the alternative flow for invalid or disallowed credentials. RESULT user]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: UserModel._default_manager.get_by_natural_key(username) raises UserModel.DoesNotExist.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Instantiate UserModel() and call set_password(password) to run the default password hasher once, reducing timing differences between existing and nonexistent users. RESULT timing_dummy_user]
+            [COMMAND Return None implicitly because no matching user exists. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The user lookup succeeds and the short-circuit expression user.check_password(password) and self.user_can_authenticate(user) evaluates to false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None implicitly because the password does not match or the user is not allowed to authenticate. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True when user.is_active is truthy or None, and False when user.is_active is explicitly falsy, thus rejecting inactive users while allowing custom user models without the attribute." user_can_authenticate]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is invoked."
+        <REF> user </REF>: object "A user model instance that may or may not define an 'is_active' attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the user may authenticate; False if user.is_active is explicitly falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the user's is_active attribute with getattr, using None as the default when the attribute is absent. RESULT is_active]
+            [COMMAND Evaluate 'is_active or is_active is None': if is_active is truthy, return that truthy value; otherwise return True when is_active is None and False when is_active is falsy but not None. RESULT authentication_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a lazy QuerySet of all permission objects assigned to the given user." _get_user_permissions]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which this method is invoked."
+        <REF> user_obj </REF>: User "The user object whose related permissions should be retrieved."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "A lazy QuerySet containing all Permission objects associated with user_obj, or an empty QuerySet if none exist."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the user_permissions relation manager on user_obj. RESULT permission_manager]
+            [COMMAND Call all() on the relation manager to obtain a QuerySet of every related permission. RESULT permissions_qs]
+            [COMMAND Return the resulting QuerySet. RESULT permissions_qs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the permission QuerySet for the groups of the supplied user by constructing a dynamic reverse group lookup from the user model's groups field." _get_group_permissions]
+    [INPUTS]
+        <REF> user_obj </REF>: User "The user instance whose group permissions should be retrieved."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> group_permissions </REF>: QuerySet[Permission] "QuerySet containing permission records linked to the user's groups."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the active user model and obtain the metadata field object for the 'groups' field. RESULT user_groups_field]
+            [COMMAND Build the reverse relation lookup string by appending the related query name of the groups field to 'group__'. RESULT user_groups_query]
+            [COMMAND Invoke Permission.objects.filter with the dynamically built lookup key user_groups_query bound to user_obj, then return the resulting QuerySet. RESULT group_permissions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the cached app_label.codename permissions for an active, non-anonymous user, building the cache from all permissions for superusers or from the selected group/user permission lookup when no object is supplied." _get_permissions]
+    [INPUTS]
+        <REF> user_obj </REF>: User "The user whose permissions are retrieved."
+        <REF> obj </REF>: object or None "If not None, the method returns an empty set because permission checks are not for a specific object."
+        <REF> from_name </REF>: str "Either 'group' or 'user'; selects whether _get_group_permissions or _get_user_permissions is called to build the cache."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permissions </REF>: set "Set of permission strings formatted as app_label.codename."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the cache attribute name as '_%s_perm_cache' % from_name and assign it to perm_cache_name. RESULT perm_cache_name]
+            [COMMAND Check whether user_obj has an attribute named perm_cache_name. RESULT cache_exists]
+            [COMMAND If cache_exists is false, set perms to Permission.objects.all() when user_obj.is_superuser, otherwise set perms to getattr(self, '_get_%s_permissions' % from_name)(user_obj). RESULT perms]
+            [COMMAND If cache_exists is false, replace perms with perms.values_list('content_type__app_label', 'codename').order_by(). RESULT perms]
+            [COMMAND If cache_exists is false, build cached_permissions as {"%s.%s" % (ct, name) for ct, name in perms} and store it on user_obj with setattr(user_obj, perm_cache_name, cached_permissions). RESULT cached_permissions]
+            [COMMAND Return getattr(user_obj, perm_cache_name). RESULT permissions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: user_obj.is_active is false, or user_obj.is_anonymous is true, or obj is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty set. RESULT permissions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the set of permission strings the given user has from their user permissions for the optional target object by delegating to _get_permissions with 'user' as the permission type." get_user_permissions]
+    [INPUTS]
+        <REF> user_obj </REF>: object "User or principal object whose permission strings are being queried."
+        <REF> obj </REF>: object or None "Optional target object for which permissions are checked; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permissions </REF>: set of str "Set of permission strings the user has from their user permissions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._get_permissions with user_obj, obj, and the string literal 'user'; immediately return its result without additional validation or transformation. RESULT permissions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the set of permission strings the user has from the groups they belong to by delegating to _get_permissions with the 'group' permission type." get_group_permissions]
+    [INPUTS]
+        <REF> user_obj </REF>: User "The user whose group permissions are being queried."
+        <REF> obj </REF>: object or None "Optional target object for object-scoped permission lookup; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permissions </REF>: set of str "Set of permission strings the user has from group permissions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self._get_permissions(user_obj, obj, 'group') to compute group permissions for the target user and object. RESULT permissions]
+            [COMMAND Return the permissions set to the caller. RESULT caller]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the cached permission set for a user, or an empty set if the user is inactive, anonymous, or an object-specific permission context was supplied." get_all_permissions]
+    [INPUTS]
+        <REF> user_obj </REF>: object "User object whose permissions are being retrieved; must have is_active and is_anonymous attributes."
+        <REF> obj </REF>: object or None "Optional object for object-specific permissions; if not None, the method immediately returns an empty set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permissions </REF>: set "Cached permission set for user_obj, or an empty set when the user is inactive, anonymous, or obj is not None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether user_obj already has an attribute named '_perm_cache'. RESULT cache_exists]
+            [COMMAND If cache does not exist, call super().get_all_permissions(user_obj) and assign the result to user_obj._perm_cache. RESULT user_obj._perm_cache]
+            [COMMAND Return user_obj._perm_cache. RESULT permissions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If any of the following is true, with short-circuit OR evaluation: user_obj.is_active is falsy, user_obj.is_anonymous is true, or obj is not None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a new empty set immediately. RESULT empty_set]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns False for inactive users and, for active users, returns the result of the parent class permission check." has_perm]
+    [INPUTS]
+        <REF> user_obj </REF>: object "The user object whose permission is being checked; must have an is_active attribute."
+        <REF> perm </REF>: str "The permission string being checked, for example 'app.view_model'."
+        <REF> obj </REF>: object or None "Optional related object for the permission check; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True when the user is active and the parent class allows the permission; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether user_obj.is_active is truthy. RESULT is_active]
+            [COMMAND If is_active is false, set permission_result to False. RESULT permission_result]
+            [COMMAND If is_active is true, call super().has_perm(user_obj, perm, obj=obj) and set permission_result to its return value. RESULT permission_result]
+            [COMMAND Return permission_result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True only if the given user is active and has at least one permission whose app-label prefix equals app_label." has_module_perms]
+    [INPUTS]
+        <REF> self </REF>: object "The object instance that provides the get_all_permissions method."
+        <REF> user_obj </REF>: object "The user object being checked; must expose an is_active attribute."
+        <REF> app_label </REF>: string "The application label used to match the prefix of each permission string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True when user_obj.is_active is True and at least one permission from get_all_permissions(user_obj) has an app-label prefix equal to app_label; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate user_obj.is_active to obtain the active flag. RESULT is_active_flag]
+            [COMMAND When is_active_flag is True, call self.get_all_permissions(user_obj) to obtain the iterable of permission strings. RESULT permissions_iterable]
+            [COMMAND For each permission string perm in permissions_iterable, generate a boolean match by extracting the prefix before the first '.' with perm[:perm.index('.')] and comparing it to app_label. RESULT match_predicate]
+            [COMMAND Evaluate any(match_predicate) to determine whether at least one permission matches app_label, stopping at the first True match. RESULT any_match]
+            [COMMAND Return any_match as the final boolean result. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_active_flag is falsey (False, 0, None, empty value)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the falsey is_active_flag value immediately, short-circuiting before self.get_all_permissions(user_obj) is evaluated. RESULT short_circuit_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.get_all_permissions(user_obj) yields a permission string that does not contain a '.' character, so perm.index('.') raises ValueError.]
+        [LOG "Malformed permission string encountered: no '.' separator found in permission."]
+        [THROW ValueError "Raised when a permission string lacks the expected '.' delimiter."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: user_obj is None or lacks an is_active attribute, so evaluating user_obj.is_active raises AttributeError.]
+        [LOG "Invalid user object: user_obj cannot provide is_active."]
+        [THROW AttributeError "Raised when user_obj does not expose an is_active attribute."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: A permission entry is not a string and has no index method, so perm.index('.') raises AttributeError.]
+        [LOG "Invalid permission entry: permission cannot be searched for a '.' separator."]
+        [THROW AttributeError "Raised when a permission entry does not support the index method."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: A permission entry's index method returns a non-integer value, so perm[:perm.index('.')] raises TypeError.]
+        [LOG "Invalid permission entry: index method returned a non-integer slice index."]
+        [THROW TypeError "Raised when the value returned by perm.index('.') cannot be used as a slice index."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves a user by primary key and returns that user only if the lookup succeeds and the user can authenticate; otherwise returns None." get_user]
+    [INPUTS]
+        <REF> user_id </REF>: primary key "The primary key value used to retrieve the UserModel instance."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: UserModel instance or None "The authenticated user if found and self.user_can_authenticate(user) is truthy; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to retrieve a UserModel instance with primary key user_id using UserModel._default_manager.get(pk=user_id). RESULT user]
+            [COMMAND Evaluate self.user_can_authenticate(user) to determine whether the retrieved user can authenticate. RESULT can_authenticate]
+            [COMMAND If can_authenticate is truthy, return user; otherwise return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: UserModel._default_manager.get raises UserModel.DoesNotExist while retrieving the user by user_id]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS AllowAllUsersModelBackend
+
+[DEFINE_WORKER: "Allows any user to authenticate by unconditionally returning True." user_can_authenticate]
+    [INPUTS]
+        <REF> self </REF>: object "The object instance on which the method is called; not used in the method body."
+        <REF> user </REF>: object "The user attempting to authenticate; the method does not inspect this value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> authentication_result </REF>: boolean "Always True, indicating authentication is permitted."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean constant True as the authentication result. RESULT authentication_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS RemoteUserBackend
+
+[DEFINE_WORKER: "Authenticates a trusted remote user by cleaning the remote username, finding or creating the corresponding User object, optionally configuring newly created users, and returning the User only if user_can_authenticate accepts it." authenticate]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request being authenticated."
+        <REF> remote_user </REF>: str "The trusted remote username supplied by the authentication source."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: User or None "The authenticated User object, or None if no user can be authenticated."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If remote_user is falsy, return None immediately. RESULT return_value]
+            [COMMAND Set user to None. RESULT user]
+            [COMMAND Set username to self.clean_username(remote_user). RESULT username]
+            [COMMAND If self.create_unknown_user is true, call UserModel._default_manager.get_or_create(**{UserModel.USERNAME_FIELD: username}) and assign the resulting user and created flag to user and created. RESULT user, created]
+            [COMMAND Within the outer if self.create_unknown_user branch, if created is true, set args to (request, user). RESULT args]
+            [COMMAND Within the if created branch, call inspect.getcallargs(self.configure_user, request, user) to test whether configure_user accepts request as the first argument. RESULT _]
+            [COMMAND Within the if created branch, if the inspection succeeds, keep args as (request, user). RESULT args]
+            [COMMAND Within the if created branch, if the inspection raises TypeError, set args to (user,). RESULT args]
+            [COMMAND Within the if created branch, if the inspection raises TypeError, issue RemovedInDjango31Warning telling developers to update configure_user to accept request as the first argument. RESULT _]
+            [COMMAND Within the if created branch, set user to self.configure_user(*args). RESULT user]
+            [COMMAND Within the outer if self.create_unknown_user branch, if created is false, skip the configure_user block. RESULT _]
+            [COMMAND If self.create_unknown_user is false, which is the else branch of the outer condition, try to set user to UserModel._default_manager.get_by_natural_key(username). RESULT user]
+            [COMMAND If UserModel.DoesNotExist is raised during the get_by_natural_key lookup, catch it and continue with the current value of user. RESULT _]
+            [COMMAND Return user if self.user_can_authenticate(user) is true; otherwise return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Cleans the provided username by returning it unchanged, serving as the default preprocessing hook." clean_username]
+    [INPUTS]
+        <REF> username </REF>: string "Username to clean before using it to get or create the user object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Cleaned username, identical to the input by default."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of the username parameter unchanged to the caller. RESULT username]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Configures a user after creation by returning the user object unchanged." configure_user]
+    [INPUTS]
+        <REF> request </REF>: Request "The incoming request object; unused by this method."
+        <REF> user </REF>: User "The user instance to configure and return."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> user </REF>: User "The configured user object, returned unmodified."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the user object unchanged. RESULT user]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS AllowAllUsersRemoteUserBackend
+
+[DEFINE_WORKER: "Determines whether a user can authenticate by unconditionally returning True." user_can_authenticate]
+    [INPUTS]
+        <REF> user </REF>: unknown "The user to check for authentication permission."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "Always True, indicating that authentication is allowed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return True unconditionally as the authentication result without inspecting the user parameter. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

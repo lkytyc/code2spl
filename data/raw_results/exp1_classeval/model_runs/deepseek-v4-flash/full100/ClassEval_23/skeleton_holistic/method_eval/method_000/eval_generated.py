@@ -1,0 +1,22 @@
+
+
+import unittest
+
+class CombinationCalculatorTestCount(unittest.TestCase):
+    def test_count(self):
+        self.assertEqual(CombinationCalculator.count(4, 2), 6)
+    def test_count_2(self):
+        self.assertEqual(CombinationCalculator.count(5, 3), 10)
+
+    def test_count_3(self):
+        self.assertEqual(CombinationCalculator.count(6, 6), 1)
+
+    def test_count_4(self):
+        self.assertEqual(CombinationCalculator.count(6, 0), 1)
+
+    def test_count_5(self):
+        self.assertEqual(CombinationCalculator.count(6, 3), 20)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

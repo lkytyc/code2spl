@@ -1,0 +1,487 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.*;
+2   import java.util.regex.*;
+3   import static java.lang.Math.*;
+4   import static java.lang.System.out;
+5   public class Main {
+6   	final Scanner sc=new Scanner(System.in);
+7   	final int[] vx={0,1,0,-1}, vy={-1,0,1,0};
+8   	static class Point{
+9   		int x, y;
+10  		Point(int x, int y){	this.x=x;	this.y=y;}
+11  		Point(){	this.x=0; this.y=0;}
+12  		@Override public String toString(){	return "("+this.x+","+this.y+")";}
+13  		static boolean ok(int x,int y,int X,int Y,int min){
+14  			return (min<=x&&x<X && min<=y&&y<Y)?true:false;
+15  		}
+16  		static boolean ok(int x,int y,int X,int Y){	return ok(x,y,X,Y,0);}
+17  	}
+18  	public static void main(String[] args) {
+19  		new Main().AOJ0144();
+20  	}
+21  	void AOJ0145(){
+22  		while(sc.hasNext()){
+23  			int N=sc.nextInt(),ans=Integer.MAX_VALUE;
+24  			C0145[] c=new C0145[N];
+25  			for(int i=0; i<N; i++)	c[i]=new C0145(sc.nextInt(),sc.nextInt());
+26  			out.println(ans);
+27  		}
+28  	}
+29  	class C0145{
+30  		int upper,down;
+31  		C0145(int u,int d){	this.upper=u;	this.down=d;	}
+32  	}
+33  	void AOJ0147(){
+34  		LinkedList<Integer> queue=new LinkedList<Integer>();
+35  		int MAX=120;
+36  		while(sc.hasNext()){
+37  			int temp=sc.nextInt();
+38  			MAX=max(MAX,temp);
+39  			queue.add(temp);
+40  		}
+41  		int[] num=new int[MAX],time=new int[MAX],seat=new int[17];
+42  		Arrays.fill(seat, -1);
+43  		for(int i=0; i<MAX; i++){
+44  			num[i]=(i%5==1?5:2);
+45  			time[i]=(17*(i%2)+3*(i%3)+19);
+46  		}
+47  		int j=0,min=0;
+48  		while(!queue.isEmpty()){
+49  			seat=exit(seat,min,time);
+50  			int temp=find(seat,num[j]);
+51  			if(temp>=0 && min>=j*5){
+52  				int q=queue.getFirst();
+53  				if(j==q){
+54  					out.println(max(0,min-j*5));
+55  					queue.removeFirst();
+56  				}
+57  				for(int i=temp; i<temp+num[j]; i++)	seat[i]=j;
+58  				j++;
+59  			}else{
+60  				min++;
+61  			}
+62  		}
+63  	}
+64  	int find(int[] seat,int n){
+65  		for(int i=0; i<17-n; i++){
+66  			boolean flag=true;
+67  			for(int j=0; j<n; j++){
+68  				if(seat[i+j]!=-1){
+69  					flag=false;
+70  					break;
+71  				}
+72  			}
+73  			if(flag)	return i;
+74  		}
+75  		return -1;
+76  	}
+77  	int[] exit(int[] seat,int min,int[] time){
+78  		for(int i=0; i<17; i++){
+79  			if(seat[i]<0)	continue;
+80  			int idx=seat[i],emin=idx*5+time[seat[i]];
+81  			if(min>=emin)	seat[i]=-1;
+82  		}
+83  		return seat;
+84  	}
+85  	void disp(int[] seat,int min){
+86  		out.print(min+"m : ");
+87  		for(int i=0; i<17; i++)	out.print(seat[i]+" ");
+88  		out.println();
+89  	}
+90  	void AOJ0144(){
+91  		while(sc.hasNext()){
+92  			int N=sc.nextInt();
+93  			boolean[][] R=new boolean[N+1][N+1];
+94  			for(int i=1; i<=N; i++){
+95  				int r=sc.nextInt(),k=sc.nextInt();
+96  				for(int j=0; j<k; j++)	
+97  					R[r][sc.nextInt()]=true;
+98  			}
+99  			int P=sc.nextInt();
+100  			for(int i=0; i<P; i++){
+101  				int s=sc.nextInt(),d=sc.nextInt(),v=sc.nextInt(),ans=-1;
+102  				PriorityQueue<C0144> open=new PriorityQueue<C0144>();
+103  				open.add(new C0144(s,v,1));
+104  				C0144[] close=new C0144[N+1];
+105  				while(!open.isEmpty()){
+106  					C0144 now=open.poll();
+107  					if(--now.ttl==0)	continue;
+108  					for(int j=1; j<=N; j++){
+109  						if(R[now.now][j]){
+110  							if(close[j]==null){
+111  								if(j==d){
+112  									ans=(ans<0?now.c+1:min(ans,now.c+1));
+113  									continue;
+114  								}
+115  								open.add(new C0144(j,now.ttl,now.c+1));
+116  								close[j]=new C0144(j,now.ttl,now.c+1);
+117  							}else{
+118  								if(now.c+1<close[j].c || now.ttl>close[j].ttl){
+119  									if(j==d){
+120  										ans=(ans<0?now.c+1:min(ans,now.c+1));
+121  										continue;
+122  									}
+123  									open.add(new C0144(j,now.ttl,now.c+1));
+124  									close[j]=new C0144(j,now.ttl,now.c+1);
+125  								}
+126  							}
+127  						}
+128  					}
+129  				}
+130  				out.println((ans<0?"NA":ans));
+131  			}
+132  		}
+133  	}
+134  	class C0144 implements Comparable<C0144>{
+135  		int now,ttl,c;
+136  		C0144(int now,int ttl,int c){
+137  			this.now=now;	this.ttl=ttl;	this.c=c;
+138  		}
+139  		@Override public int compareTo(C0144 o) {
+140  			if(this.c<o.c)	return -1;
+141  			if(this.c>o.c)	return 1;
+142  			return 0;
+143  		}
+144  	}
+145  }
+```
+
+
+**Question**: Does line `96` have control dependence over line `124` in function `AOJ0144`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: AOJ0144
+Target source anchor: variable=<none>, line=96
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: AOJ0144
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a loop header whose condition controls its next execution: {'kind': 'line', 'line': 96, 'reason': 'the target is a loop header whose condition controls its next execution'}
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND For each source index i from 1 to N inclusive, read source node r and outdegree k; for each neighbor index j from 0 to k-1, read a destination node and set R[r][destination] to true. RESULT R]
+- [COMMAND Within the current state, for each neighbor j from 1 to N inclusive, check if R[now.now][j] is true; if close[j] is null, or close[j] is non-null and either now.c+1 is less than close[j].c or now.ttl is greater than close[j].ttl, treat j as a qualifying neighbor. RESULT qualifying_neighbor]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 91: while(sc.hasNext()){
+- line 94: for(int i=1; i<=N; i++){
+- line 96: for(int j=0; j<k; j++)
+- line 100: for(int i=0; i<P; i++){
+- line 105: while(!open.isEmpty()){
+- line 107: if(--now.ttl==0)	continue;
+- line 108: for(int j=1; j<=N; j++){
+- line 109: if(R[now.now][j]){
+- line 110: if(close[j]==null){
+- line 111: if(j==d){
+- line 113: continue;
+- line 118: if(now.c+1<close[j].c || now.ttl>close[j].ttl){
+- line 119: if(j==d){
+- line 121: continue;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 91, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["hasNext", "sc", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 94, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["N", "for", "i", "int"]}
+- {"definitions": ["j"], "disposition": "inspect_against_official_dependence_definition", "line": 96, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["j", "k"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "int", "j", "k"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 100, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["P", "for", "i", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 105, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["isEmpty", "open", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 107, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control", "exit"], "source_identifiers": ["continue", "if", "now", "ttl"]}
+- {"definitions": ["j"], "disposition": "inspect_against_official_dependence_definition", "line": 108, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["j"], "roles": ["definition", "control"], "source_identifiers": ["N", "for", "int", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 109, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["j"], "roles": ["use", "control"], "source_identifiers": ["R", "if", "j", "now"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 110, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["j"], "roles": ["use", "control"], "source_identifiers": ["close", "if", "j", "null"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 111, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["j"], "roles": ["use", "control"], "source_identifiers": ["d", "if", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 113, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["continue"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 118, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["j"], "roles": ["use", "control"], "source_identifiers": ["c", "close", "if", "j", "now", "ttl"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 119, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["j"], "roles": ["use", "control"], "source_identifiers": ["d", "if", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 121, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["continue"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `AOJ0144`
+- source lines: 90-133
+- source signature: `void AOJ0144(){`
+- source content hash: `04065a2444878455fb803aafef7bb83c1937bb9c1b8228182bb5f6e46419e5e6`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+  90   void AOJ0144(){
+  91    while(sc.hasNext()){
+  92     int N=sc.nextInt();
+  93     boolean[][] R=new boolean[N+1][N+1];
+  94     for(int i=1; i<=N; i++){
+  95      int r=sc.nextInt(),k=sc.nextInt();
+  96      for(int j=0; j<k; j++)	
+  97       R[r][sc.nextInt()]=true;
+  98     }
+  99     int P=sc.nextInt();
+ 100     for(int i=0; i<P; i++){
+ 101      int s=sc.nextInt(),d=sc.nextInt(),v=sc.nextInt(),ans=-1;
+ 102      PriorityQueue<C0144> open=new PriorityQueue<C0144>();
+ 103      open.add(new C0144(s,v,1));
+ 104      C0144[] close=new C0144[N+1];
+ 105      while(!open.isEmpty()){
+ 106       C0144 now=open.poll();
+ 107       if(--now.ttl==0)	continue;
+ 108       for(int j=1; j<=N; j++){
+ 109        if(R[now.now][j]){
+ 110         if(close[j]==null){
+ 111          if(j==d){
+ 112           ans=(ans<0?now.c+1:min(ans,now.c+1));
+ 113           continue;
+ 114          }
+ 115          open.add(new C0144(j,now.ttl,now.c+1));
+ 116          close[j]=new C0144(j,now.ttl,now.c+1);
+ 117         }else{
+ 118          if(now.c+1<close[j].c || now.ttl>close[j].ttl){
+ 119           if(j==d){
+ 120            ans=(ans<0?now.c+1:min(ans,now.c+1));
+ 121            continue;
+ 122           }
+ 123           open.add(new C0144(j,now.ttl,now.c+1));
+ 124           close[j]=new C0144(j,now.ttl,now.c+1);
+ 125          }
+ 126         }
+ 127        }
+ 128       }
+ 129      }
+ 130      out.println((ans<0?"NA":ans));
+ 131     }
+ 132    }
+ 133   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads multiple directed graphs from input and, for each query, performs a priority-queue search with a TTL node limit to find the minimum hop count from the start node to the destination node, printing NA when no valid path exists." AOJ0144]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND While sc.hasNext(), begin reading the next test case and read the number of vertices N. RESULT N]
+            [COMMAND Allocate a boolean adjacency matrix R with dimensions N+1 by N+1, initially all false. RESULT R]
+            [COMMAND For each source index i from 1 to N inclusive, read source node r and outdegree k; for each neighbor index j from 0 to k-1, read a destination node and set R[r][destination] to true. RESULT R]
+            [COMMAND Read the number of queries P. RESULT P]
+            [COMMAND For each query index i from 0 to P-1, read start node s, destination node d, and initial TTL v; initialize ans to -1. RESULT query]
+            [COMMAND Within the current query, create an empty priority queue open of C0144 states and add the initial state with node s, TTL v, and cost 1. RESULT open]
+            [COMMAND Within the current query, create a C0144 array close of length N+1 filled with null entries. RESULT close]
+            [COMMAND Within the current query, while open is not empty, poll the next state now; decrement its TTL, and if --now.ttl equals 0, skip expanding this state and continue to the next state. RESULT now]
+            [COMMAND Within the current state, for each neighbor j from 1 to N inclusive, check if R[now.now][j] is true; if close[j] is null, or close[j] is non-null and either now.c+1 is less than close[j].c or now.ttl is greater than close[j].ttl, treat j as a qualifying neighbor. RESULT qualifying_neighbor]
+            [COMMAND For each qualifying neighbor j, if j equals the destination d, update ans to min(ans, now.c+1), preserving -1 when ans was negative, and do not enqueue j; otherwise add a new C0144 state with node j, TTL now.ttl, and cost now.c+1 to open and store that same state in close[j]. RESULT ans_open_close]
+            [COMMAND After the priority-queue search for the current query is exhausted without any early break, write out.println((ans < 0 ? "NA" : ans)). RESULT output_line]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

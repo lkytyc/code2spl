@@ -1,0 +1,973 @@
+# FILE: sympy/geometry/point.py
+# CLASS Point
+
+[DEFINE_WORKER: "Ensures all point objects share the same ambient dimension, using the class ambient dimension or the highest point dimension when needed, and returns either the original point list if already normalized or new Point objects converted to the normalized dimension." _normalize_dimension]
+    [INPUTS]
+        <REF> cls </REF>: type "Class that may define an _ambient_dimension attribute."
+        <REF> points </REF>: tuple "Variable number of point-like objects, each providing an ambient_dimension attribute."
+        <REF> kwargs </REF>: dict "Keyword arguments passed through to the Point constructor, including optional dim and on_morph overrides."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "List of points in the normalized ambient dimension, either the original point list or newly constructed Point objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the class attribute _ambient_dimension using getattr(cls, '_ambient_dimension', None) and store it in dim. RESULT dim]
+            [COMMAND Override dim with kwargs.get('dim', dim), using the 'dim' keyword argument if present and otherwise keeping the current dim value. RESULT dim]
+            [COMMAND If dim is None, compute dim as the maximum of i.ambient_dimension for all points. RESULT dim]
+            [COMMAND Evaluate whether all(i.ambient_dimension == dim for i in points) is True. RESULT all_match]
+            [COMMAND When all_match is False, set kwargs['dim'] to dim and set kwargs['on_morph'] to kwargs.get('on_morph', 'warn'). RESULT kwargs]
+            [COMMAND Return the list comprehension [Point(i, **kwargs) for i in points], constructing Point objects with the updated kwargs. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: all_match is True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return list(points) immediately without constructing Point objects. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the affine rank of a set of points by normalizing their dimensions, translating all points so the first point is the origin, and returning the matrix rank of the resulting relative coordinates." affine_rank]
+    [INPUTS]
+        <REF> args </REF>: tuple "Variable-length point objects or coordinate-like values defining the point set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: int "The affine rank of the point set; -1 for the empty set."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert every argument to a Point and normalize all points to a common dimension using Point._normalize_dimension; assign the resulting list of normalized points to points. RESULT points_normalized]
+            [COMMAND Take the first normalized point as the reference origin. RESULT origin]
+            [COMMAND For each point in points_normalized excluding the first, subtract the origin to translate every point into an origin-centered coordinate system; assign the resulting list of relative points to points_relative. RESULT points_relative]
+            [COMMAND Build matrix m whose rows are the .args coordinate tuples of each relative point in points_relative. RESULT m]
+            [COMMAND Compute the rank of matrix m using a custom zero test that treats each entry x as zero if x is numeric and abs(x.n(2)) < 1e-12, or if x is non-numeric and x.is_zero is True; return the resulting integer rank. RESULT rank_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: len(args) == 0, meaning the input point set is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return -1 immediately as the conventional affine rank of the empty set. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the ambient dimension of the point, preferring an existing _ambient_dimension attribute and otherwise falling back to the number of components from len(self)." ambient_dimension]
+    [INPUTS]
+        <REF> self </REF>: object "The point instance; it must implement __len__, and may optionally define an attribute named _ambient_dimension."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: int "The ambient dimension: len(self) when _ambient_dimension is absent, or the raw value of _ambient_dimension when present, with no type coercion applied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate len(self) unconditionally to compute the fallback value for getattr. RESULT len_self]
+            [COMMAND Call getattr(self, '_ambient_dimension', len_self); if self has the attribute '_ambient_dimension', use that attribute value as-is, otherwise use len_self. RESULT ambient_dimension_value]
+            [COMMAND Return ambient_dimension_value as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self does not implement __len__]
+        [LOG "len(self) raises TypeError because the fallback argument is evaluated before getattr checks for '_ambient_dimension'."]
+        [THROW TypeError "Raised by len(self) when self has no __len__ method."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True when all supplied points lie in a common plane, with trivial True results for at most one point or two-dimensional normalized points, and otherwise checks that the affine rank of the unique normalized points is at most 2." are_coplanar]
+    [INPUTS]
+        <REF> cls </REF>: class "The class on which the classmethod is invoked; used for cls._normalize_dimension."
+        <REF> points </REF>: tuple "Variable-length positional tuple of point objects or coordinate values to test for coplanarity."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the points are coplanar, if len(points) <= 1, or if the normalized first point is two-dimensional; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If len(points) <= 1, return True immediately. RESULT true]
+            [COMMAND Convert each element i of points to Point(i), expand the resulting list as positional arguments to cls._normalize_dimension, and assign the returned normalized collection to points. RESULT points]
+            [COMMAND If points[0].ambient_dimension == 2, return True immediately. RESULT true]
+            [COMMAND Deduplicate the normalized points by assigning points to list(uniq(points)). RESULT points]
+            [COMMAND Return the boolean result of Point.affine_rank(*points) <= 2. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Euclidean distance from this point to another geometric entity, converting non-geometric inputs to points and delegating to the other entity's distance method when available." distance]
+    [INPUTS]
+        <REF> self </REF>: Point "The point instance on which distance is called; supplies ambient_dimension and coordinates for normalization."
+        <REF> other </REF>: GeometricEntity or point-like coordinates "The target geometric entity, or an object convertible to Point, to which distance is measured."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> distance </REF>: number or symbolic expression "The Euclidean distance when other is a Point; otherwise the result of delegating to other.distance(self)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If other is not an instance of GeometryEntity, attempt to convert it to a Point using Point(other, dim=self.ambient_dimension), assigning the converted Point to other. RESULT other]
+            [COMMAND Branch according to the type of other: if other is an instance of Point, execute the Point Euclidean distance flow; otherwise execute the delegated distance flow. RESULT distance_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: other is an instance of Point after normalization]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize dimensions by calling Point._normalize_dimension(self, Point(other)) and unpacking the result into coordinate sequences s and p. RESULT s_and_p]
+            [COMMAND Compute sqrt(Add(*((a - b)**2 for a, b in zip(s, p)))) and return the Euclidean distance. RESULT euclidean_distance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: other is not an instance of Point after normalization and its distance attribute is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the distance attribute of other using getattr(other, 'distance', None), assigning None when the attribute is absent. RESULT delegated_distance]
+            [COMMAND Return the result of calling delegated_distance(self). RESULT delegated_distance_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: other is not a GeometryEntity and Point(other, dim=self.ambient_dimension) raises TypeError]
+        [LOG "not recognized as a GeometricEntity: {type(other)}"]
+        [THROW TypeError "Raised when other cannot be converted to Point or recognized as a GeometricEntity."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: other is not a Point and its distance attribute is None]
+        [LOG "distance between Point and {type(other)} is not defined"]
+        [THROW TypeError "Raised when the other GeometricEntity does not expose a distance method."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the dot product of self and p by normalizing non-sequence p to a Point and summing the element-wise products of the zipped coordinates." dot]
+    [INPUTS]
+        <REF> p </REF>: sequence or Point-compatible value "The other point used in the dot product; non-sequence values are converted by Point."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Add expression or numeric result "The dot product of self and p, formed by summing all element-wise products."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate is_sequence(p); if it returns False, reassign p to Point(p); otherwise keep p unchanged. RESULT p]
+            [COMMAND Pair each element of self with the corresponding element of p using zip, stopping at the shorter iterable; for each pair compute a*b, and if either iterable is empty, generate no products. RESULT products]
+            [COMMAND Expand the generated products as positional arguments and pass them to Add; if no products were generated, call Add() with no arguments. RESULT dot_expression]
+            [COMMAND Return dot_expression. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_sequence(p) is True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Keep p unchanged as a sequence for pairing with self. RESULT p]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether two points are equal by validating that other is a Point, lengths match, and each coordinate pair is equal." equals]
+    [INPUTS]
+        <REF> self </REF>: Point "The point whose coordinates are compared with another point."
+        <REF> other </REF>: Point "The point to compare against. Must be a Point; otherwise comparison immediately returns False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if other is a Point, self and other have equal lengths, and every corresponding coordinate satisfies equals; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether other is an instance of Point; because this is an or condition, if it is not a Point, immediately return False without evaluating len(other). RESULT type_guard]
+            [COMMAND After confirming other is a Point, compare len(self) with len(other); if the lengths differ, immediately return False. RESULT length_guard]
+            [COMMAND Pair each element a from self with the corresponding element b from other using zip; because lengths are equal, all elements are paired exactly once. RESULT component_pairs]
+            [COMMAND For each pair (a, b), evaluate a.equals(b); all() short-circuits and returns False at the first false equality. If no pairs exist (both have length 0), all() returns True by default. RESULT component_equality_checks]
+            [COMMAND Return True when every component equality check succeeded; otherwise return False. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Evaluates the coordinates of the point as floating-point numbers to the requested precision and returns a new Point." _eval_evalf]
+    [INPUTS]
+        <REF> prec </REF>: int "Requested precision used to compute the decimal digit precision for coordinate evaluation."
+        <REF> options </REF>: dict "Additional keyword arguments forwarded unchanged to each coordinate's evalf call."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> point </REF>: Point "A new Point whose coordinates have been evaluated to the requested precision."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the requested precision prec to a decimal digit precision by calling prec_to_dps(prec). RESULT dps]
+            [COMMAND For each coordinate x in self.args, call x.evalf(n=dps, **options) and collect the results in order into a list. RESULT coords]
+            [COMMAND Return a new Point constructed from coords with evaluate=False to avoid re-evaluation. RESULT returned_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the intersection between this point and another GeometryEntity or coordinate sequence, returning this point when the entities are equal or after dimension normalization, otherwise returning an empty list or delegating to the other entity's intersection method." intersection]
+    [INPUTS]
+        <REF> self </REF>: Point "The current Point on which the intersection method is called."
+        <REF> other </REF>: GeometryEntity or sequence of coordinates "The GeometryEntity, Point, or coordinate sequence to intersect with self."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> intersection </REF>: list of Points "The intersection result: [self] for a matching or normalized-matching point, [] for no point intersection, or the delegate result from other.intersection(self)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If other is not an instance of GeometryEntity, convert other to a Point by assigning other = Point(other). RESULT other]
+            [COMMAND Check whether other is an instance of Point; if it is not, skip the Point branch. RESULT is_point]
+            [COMMAND Within the outer branch in which other is a Point, if self == other, immediately return [self]. RESULT early_return_equal_value]
+            [COMMAND Within the outer branch in which other is a Point and self != other, call Point._normalize_dimension(self, other), assign the returned tuple to normalized_pair, and unpack it into variables p1 and p2. RESULT normalized_pair]
+            [COMMAND Within the outer branch in which other is a Point, after normalization check p1 == self and p1 == p2 using short-circuit evaluation; if true, immediately return [self]. RESULT early_return_normalized_value]
+            [COMMAND Within the outer branch in which other is a Point, if neither equality condition holds, return []. RESULT empty_return_value]
+            [COMMAND If other is not an instance of Point, return other.intersection(self). RESULT delegated_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the point represented by self and all supplied points lie on a single line by normalizing their dimensions, removing duplicates, and checking that their affine rank is at most one." is_collinear]
+    [INPUTS]
+        <REF> self </REF>: Point "The point whose collinearity with the supplied points is being tested."
+        <REF> args </REF>: sequence of Points "Additional point objects or point-like objects to include in the collinearity test; may be empty."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> is_collinear </REF>: boolean "True if all points are collinear, or if only one unique point remains after normalization; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Combine self and all args into a tuple by evaluating (self,) + args. RESULT points]
+            [COMMAND Convert every element of points to a Point using Point(i), unpack the converted points into Point._normalize_dimension, and assign the normalized result back to points. RESULT points]
+            [COMMAND Remove duplicate points from points using uniq and convert the result to a list; assign the deduplicated list back to points. RESULT points]
+            [COMMAND Compute the affine rank of the unique normalized points by calling Point.affine_rank(*points). RESULT affine_rank]
+            [COMMAND Return True if affine_rank is less than or equal to 1, otherwise return False; this also makes the trivial case of a single unique point return True. RESULT is_collinear]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the called Point and the supplied points lie on a common circle by normalizing and deduplicating the points, rejecting sets with affine rank greater than 2, and checking whether the reduced row echelon form of an augmented squared-norm matrix has a pivot in its last column." is_concyclic]
+    [INPUTS]
+        <REF> self </REF>: Point "The first point of the set to test for concyclicity."
+        <REF> args </REF>: tuple of point-like objects "Additional points, or objects convertible to Point, to include in the concyclicity test."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "True if the point set is concyclic; False otherwise. Returns True when fewer than two other points are supplied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a tuple named points by concatenating (self,) with args. RESULT points]
+            [COMMAND Convert every element of points to a Point, call Point._normalize_dimension on the converted points, and store the normalized result as points. RESULT points]
+            [COMMAND Deduplicate points using uniq and convert the generator to a list, storing the result as points. RESULT points]
+            [COMMAND Compute Point.affine_rank(*points), the affine dimension spanned by the normalized unique points, and store it as affine_rank. RESULT affine_rank]
+            [COMMAND Set origin to the first element of points. RESULT origin]
+            [COMMAND Replace points with a list of each point minus origin, so the first shifted point is the zero vector. RESULT points]
+            [COMMAND Build matrix mat from rows formed by the coordinates list(i) of each shifted point plus its squared norm i.dot(i). RESULT mat]
+            [COMMAND Compute the reduced row echelon form and pivot columns of mat with mat.rref(), and store the pivot column indices as pivots. RESULT pivots]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: affine_rank is greater than 2]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False, because points spanning more than two affine dimensions cannot be concyclic. RESULT return_false_non_planar]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: len(origin) not in pivots]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return True, because no pivot appears in the final squared-norm column, so a common circle center exists. RESULT return_true_concyclic]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: len(origin) in pivots]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False, because a pivot in the final squared-norm column prevents the existence of a common circle center. RESULT return_false_no_center]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the logical negation of self.is_zero when it is a boolean, or None when self.is_zero is None, indicating whether any coordinate is nonzero when determinable." is_nonzero]
+    [INPUTS]
+        <REF> self </REF>: object "Object exposing an is_zero attribute; expected to be a boolean or None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean or None "True if is_zero is False, False if is_zero is True, and None if is_zero is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the is_zero attribute from self and assign its value to the local variable is_zero. RESULT is_zero]
+            [COMMAND Evaluate whether is_zero is None to select the return path. RESULT is_zero_is_none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_zero is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately, indicating that the nonzero status cannot be determined. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: is_zero is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the logical negation of is_zero, so True becomes False and False becomes True. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether each coordinate of self is a scalar multiple of the corresponding coordinate of point p by normalizing the points, applying a 2D determinant check, and falling back to matrix rank for linear dependence." is_scalar_multiple]
+    [INPUTS]
+        <REF> self </REF>: Point "The point whose coordinates are tested against p."
+        <REF> p </REF>: Point or point-like "The point to compare; converted with Point(p) before normalization."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if self is a scalar multiple of p, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call Point._normalize_dimension(self, Point(p)) and unpack the returned pair into s and o. RESULT s, o]
+            [COMMAND If s.ambient_dimension is 2, unpack s.args into (x1, y1), unpack o.args into (x2, y2), and compute rv = (x1*y2 - x2*y1).equals(0). RESULT rv]
+            [COMMAND Within the 2D branch, if rv is None, raise Undecidable with the filldedent message 'Cannot determine if %s is a scalar multiple of %s' formatted with s and o; otherwise ignore rv and continue to matrix construction. RESULT Undecidable]
+            [COMMAND Construct Matrix([s.args, o.args]) and assign it to m, so the coordinate arguments of s and o form the two rows. RESULT m]
+            [COMMAND Return the boolean result of m.rank() < 2, which indicates that s and o are linearly dependent and therefore scalar multiples. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: In the 2D branch, rv is None after evaluating (x1*y2 - x2*y1).equals(0), so the determinant cannot be determined symbolically.]
+        [LOG "Cannot determine if s is a scalar multiple of o (message passed through filldedent)."]
+        [THROW Undecidable "Raised when the symbolic equality test cannot decide whether the 2D determinant is zero."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if every coordinate is zero, False if any coordinate is nonzero, and None if the zero/nonzero status cannot be determined." is_zero]
+    [INPUTS]
+        <REF> self </REF>: object "Instance whose args attribute is iterable and contains elements exposing a readable is_nonzero attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool | None "True if all coordinates are zero, False if any coordinate is nonzero, None if zero/nonzero status cannot be determined."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the list nonzero by reading the attribute x.is_nonzero for each x in self.args, preserving iteration order and without calling x.is_nonzero. RESULT nonzero]
+            [COMMAND If any element of nonzero is truthy, return False immediately. RESULT return_false]
+            [COMMAND If the previous condition did not trigger and a short-circuiting any() check over nonzero finds an element that is None, return None immediately. RESULT return_none]
+            [COMMAND Otherwise, return True. RESULT return_true]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns SymPy's canonical zero as the length of a Point, since a Point treated as a Line has zero length." length]
+    [INPUTS]
+        <REF> self </REF>: Point "The Point instance whose length is requested; this value is not used in the computation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: sympy.core.numbers.Zero "Symbolic zero representing the length of a Point treated as a Line."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate S.Zero to obtain SymPy's canonical zero singleton. RESULT S.Zero]
+            [COMMAND Return the obtained zero singleton as the length of this Point. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the midpoint between this Point and another Point by normalizing dimensions, averaging each coordinate pair with simplify((a + b) * S.Half), and returning a new Point." midpoint]
+    [INPUTS]
+        <REF> self </REF>: Point "The Point instance on which midpoint is called, representing one endpoint of the segment."
+        <REF> p </REF>: Point "The other Point used to compute the midpoint."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Point "A new Point located at the midpoint between self and p."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert p to a Point with Point(p), then pass self and that converted Point to Point._normalize_dimension and unpack the returned tuple into s and p. RESULT s, p]
+            [COMMAND Within the list comprehension that constructs the Point, for each pair (a, b) from zip(s, p), compute simplify((a + b) * S.Half) and collect the results into midpoint_coords. RESULT midpoint_coords]
+            [COMMAND Construct a Point from midpoint_coords and return it as the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a new Point whose coordinates are all zeros in the same ambient dimension as the current point, with evaluate=False to prevent coordinate simplification." origin]
+    [INPUTS]
+        <REF> self </REF>: Point "The current point whose ambient dimension determines the number of zero coordinates."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Point "A new Point instance containing len(self) zeros and constructed with evaluate=False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the ambient dimension by computing the length of self. RESULT n]
+            [COMMAND Create a list containing exactly n copies of the integer 0; if n is 0, this list is empty. RESULT coords]
+            [COMMAND Construct a new Point from coords with evaluate=False, preventing evaluation or simplification of the coordinate data. RESULT point]
+            [COMMAND Return the newly constructed point. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a non-zero point orthogonal to the line through the origin and self, using axis-aligned unit points when the first or second coordinate is zero and otherwise swapping and negating the first two coordinates." orthogonal_direction]
+    [INPUTS]
+        <REF> self </REF>: Point "The point for which the orthogonal direction is computed; must expose ambient_dimension and indexable coordinates whose values support is_zero."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> orthogonal_point </REF>: Point "A non-zero point orthogonal to the line containing self and the origin."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the ambient dimension of self as dim. RESULT dim]
+            [COMMAND Check whether self[0].is_zero is true. RESULT first_coordinate_is_zero]
+            [COMMAND If first_coordinate_is_zero is false, check whether self[1].is_zero is true. RESULT second_coordinate_is_zero]
+            [COMMAND If first_coordinate_is_zero is false and second_coordinate_is_zero is false, return Point([-self[1], self[0]] + (dim - 2) * [0]). RESULT orthogonal_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: first_coordinate_is_zero is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return Point([1] + (dim - 1) * [0]). RESULT orthogonal_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: first_coordinate_is_zero is false and second_coordinate_is_zero is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return Point([0, 1] + (dim - 2) * [0]). RESULT orthogonal_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Projects the point a onto the line through the origin and point b along the normal direction." project]
+    [INPUTS]
+        <REF> a </REF>: Point "The point to be projected onto the line defined by b."
+        <REF> b </REF>: Point "The point that determines the direction of the line through the origin."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> p </REF>: Point "The projected point on the line through the origin and b."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize Point(a) and Point(b) to the same ambient dimension by calling Point._normalize_dimension, and assign the normalized points back to a and b. RESULT a,b]
+            [COMMAND Check whether the normalized point b is the zero vector. RESULT b.is_zero]
+            [COMMAND If b is not the zero vector, compute the scalar projection a.dot(b) / b.dot(b), multiply b by that scalar, and return the resulting Point. RESULT projected_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: b.is_zero is true after normalization]
+        [LOG "Cannot project to the zero vector."]
+        [THROW ValueError "Raised because projection onto the zero vector is undefined."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Taxicab distance from this point to another point by normalizing their dimensions and summing absolute coordinate differences." taxicab_distance]
+    [INPUTS]
+        <REF> p </REF>: Point "The point to which the taxicab distance is computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numeric expression "The sum of absolute horizontal and vertical distances to point p."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the dimensions of self and the Point-wrapped argument by calling Point._normalize_dimension(self, Point(p)); unpack the returned pair into s and p, where s is the normalized self point and p is the normalized target point. RESULT normalized_points]
+            [COMMAND Iterate over coordinate pairs from zip(s, p), compute abs(a - b) for each pair, pass the generator of absolute differences to Add(*...) to sum them, and return the resulting sum. RESULT taxicab_distance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Canberra distance from this Point to another Point by summing normalized absolute coordinate differences after aligning their dimensions." canberra_distance]
+    [INPUTS]
+        <REF> self </REF>: Point "The source Point from which the Canberra distance is calculated."
+        <REF> p </REF>: Point "The target Point to which the Canberra distance is calculated; converted to a Point with Point(p) before normalization."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: SymPy expression "The Canberra distance from self to p, computed as the sum of abs(a - b) / (abs(a) + abs(b)) for each coordinate pair (a, b) in zip(s, p)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert p to a Point with Point(p), then normalize the dimensions of self and that Point by calling Point._normalize_dimension(self, Point(p)); store the two returned Points as s and p. RESULT s_p]
+            [COMMAND Using the short-circuit and, evaluate whether self.is_zero and the newly assigned p.is_zero are both true; if they are, follow the ValueError exception path. RESULT zero_vector_check]
+            [COMMAND Within the generator expression over zip(s, p), for each coordinate pair (a, b) compute abs(a - b) / (abs(a) + abs(b)); pass all generated terms as positional arguments to Add and return the resulting expression as the Canberra distance. RESULT distance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.is_zero is true and, via short-circuit and, the normalized p.is_zero is true]
+        [LOG "Cannot project to the zero vector."]
+        [THROW ValueError "Raised when both the source Point and the target Point are zero vectors, so no distance direction can be established."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the normalized point at distance 1 from the origin in the same direction as self by dividing self by its magnitude." unit]
+    [INPUTS]
+        <REF> self </REF>: Point "The point to normalize; must have a non-zero distance from the origin."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Point "The normalized point with distance 1 from the origin in the same direction as self."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the absolute value (magnitude) of self using the abs() operation. RESULT magnitude]
+            [COMMAND Divide self by magnitude to obtain the normalized point in the same direction. RESULT normalized_point]
+            [COMMAND Return normalized_point as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Point2D
+
+[DEFINE_WORKER: "Returns the bounding rectangle of the geometric figure as a four-element tuple (xmin, ymin, xmax, ymax) by duplicating the current values of self.x and self.y." bounds]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> bounding_box </REF>: tuple "A four-element tuple (xmin, ymin, xmax, ymax) where xmin=xmax=self.x and ymin=ymax=self.y."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.x and self.y twice in left-to-right order, constructing and returning the tuple (self.x, self.y, self.x, self.y) as the bounding rectangle. RESULT _bounding_box]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rotates a 2D point counterclockwise by a given angle in radians, optionally about a specified center point, by translating to the center, applying the rotation matrix, and translating back." rotate]
+    [INPUTS]
+        <REF> self </REF>: Point2D "The point to rotate; used as the initial value of rv."
+        <REF> angle </REF>: numeric or symbolic "Rotation angle in radians, counterclockwise."
+        <REF> pt </REF>: Point2D or point-like tuple "Optional center of rotation; if None, rotation is about the origin."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rv </REF>: Point2D "The resulting rotated point."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute c = cos(angle) and s = sin(angle). RESULT c, s]
+            [COMMAND Initialize rv as a reference to self. RESULT rv]
+            [COMMAND If pt is not None, convert pt to a 2D Point using Point(pt, dim=2) and subtract pt from rv to translate the rotation center to the origin. RESULT rv]
+            [COMMAND Unpack the current point coordinates as x, y = rv.args. RESULT x, y]
+            [COMMAND Apply the counterclockwise rotation matrix to compute rv = Point(c*x - s*y, s*x + c*y). RESULT rv]
+            [COMMAND If pt is not None, add pt back to rv to restore the original center offset. RESULT rv]
+            [COMMAND Return rv. RESULT rv]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Scales the coordinates of a Point by x and y, optionally about a reference point pt by translating to pt, scaling, and translating back." scale]
+    [INPUTS]
+        <REF> x </REF>: numeric "Scale factor applied to the x-coordinate; defaults to 1."
+        <REF> y </REF>: numeric "Scale factor applied to the y-coordinate; defaults to 1."
+        <REF> pt </REF>: Point or None "Optional reference point for scaling; if truthy, scaling is performed about this point. Defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Point "A new Point with the scaled coordinates, or the result of scaling about pt when pt is provided."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of pt to decide whether scaling should be performed about pt. RESULT pt_is_truthy]
+            [COMMAND If pt is falsy, return a new Point with coordinates self.x*x and self.y*y. RESULT scaled_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: pt is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert pt to a 2D Point and reassign it to pt. RESULT pt]
+            [COMMAND Translate self by the negation of pt, scale by x and y, then translate back by pt and return the result. RESULT scaled_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that the argument is a 3x3 matrix, unpacks the point's x and y coordinates, and returns the Point resulting from multiplying the augmented row vector [x, y, 1] by the matrix." transform]
+    [INPUTS]
+        <REF> matrix </REF>: sympy Matrix or matrix-like object "The 3x3 transformation matrix to apply to the point."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Point "The Point2D (or Point) obtained after applying the matrix transformation and discarding the homogeneous coordinate."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that matrix.is_Matrix is true and matrix.shape == (3, 3); if either condition fails, raise ValueError with the message 'matrix must be a 3x3 matrix'. RESULT validated_matrix]
+            [COMMAND Unpack self.args into x and y, requiring exactly two elements. RESULT x_y]
+            [COMMAND Build the 1x3 row matrix Matrix(1, 3, [x, y, 1]) and multiply it by matrix to obtain the transformed homogeneous coordinates. RESULT transformed_row]
+            [COMMAND Call transformed_row.tolist(), take element [0][0] as the new x-coordinate and element [0][1] as the new y-coordinate, and pass them as positional arguments to Point(...) to produce the transformed point. RESULT result_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: matrix.is_Matrix is false or matrix.shape is not (3, 3)]
+        [LOG "matrix must be a 3x3 matrix"]
+        [THROW ValueError "Raised because the transformation matrix must be a 3x3 Matrix."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Translates the Point by adding x and y offsets to its coordinates and returns a new Point, leaving the original Point unchanged." translate]
+    [INPUTS]
+        <REF> self </REF>: Point "The Point instance to be translated."
+        <REF> x </REF>: numeric "Horizontal offset to add to the x-coordinate; defaults to 0."
+        <REF> y </REF>: numeric "Vertical offset to add to the y-coordinate; defaults to 0."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Point "A new Point with x-coordinate self.x + x and y-coordinate self.y + y."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Add x to self.x to compute the new x-coordinate. RESULT new_x]
+            [COMMAND Add y to self.y to compute the new y-coordinate. RESULT new_y]
+            [COMMAND Create a new Point using new_x and new_y. RESULT translated_point]
+            [COMMAND Return translated_point as the result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the coordinate pair of the Point as the tuple stored in its args." coordinates]
+    [INPUTS]
+        <REF> self </REF>: Point "The Point instance whose coordinates are requested."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "The two coordinates of the point, for example (0, 1)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the tuple stored in self.args as the coordinates of the point. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the X coordinate of the Point by returning the first element of self.args." x]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "The X coordinate of the Point."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the first element of self.args as the X coordinate of the Point. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the Y coordinate of the Point by retrieving self.args[1]." y]
+    [INPUTS]
+        <REF> self </REF>: Point2D "The Point2D instance whose y-coordinate is requested."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The second element of self.args, representing the point's Y coordinate."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the second element of self.args as the Y coordinate. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Point3D
+
+[DEFINE_WORKER: "Determines whether a variable-length sequence of points is collinear by forwarding the unpacked points to Point.is_collinear and returning its boolean result." are_collinear]
+    [INPUTS]
+        <REF> points </REF>: sequence of Point "Variable-length sequence of Point objects collected through *points."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if all given points are collinear, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Collect all positional arguments into a tuple named points. RESULT points]
+            [COMMAND Call Point.is_collinear with the elements of points unpacked as individual positional arguments. RESULT collinearity_result]
+            [COMMAND Return collinearity_result to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the direction cosines from self to a given Point3D by normalizing each coordinate difference by the Euclidean norm of the direction ratio vector." direction_cosine]
+    [INPUTS]
+        <REF> point </REF>: Point3D "The Point3D to which the direction cosines are calculated from self."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of the three direction cosines [cos_x, cos_y, cos_z] between self and point."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the direction ratio vector a by calling self.direction_ratio(point). RESULT a]
+            [COMMAND Compute b as the square root of the sum of the squares of all elements in a using sqrt(Add(*(i**2 for i in a))). RESULT b]
+            [COMMAND Compute the x direction cosine as (point.x - self.x) / b. RESULT cos_x]
+            [COMMAND Compute the y direction cosine as (point.y - self.y) / b. RESULT cos_y]
+            [COMMAND Compute the z direction cosine as (point.z - self.z) / b. RESULT cos_z]
+            [COMMAND Return the list [cos_x, cos_y, cos_z]. RESULT direction_cosines]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the vector displacement from this point to another Point3D as a three-element list of coordinate differences." direction_ratio]
+    [INPUTS]
+        <REF> point </REF>: Point3D "The other point from which to compute the direction ratio relative to self."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> direction_ratio_result </REF>: list "A list containing [point.x - self.x, point.y - self.y, point.z - self.z]."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the x, y, and z coordinates from both self and the input point. RESULT coordinates_of_self_and_point]
+            [COMMAND Subtract self.x from point.x to compute the x-component of the direction ratio. RESULT dx]
+            [COMMAND Subtract self.y from point.y to compute the y-component of the direction ratio. RESULT dy]
+            [COMMAND Subtract self.z from point.z to compute the z-component of the direction ratio. RESULT dz]
+            [COMMAND Return the list [dx, dy, dz] as the direction ratio. RESULT direction_ratio_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the intersection of this point with another GeometryEntity or coordinate sequence, returning this point if other is an equal Point3D, an empty list if other is a different Point3D, and otherwise delegating to other.intersection(self)." intersection]
+    [INPUTS]
+        <REF> self </REF>: Point3D "The point on which intersection is invoked."
+        <REF> other </REF>: GeometryEntity or sequence of coordinates "The other geometry entity or coordinate sequence to intersect with this point."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list of Points "A list containing this point if other is an equal Point3D, an empty list if other is a different Point3D, or the delegated result from other.intersection(self)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If other is not an instance of GeometryEntity, convert other to Point(other, dim=3) and assign the converted point to other; otherwise leave other unchanged. RESULT other]
+            [COMMAND Check whether the normalized other is an instance of Point3D and select the Point3D equality branch or the delegation branch accordingly. RESULT selected_branch]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The normalized other is an instance of Point3D and self == other]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing this point, [self]. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The normalized other is an instance of Point3D and self != other]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The normalized other is not an instance of Point3D]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call other.intersection(self) and return its result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Scales a Point3D's coordinates by x, y, and z about the origin, or about a supplied reference point by translating to that point, scaling, and translating back." scale]
+    [INPUTS]
+        <REF> x </REF>: numeric "Scale factor for the x-coordinate; defaults to 1."
+        <REF> y </REF>: numeric "Scale factor for the y-coordinate; defaults to 1."
+        <REF> z </REF>: numeric "Scale factor for the z-coordinate; defaults to 1."
+        <REF> pt </REF>: Point3D or compatible coordinate input "Optional reference point for scaling; defaults to None, which means scaling about the origin."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> scaled_point </REF>: Point3D "A new Point3D containing the scaled coordinates."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of pt. If pt is truthy, follow the alternative flow for scaling about the reference point; otherwise continue with the default origin scaling. RESULT pt_truthiness]
+            [COMMAND Return a new Point3D whose x-coordinate is self.x times x, y-coordinate is self.y times y, and z-coordinate is self.z times z. RESULT scaled_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: pt is truthy, so the if branch is taken and returns immediately.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert pt to a Point3D object and assign it back to pt. RESULT pt]
+            [COMMAND Translate self by the negated coordinates of pt, scale the translated point by x, y, and z, then translate back by the coordinates of pt and return the resulting Point3D. RESULT scaled_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Applies a 4x4 SymPy matrix transformation to this Point3D by converting its coordinates to homogeneous form and returning a new Point3D from the first three entries of the transformed row vector." transform]
+    [INPUTS]
+        <REF> self </REF>: Point3D "The point being transformed; self.args supplies its x, y, and z coordinates."
+        <REF> matrix </REF>: Matrix "A 4x4 SymPy matrix describing the transformation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> point </REF>: Point3D "The resulting Point3D after applying the matrix transformation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that matrix is a SymPy Matrix and has shape (4, 4), and raise ValueError if it is not. RESULT validated_matrix]
+            [COMMAND Unpack self.args into x, y, and z. RESULT coordinates]
+            [COMMAND Set m to the transpose of matrix. RESULT m]
+            [COMMAND Create a 1x4 row vector Matrix with entries x, y, z, and 1. RESULT row_vector]
+            [COMMAND Multiply row_vector by m to obtain the transformed homogeneous coordinates. RESULT transformed_vector]
+            [COMMAND Extract the first three entries from the first row of transformed_vector.tolist(). RESULT coords]
+            [COMMAND Return Point3D with coords expanded as positional arguments. RESULT point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: matrix is not a SymPy Matrix or matrix.shape is not (4, 4)]
+        [LOG "matrix must be a 4x4 matrix"]
+        [THROW ValueError "Raised when the provided matrix is not a valid 4x4 SymPy matrix."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new Point3D whose coordinates are the original Point3D coordinates shifted by the supplied x, y, and z offsets." translate]
+    [INPUTS]
+        <REF> self </REF>: Point3D "The original point; its x, y, and z coordinates are read and it is not modified."
+        <REF> x </REF>: numeric "Offset to add to the X coordinate. Defaults to 0 when omitted."
+        <REF> y </REF>: numeric "Offset to add to the Y coordinate. Defaults to 0 when omitted."
+        <REF> z </REF>: numeric "Offset to add to the Z coordinate. Defaults to 0 when omitted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> translated_point </REF>: Point3D "A new Point3D constructed with coordinates (self.x + x, self.y + y, self.z + z)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Use the supplied x offset, or 0 if it is omitted, and add it to self.x to compute the new X coordinate. RESULT new_x]
+            [COMMAND Use the supplied y offset, or 0 if it is omitted, and add it to self.y to compute the new Y coordinate. RESULT new_y]
+            [COMMAND Use the supplied z offset, or 0 if it is omitted, and add it to self.z to compute the new Z coordinate. RESULT new_z]
+            [COMMAND Construct a new Point3D object from new_x, new_y, and new_z and return it. RESULT translated_point]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the stored coordinate tuple of the Point3D." coordinates]
+    [INPUTS]
+        <REF> self </REF>: Point3D "The point instance whose coordinates are returned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> coordinates </REF>: tuple "The three coordinates of the point."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.args as the coordinates tuple RESULT self.args]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the X coordinate of the Point by returning the first element of self.args." x]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: coordinate "The X coordinate of the Point, stored as the first element of self.args."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the element at index 0 of self.args. RESULT self.args[0]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the Y coordinate of the Point by returning the second element (index 1) of self.args unchanged." y]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Any "The Y coordinate, equal to self.args[1], returned unchanged to the caller."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assume self.args is already defined and contains at least two elements; return the value at index 1 of self.args unchanged as the Y coordinate. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the Z coordinate of the Point by accessing the third element of its args tuple." z]
+    [INPUTS]
+        <REF> self </REF>: Point3D "The Point3D instance whose Z coordinate is returned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> z_coordinate </REF>: coordinate "The Z coordinate of the Point, stored at index 2 of self.args."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the element at index 2 of the Point's args tuple as the Z coordinate. RESULT self.args[2]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

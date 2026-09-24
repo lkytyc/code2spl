@@ -1,0 +1,82 @@
+class SQLGenerator:
+    def __init__(self, table_name):
+        self.table_name = table_name
+
+    def select(self, fields=None, condition=None):
+        if fields is None:
+            normalized_fields = '*'
+        else:
+            normalized_fields = ', '.join(fields)
+
+        sql = f"SELECT {normalized_fields} FROM {self.table_name}"
+
+        if condition is not None:
+            sql += f" WHERE {condition}"
+
+        return sql + ';'
+
+    def insert(self, data):
+        fields = ', '.join(data.keys())
+        values = ', '.join(f"'{value}'" for value in data.values())
+        sql = f"INSERT INTO {self.table_name} ({fields}) VALUES ({values})"
+        final_sql = sql + ';'
+        return final_sql
+
+    def update(self, data, condition):
+        set_clause = ', '.join(f"{field} = '{value}'" for field, value in data.items())
+        sql = f"UPDATE {self.table_name} SET {set_clause} WHERE {condition}"
+        return sql + ';'
+
+    def delete(self, condition):
+        sql = f"DELETE FROM {self.table_name} WHERE {condition}"
+        return sql + ';'
+
+    def select_female_under_age(self, age):
+        condition = f"age < {age} AND gender = 'female'"
+        return self.select(condition=condition)
+
+    def select_by_age_range(self, min_age, max_age):
+        condition = f"age BETWEEN {str(min_age)} AND {str(max_age)}"
+        return self.select(condition=condition)
+
+import unittest
+
+class SQLGeneratorTestUpdate(unittest.TestCase):
+    def test_update(self):
+        sql = SQLGenerator('table1')
+        result = sql.update({'field1': 'new_value1', 'field2': 'new_value2'}, "field3 = value1")
+        self.assertEqual(result,
+                         "UPDATE table1 SET field1 = 'new_value1', field2 = 'new_value2' WHERE field3 = value1;")
+
+    def test_update_2(self):
+        sql = SQLGenerator('table1')
+        result = sql.update({'field1': 'new_value1', 'field2': 'new_value2', 'field3': 'new_value3'},
+                            "field4 = value1")
+        self.assertEqual(result,
+                         "UPDATE table1 SET field1 = 'new_value1', field2 = 'new_value2', field3 = 'new_value3' WHERE field4 = value1;")
+
+    def test_update_3(self):
+        sql = SQLGenerator('table1')
+        result = sql.update({'field1': 'new_value1', 'field2': 'new_value2', 'field3': 'new_value3',
+                             'field4': 'new_value4'}, "field5 = value1")
+        self.assertEqual(result,
+                         "UPDATE table1 SET field1 = 'new_value1', field2 = 'new_value2', field3 = 'new_value3', field4 = 'new_value4' WHERE field5 = value1;")
+
+    def test_update_4(self):
+        sql = SQLGenerator('table1')
+        result = sql.update({'field1': 'new_value1', 'field2': 'new_value2', 'field3': 'new_value3',
+                             'field4': 'new_value4', 'field5': 'new_value5'}, "field6 = value1")
+        self.assertEqual(result,
+                         "UPDATE table1 SET field1 = 'new_value1', field2 = 'new_value2', field3 = 'new_value3', field4 = 'new_value4', field5 = 'new_value5' WHERE field6 = value1;")
+
+    def test_update_5(self):
+        sql = SQLGenerator('table1')
+        result = sql.update({'field1': 'new_value1', 'field2': 'new_value2', 'field3': 'new_value3',
+                             'field4': 'new_value4', 'field5': 'new_value5', 'field6': 'new_value6'},
+                            "field7 = value1")
+        self.assertEqual(result,
+                         "UPDATE table1 SET field1 = 'new_value1', field2 = 'new_value2', field3 = 'new_value3', field4 = 'new_value4', field5 = 'new_value5', field6 = 'new_value6' WHERE field7 = value1;")
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

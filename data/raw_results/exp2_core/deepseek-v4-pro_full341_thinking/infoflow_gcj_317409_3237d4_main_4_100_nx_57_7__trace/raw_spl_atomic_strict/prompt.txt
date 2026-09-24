@@ -1,0 +1,747 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Is there information flow from `(varA,lineA)` to `(varB,lineB)`? If so, provide one feasible trace.", respond with a JSON object:
+
+- If information flow exists:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["varOrExpr", lineNumber            /*, "use" optional */],
+      "to":   ["varOrExpr", lineNumber            /*, "use" optional */],
+      "type": "data" | "control"
+    },
+    // … additional edges
+  ]
+}
+```
+- If no information flow exists, omit the Trace field:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+- Every trace edge must specify "from", "to" (each may include a third "use" element when the line is a conditional statement that only reads without redefining/updating the value), and "type".
+- **We do not consider loop in the trace**.
+
+
+A **trace** represents a **transitive chain of direct flows** arise from compositions of **direct** implicit or explicit flows, where each edge represents a **direct implicit flow** (through control dependence) or a **direct explicit flow** edge (through data dependence).
+
+
+You only need to provide **one** valid trace if you conclude a information flow exists, even if multiple possible chains exist. 
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Is there information flow from `(balance,4)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. Here we focus on `(status,7)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+Hence, A transitive of flow of direct implicit or explicit flows forms a information flow trace.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["balance", 4],
+      "to":   ["balance", 5],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 5],
+      "to":   ["balance", 6, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 6, "use"],
+      "to":   ["status", 7],
+      "type": "control"
+    },
+    {
+      "from": ["status", 7],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+ 
+- The edge from line 6 to `(status,7)` is through control dependence and therefore with a type of "control". 
+- Line 6 only reads the value of `balance` without defining/updating it. So it is marked with `"use"`. 
+- You only need to provide **one** valid chain if you conclude a the information flow exists. 
+
+
+#### Example Question 1.2
+
+Is there information flow from  `(flag,3)` to `(limit,9)`? If so, provide a trace.
+
+**Analysis**
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from either `(status,7)` (if line 6’s condiation evaluates to `true`) or on the original `(status,2)` (if not) to `(limit,9)`. 
+- Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 6 is treated as being evaluated to both possibly true and possibly false.
+  - If line 6 is true, `(limit,9)` depends on `(status,7)`. 
+    - Line 7: `(status,7)` doesn't have any data dependence as it is assigned with a constant number. The execution of line 7 is control-dependent on the condition in line 6.
+    - Line 6: the condition at line 6 directly reads from `(balance,5)`. 
+    - Line 5: `(balance,5)` is updated based on the previous value of `balance` in line 4.
+    - Line 4: `(balance,4)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+  - If line 6 is not true, `(limit,9)` depends on `(status,2)`. 
+    - Line 2: `(status,2)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+- Therefore, among all the possible paths, there is no transitive (indirect) chain of implicit or explicit flow from `(flag,3)` to `(limit,9)`. The information flow doesn't exist.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+#### Example Question 1.3
+
+Is there information flow from  `(status,2)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`.
+- Line 9: `(limit,9)` reads `status`, o there is a direct explicit flow from either `(status,7)`, or the original `(status,2)`, to `(limit,9)`.
+- Similar to the above example, line 6 is possibly evaluated to true or false.
+- If line 6 evaluates to `true`, there is a direct explicit flow from `(status,7)` to `(limit,9)`, which directly data-dependent on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (status,7) -> (limit,9) -> (transaction,10)`.
+- If line 6 evaluates to `false`, `(limit,9)` has a direct data dependence on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (limit,9) -> (transaction,10)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["status", 2],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Is there information flow from  `(size,2)` to `(summary,17)`? If so, provide a trace.
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. We focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`.
+- Line 2: `size` is initialized with a constant number. It is not guarded with any conditions. 
+- Therefore, there is an transitive trace of direct implicit/excplit flows from `(size,2)` to `(summary,17)`.
+
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["size", 2],
+      "to":   ["size", 9, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["size", 9, "use"],
+      "to":   ["j", 14],
+      "type": "control"
+    },
+    {
+      "from": ["j", 14],
+      "to":   ["summary", 17],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Is there information flow from  `(j,5)` to `(score,11)`? If so, provide a trace. 
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`.
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop).
+- If line 11 reads `j` from line 5, it forms a tansitive explicit flow trace: `(j,5) -> (score,11)`.
+- If line 11 reads `j` from line 14, it forms a tansitive explicit flow trace: `(j,5) -> (j,14) -> (score,11)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["j", 5],
+      "to":   ["score", 11],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+
+#### Example Question 2.3:
+Is there information flow from  `(j,1)` to `(i,15)`? If so, provide a trace.
+
+**Analysis**: 
+- Line 15: `(i,15)` updates `i` based on its previous value. So there is a direct explicit flow from either `(i,4)` (initialization) or itself (loop-carried) to `(i,15)`. But we do not consider loop-carried dependencies across iterations in this analysis. So we focus on `(i,4)`.
+- The execution of line 15 is conditional on the while loop at line 9.
+- Line 9: `while i < size` depends on `i` and `size`. It directly reads from `(i,4)` (or possibly `(i,15)`) and `(size,2)`.
+- Both `(i,4)` and `(size,2)` are initialized with constants and are not themselves control-dependent on any earlier values or branches.
+- There is no use of `(j,1)` in the computation of `(i,15)`, nor does `(j,1)` influence whether line 15 executes.
+- Therefore, there is no transitive flow, explicit or implicit, from `(j,1)` to `(i,15)`.
+
+
+**Output**: 
+```json
+{
+  "InformationFlow": false
+}
+```
+
+
+#### Example Question 2.4:
+Is there information flow from  `(val,1)` to `(last,16)`? If so, provide a trace.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8 (or by the loop updates in line 10). Under static analysis, multiple update sites may contribute. We conservatively pick one valid trace (line 8).
+- Line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7.
+- Therefore, there exists a trace from `(val,1)` to `(last,16)`, and the edge from line 7 to `(arr,8)` is through implicit and explicit flows. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["val", 1],
+      "to":   ["val", 7, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["val", 7, "use"],
+      "to":   ["arr", 8],
+      "type": "control"
+    },
+    {
+      "from": ["arr", 8],
+      "to":   ["last", 16],
+      "type": "data"
+    }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.*;
+2   import java.io.*;
+3   public class Solution {
+4       public static void main(String[] args) {
+5           int[] dx = { 0, 1, 0, -1 };
+6           int[] dy = { 1, 0, -1, 0 };
+7           Scanner sc = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+8           StringBuilder ans = new StringBuilder();
+9           int T = sc.nextInt();
+10          for (int t = 1; t <= T; t++) {
+11              int X = sc.nextInt();
+12              int Y = sc.nextInt();
+13              String M = sc.next();
+14              int[][] g = new int[2001][2001];
+15              int px = 1000;
+16              int py = 1000;
+17              List<List<Integer>> tour = new ArrayList<>();
+18              List<Integer> te = new ArrayList<>();
+19              te.add(px);
+20              te.add(py);
+21              tour.add(te);
+22              g[py][px] = 1;
+23              for (int i = 0; i < M.length(); i++) {
+24                  char d = M.charAt(i);
+25                  if (d == 'N') 
+26                      py--;
+27                  if (d == 'S') 
+28                      py++;
+29                  if (d == 'E') 
+30                      px++;
+31                  if (d == 'W') 
+32                      px--;
+33                  g[py][px] = 1;
+34                  te = new ArrayList<>();
+35                  te.add(px);
+36                  te.add(py);
+37                  tour.add(te);
+38              }
+39              boolean[][] visited = new boolean[2001][2001];
+40              int myx = 1000-X;
+41              int myy = 1000+Y;
+42              LinkedList<Pair> q = new LinkedList<>();
+43              q.offer(new Pair(myx,myy,0));
+44              int tmp = -1;
+45              int nearX = -1;
+46              int nearY = -1;
+47              while (!q.isEmpty()) {
+48                  Pair now = q.poll();
+49                  if (g[now.y][now.x] == 1) {
+50                      tmp = now.dist;
+51                      nearX = now.x;
+52                      nearY = now.y;
+53                      break;
+54                  }
+55                  visited[now.y][now.x] = true;;
+56                  for (int v = 0; v < 4; v++) {
+57                      int nx = now.x+dx[v];
+58                      int ny = now.y+dy[v];
+59                      if (nx < 0 || visited[0].length <= nx || ny < 0 || visited.length <= ny) 
+60                              continue;
+61                      if (visited[ny][nx]) 
+62                          continue;
+63                      q.add(new Pair(nx,ny,now.dist+1));
+64                  }
+65              }
+66              ans.append("Case #"+t+": "); 
+67              if (tmp == -1) {
+68                  ans.append("IMPOSSIBLE\n");
+69                  continue;
+70              }
+71              int ti = 0;
+72              for (int i = 0; i < tour.size(); i++) {
+73                  List<Integer> ll = tour.get(i);
+74                  if (ll.get(0) == nearX && ll.get(1) == nearY) {
+75                      ti = i;
+76                      break;
+77                  }
+78              }
+79              boolean[][] visited2 = new boolean[2001][2001];
+80              if (tmp <= ti) {
+81                  ans.append(tmp+(ti-tmp+1)/2).append('\n');
+82              } else {
+83                  boolean success = false;
+84                  for (int i = ti; i < tour.size() && tmp-ti+i < tour.size(); i++) {
+85                      int mfx = tour.get(tmp+i-ti).get(0);
+86                      int mfy = tour.get(tmp+i-ti).get(1);
+87                      visited2[mfy][mfx] = true;
+88                      int ffx = tour.get(i).get(0);
+89                      int ffy = tour.get(i).get(1);
+90                      if (visited2[ffy][ffx]) {
+91                          ans.append(i).append('\n');
+92                          success = true;
+93                          break;
+94                      }
+95                  }
+96                  if (!success) ans.append("IMPOSSIBLE\n");
+97              }
+98          }
+99          System.out.print(ans);
+100      }
+101      private static class Pair {
+102          private final int x;
+103          private final int y;
+104          private final int dist;
+105          Pair(int x, int y, int dist) {
+106              this.x = x;
+107              this.y = y;
+108              this.dist = dist;
+109          }
+110      }
+111  }
+```
+
+
+**Question**: Is there information flow from `(te,20)` to `(nx,57)` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: main
+Target source anchor: variable=nx, line=57
+Trace source anchor: variable=te, line=20
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Inside the case loop for t, while q is not empty, poll Pair now; if g[now.y][now.x] == 1, set tmp = now.dist, nearX = now.x, nearY = now.y and break; otherwise mark visited[now.y][now.x] = true and for each v from 0 to 3 inclusive compute nx = now.x + dx[v] and ny = now.y + dy[v]; if nx < 0, ny < 0, nx >= visited[0].length, or ny >= visited.length, skip this neighbor; if visited[ny][nx] is true, skip this neighbor; otherwise add a Pair with coordinates (nx, ny) and distance now.dist + 1 to q. RESULT bfs_result]
+- [COMMAND Inside the case loop for t, search tour from index 0 to tour.size() - 1 for the first coordinate list whose x equals nearX and whose y equals nearY; store the found index as ti and break when found. RESULT ti]
+- [COMMAND Initialize direction arrays dx = {0, 1, 0, -1} and dy = {1, 0, -1, 0}. RESULT dx_dy]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 5: int[] dx = { 0, 1, 0, -1 };
+- line 6: int[] dy = { 1, 0, -1, 0 };
+- line 7: Scanner sc = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+- line 8: StringBuilder ans = new StringBuilder();
+- line 9: int T = sc.nextInt();
+- line 10: for (int t = 1; t <= T; t++) {
+- line 11: int X = sc.nextInt();
+- line 12: int Y = sc.nextInt();
+- line 13: String M = sc.next();
+- line 14: int[][] g = new int[2001][2001];
+- line 15: int px = 1000;
+- line 16: int py = 1000;
+- line 17: List<List<Integer>> tour = new ArrayList<>();
+- line 18: List<Integer> te = new ArrayList<>();
+- line 19: te.add(px);
+- line 20: te.add(py);
+- line 21: tour.add(te);
+- line 22: g[py][px] = 1;
+- line 23: for (int i = 0; i < M.length(); i++) {
+- line 24: char d = M.charAt(i);
+- line 25: if (d == 'N')
+- line 26: py--;
+- line 27: if (d == 'S')
+- line 28: py++;
+- line 29: if (d == 'E')
+- line 30: px++;
+- line 31: if (d == 'W')
+- line 32: px--;
+- line 33: g[py][px] = 1;
+- line 34: te = new ArrayList<>();
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["dx"], "disposition": "inspect_against_official_dependence_definition", "line": 5, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["dx"], "roles": ["definition"], "source_identifiers": ["dx", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 6, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["dy", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 7, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["BufferedReader", "InputStreamReader", "Scanner", "System", "in", "new", "sc"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 8, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["StringBuilder", "ans", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 9, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["T", "int", "nextInt", "sc"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 10, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["T", "for", "int", "t"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 11, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["X", "int", "nextInt", "sc"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 12, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["Y", "int", "nextInt", "sc"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["M", "String", "next", "sc"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 14, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["g", "int", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 15, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "px"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "py"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 17, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "List", "new", "tour"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "List", "new", "te"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["add", "px", "te"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["add", "py", "te"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["add", "te", "tour"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["g", "px", "py"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["M", "for", "i", "int", "length"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["M", "char", "charAt", "d", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 25, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["N", "d", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["py"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 27, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["S", "d", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["py"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["E", "d", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["px"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["W", "d", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 32, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["px"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 33, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["g", "px", "py"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "new", "te"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 4-100
+- source signature: `public static void main(String[] args) {`
+- source content hash: `7549732f7c3cc1fb73957ace80ebab07aaf4b2e777e4cc7ca793b9fc14dbbc24`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+   4      public static void main(String[] args) {
+   5          int[] dx = { 0, 1, 0, -1 };
+   6          int[] dy = { 1, 0, -1, 0 };
+   7          Scanner sc = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+   8          StringBuilder ans = new StringBuilder();
+   9          int T = sc.nextInt();
+  10          for (int t = 1; t <= T; t++) {
+  11              int X = sc.nextInt();
+  12              int Y = sc.nextInt();
+  13              String M = sc.next();
+  14              int[][] g = new int[2001][2001];
+  15              int px = 1000;
+  16              int py = 1000;
+  17              List<List<Integer>> tour = new ArrayList<>();
+  18              List<Integer> te = new ArrayList<>();
+  19              te.add(px);
+  20              te.add(py);
+  21              tour.add(te);
+  22              g[py][px] = 1;
+  23              for (int i = 0; i < M.length(); i++) {
+  24                  char d = M.charAt(i);
+  25                  if (d == 'N') 
+  26                      py--;
+  27                  if (d == 'S') 
+  28                      py++;
+  29                  if (d == 'E') 
+  30                      px++;
+  31                  if (d == 'W') 
+  32                      px--;
+  33                  g[py][px] = 1;
+  34                  te = new ArrayList<>();
+  35                  te.add(px);
+  36                  te.add(py);
+  37                  tour.add(te);
+  38              }
+  39              boolean[][] visited = new boolean[2001][2001];
+  40              int myx = 1000-X;
+  41              int myy = 1000+Y;
+  42              LinkedList<Pair> q = new LinkedList<>();
+  43              q.offer(new Pair(myx,myy,0));
+  44              int tmp = -1;
+  45              int nearX = -1;
+  46              int nearY = -1;
+  47              while (!q.isEmpty()) {
+  48                  Pair now = q.poll();
+  49                  if (g[now.y][now.x] == 1) {
+  50                      tmp = now.dist;
+  51                      nearX = now.x;
+  52                      nearY = now.y;
+  53                      break;
+  54                  }
+  55                  visited[now.y][now.x] = true;;
+  56                  for (int v = 0; v < 4; v++) {
+  57                      int nx = now.x+dx[v];
+  58                      int ny = now.y+dy[v];
+  59                      if (nx < 0 || visited[0].length <= nx || ny < 0 || visited.length <= ny) 
+  60                              continue;
+  61                      if (visited[ny][nx]) 
+  62                          continue;
+  63                      q.add(new Pair(nx,ny,now.dist+1));
+  64                  }
+  65              }
+  66              ans.append("Case #"+t+": "); 
+  67              if (tmp == -1) {
+  68                  ans.append("IMPOSSIBLE\n");
+  69                  continue;
+  70              }
+  71              int ti = 0;
+  72              for (int i = 0; i < tour.size(); i++) {
+  73                  List<Integer> ll = tour.get(i);
+  74                  if (ll.get(0) == nearX && ll.get(1) == nearY) {
+  75                      ti = i;
+  76                      break;
+  77                  }
+  78              }
+  79              boolean[][] visited2 = new boolean[2001][2001];
+  80              if (tmp <= ti) {
+  81                  ans.append(tmp+(ti-tmp+1)/2).append('\n');
+  82              } else {
+  83                  boolean success = false;
+  84                  for (int i = ti; i < tour.size() && tmp-ti+i < tour.size(); i++) {
+  85                      int mfx = tour.get(tmp+i-ti).get(0);
+  86                      int mfy = tour.get(tmp+i-ti).get(1);
+  87                      visited2[mfy][mfx] = true;
+  88                      int ffx = tour.get(i).get(0);
+  89                      int ffy = tour.get(i).get(1);
+  90                      if (visited2[ffy][ffx]) {
+  91                          ans.append(i).append('\n');
+  92                          success = true;
+  93                          break;
+  94                      }
+  95                  }
+  96                  if (!success) ans.append("IMPOSSIBLE\n");
+  97              }
+  98          }
+  99          System.out.print(ans);
+ 100      }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Simulates a tour from each move string and uses BFS to find the earliest time at which a moving character can meet the tour, printing a result or IMPOSSIBLE for each test case." main]
+    [INPUTS]
+        <REF> args </REF>: String[] "Command-line arguments; not used by the program."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize direction arrays dx = {0, 1, 0, -1} and dy = {1, 0, -1, 0}. RESULT dx_dy]
+            [COMMAND Create Scanner sc reading from System.in through BufferedReader and InputStreamReader. RESULT sc]
+            [COMMAND Create StringBuilder ans to accumulate all output. RESULT ans]
+            [COMMAND Read integer T from sc as the number of test cases. RESULT T]
+            [COMMAND For each test case t from 1 to T inclusive, execute the following case processing. RESULT case_loop]
+            [COMMAND Inside the case loop for t, read integer X, integer Y, and string M from sc. RESULT X_Y_M]
+            [COMMAND Inside the case loop for t, create int grid g with dimensions 2001 by 2001, initially all zero. RESULT g]
+            [COMMAND Inside the case loop for t, set current position px = 1000 and py = 1000. RESULT start_position]
+            [COMMAND Inside the case loop for t, create empty tour list, add a first coordinate list [px, py] to tour, and set g[py][px] = 1. RESULT tour_initialized]
+            [COMMAND Inside the case loop for t, for each index i from 0 to M.length() - 1 inclusive, read d = M.charAt(i); if d is N decrement py, if d is S increment py, if d is E increment px, if d is W decrement px; then set g[py][px] = 1 and append a new coordinate list [px, py] to tour. RESULT tour_built]
+            [COMMAND Inside the case loop for t, create boolean visited array with dimensions 2001 by 2001, initially false. RESULT visited]
+            [COMMAND Inside the case loop for t, compute BFS start coordinates myx = 1000 - X and myy = 1000 + Y. RESULT bfs_start]
+            [COMMAND Inside the case loop for t, create LinkedList q and add a Pair with coordinates (myx, myy) and distance 0; initialize tmp = -1, nearX = -1, nearY = -1. RESULT bfs_state]
+            [COMMAND Inside the case loop for t, while q is not empty, poll Pair now; if g[now.y][now.x] == 1, set tmp = now.dist, nearX = now.x, nearY = now.y and break; otherwise mark visited[now.y][now.x] = true and for each v from 0 to 3 inclusive compute nx = now.x + dx[v] and ny = now.y + dy[v]; if nx < 0, ny < 0, nx >= visited[0].length, or ny >= visited.length, skip this neighbor; if visited[ny][nx] is true, skip this neighbor; otherwise add a Pair with coordinates (nx, ny) and distance now.dist + 1 to q. RESULT bfs_result]
+            [COMMAND Inside the case loop for t, append 'Case #' + t + ': ' to ans. RESULT ans_case_header]
+            [COMMAND Inside the case loop for t, if tmp == -1, append the text IMPOSSIBLE followed by a newline to ans and continue to the next test case. RESULT impossible_output]
+            [COMMAND Inside the case loop for t, search tour from index 0 to tour.size() - 1 for the first coordinate list whose x equals nearX and whose y equals nearY; store the found index as ti and break when found. RESULT ti]
+            [COMMAND Inside the case loop for t, create boolean visited2 array with dimensions 2001 by 2001, initially false. RESULT visited2]
+            [COMMAND Inside the case loop for t, if tmp <= ti, append the integer result of tmp + (ti - tmp + 1) / 2 followed by a newline to ans. RESULT short_intercept_output]
+            [COMMAND Inside the case loop for t, when tmp > ti, set success = false; for i from ti while i < tour.size() and tmp - ti + i < tour.size(), incrementing i, mark visited2 at the future tour position tour.get(tmp + i - ti), then check the current tour position tour.get(i); if that current position is already marked in visited2, append i followed by a newline to ans, set success = true, and break; after the loop, if success is false, append the text IMPOSSIBLE followed by a newline to ans. RESULT catch_up_output]
+            [COMMAND After the case loop completes, print the accumulated ans to standard output using System.out.print(ans). RESULT output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

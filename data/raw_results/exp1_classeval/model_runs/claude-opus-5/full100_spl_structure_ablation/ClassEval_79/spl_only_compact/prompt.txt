@@ -1,0 +1,107 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: SQLGenerator
+# Fields: table_name
+
+## __init__(table_name: string)
+Summary: Initializes a new instance by storing the provided table name as an instance attribute.
+#   table_name: string — The name of the database table to associate with this instance
+1. Assign the input parameter table_name to the instance attribute self.table_name → self.table_name
+
+## delete(self: object, condition: str) → str
+Summary: Constructs and returns a SQL DELETE statement for the instance's table filtered by the given condition string.
+#   self: object — The instance providing table_name, an attribute containing the target table name string.
+#   condition: str — A raw SQL condition fragment to place after the WHERE clause; not validated or sanitized before use.
+#   → sql: str — A complete SQL DELETE statement of the form 'DELETE FROM <table_name> WHERE <condition>;'.
+1. Interpolate self.table_name and condition into the f-string template 'DELETE FROM {self.table_name} WHERE {condition}' to produce the base SQL string; assign the result to sql. → sql
+2. Concatenate the semicolon literal ';' to sql and return the resulting string as the method's output. → return_value
+
+## insert(self: object, data: dict) → string
+Summary: Builds and returns a raw SQL INSERT statement string by interpolating the table name and all key-value pairs from the provided data dictionary directly into the query.
+#   self: object — Instance providing the target table name via the attribute self.table_name
+#   data: dict — Dictionary whose keys are column names and whose values are the corresponding values to insert; must be non-empty to produce valid SQL; relies on Python 3.7+ insertion-order guarantee for key-value alignment
+#   → sql: string — Complete SQL INSERT statement terminated with a semicolon, e.g. INSERT INTO table_name (col1, col2) VALUES ('val1', 'val2');
+1. Join all keys of data with ', ' to produce the comma-separated column list and assign it to fields → fields
+2. For each value in data.values(), wrap it in single quotes using an f-string, collect the results into a list, join them with ', ', and assign to values → values
+3. Interpolate self.table_name, fields, and values into the f-string template 'INSERT INTO {self.table_name} ({fields}) VALUES ({values})' and assign the result to sql → sql
+4. Append a semicolon to sql and return the resulting string → return_value
+   ? fields resolves to an empty string and values resolves to an empty string, producing syntactically invalid SQL: INSERT INTO <table_name> () VALUES (); the method still returns this string without raising an error
+   ? Python's f-string coerces the value to its str() representation and wraps it in single quotes unconditionally, so integers become '42', booleans become 'True' or 'False', and None becomes 'None' rather than the SQL NULL literal
+
+## select(fields: list or None, condition: string or None) → string
+Summary: Builds and returns a SQL SELECT statement for the instance's table, optionally restricting to specified columns and filtering rows with a WHERE condition.
+#   fields: list or None — List of column name strings to select; if None, selects all columns with '*'
+#   condition: string or None — Optional WHERE clause condition string; if None, no filtering is applied
+#   → sql: string — Complete SQL SELECT statement ending with a semicolon
+1. Check whether fields is None; if so, set fields to the string '*' to select all columns → fields
+2. If fields is not None, join the elements of the fields list into a single comma-separated string and assign the result to fields → fields
+3. Construct the base SQL string by interpolating fields and self.table_name into the template 'SELECT {fields} FROM {self.table_name}' and assign to sql → sql
+4. Check whether condition is not None; if so, append the string ' WHERE {condition}' to sql → sql
+5. Return the value of sql concatenated with the literal string ';' → return
+   ? Assign the string '*' to fields, bypassing the join step
+   ? Skip the WHERE clause append step; sql remains as 'SELECT {fields} FROM {self.table_name}'
+
+## select_by_age_range(min_age: any, max_age: any) → any
+Summary: Builds a SQL BETWEEN condition string from the provided age bounds and delegates the actual record selection to the parent select method.
+#   min_age: any — Lower bound of the age range (inclusive); interpolated directly into the SQL fragment without type enforcement or sanitization
+#   max_age: any — Upper bound of the age range (inclusive); interpolated directly into the SQL fragment without type enforcement or sanitization
+#   → result: any — Return value of self.select called with the constructed condition string; type depends on the select implementation
+1. Construct the SQL condition string by interpolating min_age and max_age directly into the template 'age BETWEEN {min_age} AND {max_age}' using an f-string; assign the resulting string to the local variable condition → condition
+2. Call self.select passing condition as the keyword argument condition, and return its result immediately to the caller → return_value
+
+## select_female_under_age(age: numeric) → any
+Summary: Constructs a SQL-style filter string requiring age strictly less than the given threshold and gender equal to 'female', then delegates to the base select method with that condition.
+#   age: numeric — Exclusive upper bound for the age filter; must be a numeric type to produce a valid predicate string — passing None or an unsanitized string may cause incorrect output or SQL injection
+#   → result: any — Return value of the underlying select call filtered by the composed condition string
+1. Compose condition string by interpolating age into the template 'age < {age} AND gender = \'female\'', using an eager f-string so the value of age is captured at this moment and frozen into the string → condition
+2. Call self.select passing condition as the keyword argument 'condition' and return its result directly → result
+   ! log: "Python raises TypeError during f-string interpolation because age cannot be converted to a string representation suitable for the predicate; the condition variable is never assigned"
+   ! raise: TypeError "Raised implicitly by the f-string when age is of a type that cannot be coerced to a string"
+
+## update(data: dict, condition: str) → str
+Summary: Builds and returns a SQL UPDATE statement string by interpolating the table name, a comma-separated set of column-value assignments derived from the data dict, and a caller-supplied WHERE condition.
+#   data: dict — Mapping of column names to new values; each key-value pair becomes one assignment in the SET clause, with the value always single-quote-wrapped as a string
+#   condition: str — Raw WHERE clause expression interpolated verbatim into the SQL string; no parameterization or escaping is applied
+#   → sql: str — Complete SQL UPDATE statement terminated with a semicolon, e.g. UPDATE table SET col = 'val' WHERE condition;
+1. Iterate over every (field, value) pair in data.items() and format each pair as the string "{field} = '{value}'", producing a list of assignment strings where every value is wrapped in single quotes regardless of its Python type → assignment_list
+2. Join assignment_list with the separator ", " to produce a single comma-separated SET clause string → set_clause
+3. Compose the SQL string by substituting self.table_name, set_clause, and condition directly into the f-string template "UPDATE {self.table_name} SET {set_clause} WHERE {condition}" → sql
+4. Append a literal semicolon to sql and return the result → return_value
+   ? set_clause resolves to an empty string, producing the syntactically invalid SQL fragment "UPDATE {table_name} SET  WHERE {condition}"; no guard prevents this path and the invalid string is still returned
+

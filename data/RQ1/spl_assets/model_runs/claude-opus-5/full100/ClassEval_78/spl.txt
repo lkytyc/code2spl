@@ -1,0 +1,103 @@
+# CLASS SplitSentence
+
+[DEFINE_WORKER: "Splits a raw string into a list of sentence substrings by breaking on whitespace that follows a period or question mark, while using negative lookbehinds to avoid splitting on common abbreviations and title prefixes." split_sentences]
+    [INPUTS]
+        <REF> self </REF>: object "The enclosing class instance; not used within the method body."
+        <REF> sentences_string </REF>: str "A plain string containing one or more sentences to be split; must be defined by the caller before this method is invoked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sentences </REF>: list[str] "A list of sentence-like substrings extracted from sentences_string; contains the whole string as a single element when no split point matches, or a one-element list containing an empty string when the input is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Apply re.split to sentences_string using a pattern that requires all three of the following conditions to be true at the split point: (1) positive lookbehind asserting the immediately preceding character is '.' or '?'; (2) negative lookbehind asserting the four characters before the split point do not match the pattern \w\.\w followed by any character, to avoid splitting inside abbreviations such as e.g. or i.e.; (3) negative lookbehind asserting the three characters before the split point do not match an uppercase letter followed by a lowercase letter followed by a period, to avoid splitting after title abbreviations such as Mr. or Dr.; consume exactly one whitespace character (\s) at the split point, which is removed from all output tokens. RESULT sentences]
+            [COMMAND Return sentences to the caller. RESULT return sentences]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: sentences_string is an empty string]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND re.split finds no split points and returns a list containing one empty string; assign that single-element list to sentences and return it. RESULT sentences]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: No position in sentences_string satisfies all three lookbehind conditions simultaneously (e.g., the string contains only one sentence with no trailing whitespace, or all candidate split points are blocked by an abbreviation guard)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND re.split returns a single-element list containing the entire original string unchanged; assign that to sentences and return it. RESULT sentences]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: A sentence ends with '!' or ';' rather than '.' or '?']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND The positive lookbehind (?<=\.|\?) never matches at that position, so no split occurs there; the exclamation-mark or semicolon-terminated segment is merged with the next sentence in the output list. RESULT sentences]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Two or more whitespace characters appear between sentences]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND \s matches exactly one whitespace character; only that one character is consumed as the delimiter, leaving any additional leading whitespace attached to the start of the following token in sentences. RESULT sentences]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Strips all non-alphabetic, non-whitespace characters from a sentence using a regex substitution, then splits the cleaned string on whitespace and returns the number of resulting tokens." count_words]
+    [INPUTS]
+        <REF> sentence </REF>: str "The input string to count words in; may contain letters, digits, punctuation, whitespace, or Unicode characters"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: int "The count of whitespace-delimited alpha-only tokens remaining after punctuation and non-letter characters are removed; returns 0 for empty, whitespace-only, or purely non-alphabetic input"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Apply re.sub with pattern '[^a-zA-Z\s]' and replacement '' to sentence, rebinding sentence to the resulting string with all non-ASCII-letter, non-whitespace characters removed; digits, punctuation, and non-ASCII Unicode characters are stripped while letters and whitespace are preserved RESULT sentence]
+            [COMMAND Call sentence.split() with no arguments on the cleaned sentence value, splitting on any whitespace sequence and discarding all leading, trailing, and consecutive whitespace, yielding a list of alpha-only tokens with no empty strings RESULT words]
+            [COMMAND Return len(words), the integer count of tokens in the words list RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: sentence is an empty string or contains only whitespace characters]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND re.sub produces an empty string or the same whitespace-only string; sentence.split() then returns []; len([]) evaluates to 0 and is returned RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: sentence contains only digits and/or punctuation with no alphabetic characters (e.g., '123!')]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND re.sub strips all characters, producing an empty string; sentence.split() returns []; len([]) evaluates to 0 and is returned RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: sentence contains Unicode letters outside ASCII (e.g., 'café')]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND re.sub strips non-ASCII characters because the pattern '[^a-zA-Z\s]' matches only ASCII letters; for example 'é' is removed, leaving only the ASCII-letter portion of each word; the partially stripped tokens are then split and counted RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Splits an input string into sentences, then returns the word count of the longest sentence." process_text_file]
+    [INPUTS]
+        <REF> sentences_string </REF>: string "Raw text input to be split into individual sentences"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> max_count </REF>: integer "The highest word count found across all sentences; returns 0 if the input produces no sentences"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.split_sentences with sentences_string as the argument and store the returned list of sentence strings in sentences RESULT sentences]
+            [COMMAND Initialize max_count to the integer literal 0, establishing the floor value for the running maximum before any comparisons occur RESULT max_count]
+            [COMMAND Begin iterating over every element in sentences; for each iteration bind the current element to sentence — no early exit exists, so every sentence is always visited RESULT sentence]
+            [COMMAND Within the for loop over sentences, call self.count_words with sentence as the argument unconditionally on each iteration and store the result in count RESULT count]
+            [COMMAND Within the for loop over sentences, evaluate the strict greater-than condition count > max_count; if and only if count strictly exceeds max_count (ties preserve the existing incumbent), update max_count to count RESULT max_count]
+            [COMMAND After the loop completes, return max_count as the final result; if sentences was empty the loop never executed and max_count retains the value 0 RESULT max_count]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

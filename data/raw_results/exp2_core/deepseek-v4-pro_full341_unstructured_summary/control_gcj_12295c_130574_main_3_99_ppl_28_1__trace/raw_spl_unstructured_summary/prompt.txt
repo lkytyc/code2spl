@@ -1,0 +1,334 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.*;
+2   public class Solution {
+3   	public static void main(String[] args) {
+4   		Scanner sc = new Scanner(System.in);
+5   		int t = sc.nextInt();
+6   		for (int i = 1; i <= t; i++) {
+7   			int p = sc.nextInt();
+8   			int q = sc.nextInt();
+9   			ArrayList<Person> ppl = new ArrayList<Person>(p);
+10  			for (int j = 0; j < p; j++) {
+11  				int b = sc.nextInt(); 
+12  				int a = q - sc.nextInt() - 1;
+13  				String c = sc.next();
+14  				int d = 0;
+15  				int e = 0;
+16  				if (c.equals("N")) {
+17  					e = -1;
+18  				}
+19  				else if (c.equals("S")) {
+20  					e = 1;
+21  				}
+22  				else if (c.equals("E")) {
+23  					d = 1;
+24  				}
+25  				else {
+26  					d = -1;
+27  				}
+28  				ppl.add(new Person(a, b, d, e));
+29  			}
+30  			int[][] b = new int[q][q];
+31  			for (Person a : ppl) {
+32  				int x = a.x;
+33  				int y = a.y;
+34  				if (a.xDir == 0) {
+35  					for (int j = x+a.yDir; j < q && j >= 0; j += a.yDir) {
+36  						for (int k = 0; k < q; k++) {
+37  							b[j][k]++;
+38  						}
+39  					}
+40  				} else {
+41  					for (int j = 0; j < q; j++) {
+42  						for (int k = y+a.xDir; k < q && k >= 0; k += a.xDir) {
+43  							b[j][k]++;
+44  						}
+45  					}
+46  				}
+47  			}
+48  			int max = 0;
+49  			for (int j = 0; j < q; j++) {
+50  				for (int k = 0; k < q; k++) {
+51  					if (b[j][k] > max)
+52  						max = b[j][k];
+53  				}
+54  			}
+55  			int row[] = new int[q*q];
+56  			int col[] = new int[q*q];
+57  			int num = 0;
+58  			for (int c = 0; c < q; c++) {
+59  				for (int r = 0; r < q; r++) {
+60  					if (b[r][c] == max) {
+61  						row[num] = q - r - 1;
+62  						col[num] = c;
+63  						num++;
+64  					}
+65  				}
+66  			}
+67  			int min = Integer.MAX_VALUE;
+68  			ArrayList<Person> f = new ArrayList<Person>(q*q);
+69  			for(int j = 0; j < num; j++) {
+70  				if(row[j] + col[j] < min) {
+71  					min = row[j] + col[j];
+72  					f.clear();
+73  					f.add(new Person(row[j],col[j],0,0));
+74  				}
+75  				else if(row[j] + col[j] == min) {
+76  					f.add(new Person(row[j],col[j],0,0));
+77  				}
+78  			}
+79  			ArrayList<Person> g = new ArrayList<Person>(f.size());
+80  			int m = Integer.MAX_VALUE;
+81  			for(int j = 0; j < f.size(); j++) {
+82  				if(m > f.get(j).x) {
+83  					m = f.get(j).x;
+84  					g.clear();
+85  					g.add(f.get(j));
+86  				}
+87  				else if(m == f.get(j).x) {
+88  					g.add(f.get(j));
+89  				}
+90  			}
+91  			Person z = g.get(0);
+92  			for(int j = 1; j < g.size(); j++) {
+93  				if(g.get(j).y < z.y) {
+94  					z = g.get(j);
+95  				}
+96  			}
+97  			System.out.println("Case #" + i + ": " + z.y + " " + z.x);
+98  		}
+99  	}
+100  	public static class Person {
+101  		int x;
+102  		int y;
+103  		int xDir;
+104  		int yDir;
+105  		public Person(int a, int b, int c, int d) {
+106  			x = a;
+107  			y = b;
+108  			xDir = c;
+109  			yDir = d;
+110  		}
+111  	}
+112  }
+```
+
+
+**Question**: Does line `6` have control dependence over line `28` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function main: Reads T test cases; for each case reads P people and grid size Q, converts each person's N/S/E/W direction into ray coverage counts on a QxQ grid excluding the starting cell, selects the maximum-coverage cell using tie-break order (row+col, row, col), and prints Case #i: col row.
+The behaviour proceeds in this order:
+1. Initialize a Scanner sc over System.in and read the first integer into t as the number of test cases. This produces t.
+2. Start the outer per-test-case loop: for i from 1 to t inclusive, process test case i. This produces test_case_loop_i.
+3. Inside the outer loop over i, read integer p (number of people) and integer q (grid dimension) from sc. This produces p_q.
+4. Inside the outer loop over i, create an ArrayList<Person> named ppl with initial capacity p. This produces ppl.
+5. Within the outer loop over i, start a person-reading loop for j from 0 to p-1 inclusive. This produces person_read_loop_j.
+6. Within that person-reading loop, read the first coordinate integer (original variable b) and retain it as person_y. This produces person_y.
+7. Within that person-reading loop, read the next integer raw_x and compute person_x = q - raw_x - 1. This produces person_x.
+8. Within that person-reading loop, read the direction token c from sc. This produces direction_c.
+9. Within that person-reading loop, initialize d=0 and e=0; if c equals "N" set e=-1, else if c equals "S" set e=1, else if c equals "E" set d=1, else set d=-1 (treating any other token as W). This produces direction_d_e.
+10. Within that person-reading loop, add a new Person(person_x, person_y, d, e) to ppl; Person is a holder with public fields x, y, xDir, yDir. This produces ppl_person_added.
+11. After all people are read, allocate a zero-initialized coverage grid int[][] b = new int[q][q]. This produces coverage_grid.
+12. Start a ray-projection loop over each Person a in ppl. This produces ray_loop_a.
+13. Within the ray loop over each Person a, set x = a.x and y = a.y. This produces current_x_y.
+14. Within the ray loop, if a.xDir == 0 (vertical ray), for each row j starting at x + a.yDir and stepping by a.yDir while j >= 0 and j < q, increment b[j][k] for every column k from 0 to q-1 inclusive; the starting cell is excluded. This produces vertical_coverage.
+15. Within the ray loop, else (a.xDir != 0, horizontal ray), for every row j from 0 to q-1 inclusive, increment b[j][k] for each column k starting at y + a.xDir and stepping by a.xDir while k >= 0 and k < q; the starting cell is excluded. This produces horizontal_coverage.
+16. After all rays are projected, compute max = 0; for j from 0 to q-1 inclusive and k from 0 to q-1 inclusive, if b[j][k] > max set max = b[j][k]. This produces max_coverage.
+17. Allocate int[] row and int[] col, each of length q*q, and set num = 0. This produces row_col_num.
+18. Scan b in column-major order: for c from 0 to q-1 inclusive, for r from 0 to q-1 inclusive, if b[r][c] equals max then set row[num] = q - r - 1, col[num] = c, and increment num. This produces max_coord_candidates.
+19. Initialize min = Integer.MAX_VALUE and ArrayList<Person> f with capacity q*q. For j from 0 to num-1 inclusive, if row[j] + col[j] < min then update min to row[j] + col[j], clear f, and add new Person(row[j], col[j], 0, 0); else if row[j] + col[j] == min then add new Person(row[j], col[j], 0, 0) to f. This produces f_min_sum.
+20. Initialize m = Integer.MAX_VALUE and ArrayList<Person> g with capacity f.size(). For each Person in f, if m > person.x then update m to person.x, clear g, and add the person; else if m == person.x then add the person to g. This produces g_min_row.
+21. Let z = g.get(0). For j from 1 to g.size()-1 inclusive, if g.get(j).y < z.y then set z = g.get(j). This produces z_min_col.
+22. Print using System.out.println("Case #" + i + ": " + z.y + " " + z.x), so the output coordinate is z.y (column) followed by z.x (row). This produces printed_line.

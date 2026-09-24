@@ -1,0 +1,128 @@
+class SQLGenerator:
+    """
+    This class generates SQL statements for common operations on a table, such as SELECT, INSERT, UPDATE, and DELETE.
+    """
+
+    def __init__(self, table_name):
+        """
+        Initialize the table name.
+        :param table_name: str
+        """
+        self.table_name = table_name
+
+    def select(self, fields=None, condition=None):
+        """
+        Generates a SELECT SQL statement based on the specified fields and conditions.
+        :param fields: list, optional. Default is None. The list of fields to be queried.
+        :param condition: str, optional. Default is None. The condition expression for the query.
+        :return: str. The generated SQL statement.
+        >>> sql = SQLGenerator('table1')
+        >>> sql.select(['field1', 'field2'], 'filed3 = value1')
+        'SELECT field1, field2 FROM table1 WHERE filed3 = value1;'
+        """
+        field_part = "*" if not fields else ", ".join(fields)
+        query = f"SELECT {field_part} FROM {self.table_name}"
+        if condition:
+            query += f" WHERE {condition}"
+        return query + ";"
+
+    def insert(self, data):
+        """
+        Generates an INSERT SQL statement based on the given data.
+        :param data: dict. The data to be inserted, in dictionary form where keys are field names and values are field values.
+        :return: str. The generated SQL statement.
+        >>> sql.insert({'key1': 'value1', 'key2': 'value2'})
+        "INSERT INTO table1 (key1, key2) VALUES ('value1', 'value2');"
+        """
+        keys = list(data.keys())
+        values = []
+        for v in data.values():
+            if isinstance(v, str):
+                values.append(f"'{v}'")
+            elif v is None:
+                values.append("NULL")
+            else:
+                values.append(str(v))
+        return f"INSERT INTO {self.table_name} ({', '.join(keys)}) VALUES ({', '.join(values)});"
+
+    def update(self, data, condition):
+        """
+        Generates an UPDATE SQL statement based on the given data and condition.
+        :param data: dict. The data to be updated, in dictionary form where keys are field names and values are new field values.
+        :param condition: str. The condition expression for the update.
+        :return: str. The generated SQL statement.
+        >>> sql.update({'field1': 'new_value1', 'field2': 'new_value2'}, "field3 = value1")
+        "UPDATE table1 SET field1 = 'new_value1', field2 = 'new_value2' WHERE field3 = value1;"
+        """
+        assignments = []
+        for k, v in data.items():
+            if isinstance(v, str):
+                assignments.append(f"{k} = '{v}'")
+            elif v is None:
+                assignments.append(f"{k} = NULL")
+            else:
+                assignments.append(f"{k} = {v}")
+        return f"UPDATE {self.table_name} SET {', '.join(assignments)} WHERE {condition};"
+
+    def delete(self, condition):
+        """
+        Generates a DELETE SQL statement based on the given condition.
+        :param condition: str. The condition expression for the delete.
+        :return: str. The generated SQL statement.
+        >>> sql.delete("field1 = value1")
+        'DELETE FROM table1 WHERE field1 = value1;'
+        """
+        return f"DELETE FROM {self.table_name} WHERE {condition};"
+
+    def select_female_under_age(self, age):
+        """
+        Generates a SQL statement to select females under a specified age.
+        :param age: int. The specified age.
+        :return: str. The generated SQL statement.
+        >>> sql.select_female_under_age(30)
+        "SELECT * FROM table1 WHERE age < 30 AND gender = 'female';"
+        """
+        return f"SELECT * FROM {self.table_name} WHERE age < {age} AND gender = 'female';"
+
+    def select_by_age_range(self, min_age, max_age):
+        """
+        Generates a SQL statement to select records within a specified age range.
+        :param min_age: int. The minimum age.
+        :param max_age: int. The maximum age.
+        :return: str. The generated SQL statement.
+        >>> sql.select_by_age_range(20, 30)
+        'SELECT * FROM table1 WHERE age BETWEEN 20 AND 30;'
+        """
+        return f"SELECT * FROM {self.table_name} WHERE age BETWEEN {min_age} AND {max_age};"
+
+import unittest
+
+class SQLGeneratorTestSelectByAgeRange(unittest.TestCase):
+    def test_select_by_age_range(self):
+        sql = SQLGenerator('table1')
+        result = sql.select_by_age_range(20, 30)
+        self.assertEqual(result, "SELECT * FROM table1 WHERE age BETWEEN 20 AND 30;")
+
+    def test_select_by_age_range_2(self):
+        sql = SQLGenerator('table1')
+        result = sql.select_by_age_range(10, 20)
+        self.assertEqual(result, "SELECT * FROM table1 WHERE age BETWEEN 10 AND 20;")
+
+    def test_select_by_age_range_3(self):
+        sql = SQLGenerator('table1')
+        result = sql.select_by_age_range(30, 40)
+        self.assertEqual(result, "SELECT * FROM table1 WHERE age BETWEEN 30 AND 40;")
+
+    def test_select_by_age_range_4(self):
+        sql = SQLGenerator('table1')
+        result = sql.select_by_age_range(40, 50)
+        self.assertEqual(result, "SELECT * FROM table1 WHERE age BETWEEN 40 AND 50;")
+
+    def test_select_by_age_range_5(self):
+        sql = SQLGenerator('table1')
+        result = sql.select_by_age_range(50, 60)
+        self.assertEqual(result, "SELECT * FROM table1 WHERE age BETWEEN 50 AND 60;")
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,1207 @@
+# FILE: sympy/printing/codeprinter.py
+# CLASS requires
+
+[DEFINE_WORKER: "Stores the constructor's keyword arguments into the private _req attribute." __init__]
+    [INPUTS]
+        <REF> kwargs </REF>: dict "Arbitrary keyword arguments passed to the constructor."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the kwargs parameter to self._req, preserving the same reference without transformation. RESULT self._req]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS AssignmentError
+
+# CLASS CodePrinter
+
+[DEFINE_WORKER: "Initializes the instance by forwarding settings to the superclass initializer and lazily creating an empty reserved_words set if it does not already exist." __init__]
+    [INPUTS]
+        <REF> settings </REF>: object "Optional settings value forwarded to the superclass initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the superclass initializer with the settings keyword argument. RESULT self]
+            [COMMAND If the instance does not already have a reserved_words attribute, create an empty set and assign it to self.reserved_words. RESULT self.reserved_words]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes an expression and optional assignment target into a SymPy assignment structure, prints the result as code, and formats the printed lines into either human-readable source or a machine-oriented tuple depending on the human setting." doprint]
+    [INPUTS]
+        <REF> expr </REF>: Expression "The expression to be printed."
+        <REF> assign_to </REF>: Symbol, string, MatrixSymbol, list of strings or Symbols (optional) "If provided, the printed code will set the expression to a variable or multiple variables with the name or names given."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string or tuple "If human mode is enabled, a string of formatted code; otherwise a tuple (num_syms, self._not_supported, code_string)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import MatrixSymbol from sympy.matrices.expressions.matexpr, and import CodeBlock and Assignment from sympy.codegen.ast. RESULT none]
+            [COMMAND Define the nested helper _handle_assign_to(expr, assign_to): if assign_to is None, return sympify(expr); if assign_to is a list or tuple, require len(expr) == len(assign_to) and return CodeBlock containing the recursive assignments for each zipped pair; if assign_to is a string, convert it to MatrixSymbol(assign_to, *expr.shape) when expr.is_Matrix is true, otherwise convert it to Symbol(assign_to); if assign_to is still not a Basic instance, raise TypeError; otherwise return Assignment(assign_to, expr). RESULT _handle_assign_to]
+            [COMMAND Call _handle_assign_to(expr, assign_to) and overwrite expr with the returned assignment structure. RESULT expr]
+            [COMMAND Reset self._not_supported to an empty set and self._number_symbols to an empty set. RESULT state_sets]
+            [COMMAND Print the normalized expr using self._print(expr).splitlines() and store the resulting list of lines. RESULT lines]
+            [COMMAND Evaluate self._settings['human']; if it is truthy, execute the human-readable formatting branch, otherwise execute the machine-oriented formatting branch. RESULT branch_selected]
+            [COMMAND After the selected formatting branch completes, reset self._not_supported to an empty set and self._number_symbols to an empty set. RESULT final_state_sets]
+            [COMMAND Return the result produced by the selected formatting branch. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self._settings['human'] is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the human-readable branch, initialize frontlines as an empty list. RESULT frontlines]
+            [COMMAND Within the human-readable branch, if self._not_supported is non-empty, append the comment 'Not supported in {language}:' and then append a comment containing type(expr).__name__ for each expr in self._not_supported sorted by str. RESULT frontlines]
+            [COMMAND Within the human-readable branch, for each (name, value) in self._number_symbols sorted by str, append self._declare_number_const(name, value) to frontlines. RESULT frontlines]
+            [COMMAND Within the human-readable branch, set lines to frontlines + lines, format the combined lines with self._format_code(lines), and set result to the newline-joined formatted lines. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._settings['human'] is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the non-human branch, format the existing lines with self._format_code(lines). RESULT lines]
+            [COMMAND Within the non-human branch, set num_syms to {(k, self._print(v)) for k, v in self._number_symbols}. RESULT num_syms]
+            [COMMAND Within the non-human branch, set result to the tuple (num_syms, self._not_supported, newline-joined formatted lines). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Inside _handle_assign_to, when assign_to is a list or tuple and len(expr) != len(assign_to).]
+        [LOG "Failed to assign an expression of length {} to {} variables"]
+        [THROW ValueError "Raised when the number of expressions does not match the number of assignment targets."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Inside _handle_assign_to, when assign_to is not None, not a list or tuple, not a string, and not an instance of Basic.]
+        [LOG "{} cannot assign to object of type {}"]
+        [THROW TypeError "Raised when assign_to is not a supported assignment target type."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates loop-structured source code for printing an indexed SymPy expression by computing its index/dummy structure, emitting non-summation terms or a zero initializer, and accumulating each contracted term into the assignment target." _doprint_loops]
+    [INPUTS]
+        <REF> expr </REF>: object "SymPy expression containing Indexed objects for which loop-based code is generated."
+        <REF> assign_to </REF>: object "Optional assignment target used as the left-hand side and accumulator for generated loops; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Generated source code text containing loop openings, assignment statements, and loop closings, with lines joined by newline characters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inspect the contract setting using self._settings.get('contract', True) and prepare the index/dummy structures for printing; use the contraction-enabled branch when the setting is truthy and the contract-disabled alternative flow otherwise. RESULT indices_and_dummies]
+            [COMMAND Retrieve loop boundaries by calling self._get_loop_opening_ending(indices); assign its two return values to openloop and closeloop. RESULT openloop_closeloop]
+            [COMMAND Initialize the text to print: if None is a key in dummies, set text to StrPrinter.doprint(self, Add(*dummies[None])); otherwise use the no-non-summation-terms alternative flow. RESULT text]
+            [COMMAND Render the left-hand side with self._print(assign_to), storing it as lhs_printed, and create an empty list named lines. RESULT lhs_printed_and_lines]
+            [COMMAND When text is not equal to lhs_printed, extend lines with openloop; rewrite text as self._get_statement('%s = %s' % (lhs_printed, text)) only if assign_to is not None; append text to lines; then extend lines with closeloop. RESULT non_summation_lines]
+            [COMMAND For each key d in dummies, if d is a tuple, set indices = self._sort_optimized(d, expr), then unpack openloop_d and closeloop_d from self._get_loop_opening_ending(indices). RESULT dummy_loop_setup]
+            [COMMAND Within the tuple-key d processing and for each term in dummies[d], check whether the term is a key in dummies with internal factor key lists not all equal to [None]; if so, raise NotImplementedError through the exception flow; otherwise proceed to the accumulator branch. RESULT term_check]
+            [COMMAND In the accumulator branch for that term under the tuple-key d processing, if assign_to is None raise AssignmentError; if term.has(assign_to) raise ValueError; otherwise extend lines with openloop and openloop_d, generate text as an assignment from lhs_printed to StrPrinter.doprint(self, assign_to + term), append self._get_statement(text), then extend lines with closeloop_d and closeloop. RESULT accumulator_lines]
+            [COMMAND Return the generated code by joining the accumulated lines in lines with newline separators. RESULT generated_code]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The contract setting self._settings.get('contract', True) is falsy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set indices to an empty list. RESULT indices]
+            [COMMAND Set dummies to {None: (expr,)}. RESULT dummies]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: None is not a key in dummies, meaning there are no non-summation terms to print first.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize text by printing zero with StrPrinter.doprint(self, 0). RESULT text]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: text equals lhs_printed after initialization, making the non-summation assignment redundant.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave lines unchanged and skip adding the redundant non-summation assignment. RESULT lines]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: A term in dummies[d] is itself a key in dummies and at least one factor in dummies[term] has a key list different from [None], meaning the term has unsupported internal contractions.]
+        [LOG "FIXME: no support for contractions in factor yet"]
+        [THROW NotImplementedError "Raised because a term with its own internal contractions would require preprocessing or temporary variables that are not yet implemented."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: assign_to is None in the accumulator branch while processing a contracted term.]
+        [LOG "need assignment variable for loops"]
+        [THROW AssignmentError "Raised because an assignment target is required to accumulate the contracted term in generated loops."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: term.has(assign_to) is true in the accumulator branch while processing a contracted term.]
+        [LOG "FIXME: lhs present in rhs, this is undefined in CodePrinter"]
+        [THROW ValueError "Raised because the right-hand side already contains the left-hand-side accumulator, which is undefined syntax."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Extracts the index lists from an expression and an assignment target, applies scalar broadcast when only the target has indices, validates that the index lists match, and returns the result of _sort_optimized." _get_expression_indices]
+    [INPUTS]
+        <REF> expr </REF>: object "The symbolic expression whose indices are extracted."
+        <REF> assign_to </REF>: object "The assignment target whose indices must match the expression indices."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The result returned by self._sort_optimized(rinds, assign_to), representing the optimized index/target alignment."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import get_indices from sympy.tensor into the local namespace. RESULT get_indices]
+            [COMMAND Call get_indices(expr) and unpack the two returned values into rinds and junk; the junk value from this call is not used and is overwritten by the next call. RESULT rinds, junk]
+            [COMMAND Call get_indices(assign_to) and unpack the two returned values into linds and junk, overwriting the previous junk value. RESULT linds, junk]
+            [COMMAND If linds is non-empty and rinds is empty, set rinds = linds to support broadcast of a scalar expression. RESULT rinds]
+            [COMMAND If rinds is not equal to linds, trigger the ValueError exception flow; otherwise keep rinds unchanged for the final call. RESULT rinds]
+            [COMMAND Call self._sort_optimized(rinds, assign_to) and return the result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When rinds and linds are not equal.]
+        [LOG "lhs indices must match non-dummy rhs indices in {expr} (formatted with expr)."]
+        [THROW ValueError "Raised when the left-hand side and right-hand side index sequences do not match exactly."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sorts the supplied indices by a position-based score gathered from Indexed atoms in the expression, so higher-scoring indices are ordered later for inner-loop placement." _sort_optimized]
+    [INPUTS]
+        <REF> indices </REF>: list "List of index objects whose order is to be optimized."
+        <REF> expr </REF>: sympy expression "Expression used to discover Indexed atoms and score indices by their positions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sorted_indices </REF>: list "Indices sorted by increasing score; if indices is empty, an empty list is returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the Indexed class from sympy.tensor.indexed. RESULT Indexed]
+            [COMMAND Check whether indices is empty; if it is empty, branch to the alternative flow for the early return. RESULT indices_empty]
+            [COMMAND Initialize score_table as an empty dictionary. RESULT score_table]
+            [COMMAND For each index in indices, set score_table[index] to 0. RESULT score_table]
+            [COMMAND Compute arrays as the set of Indexed atoms contained in expr. RESULT arrays]
+            [COMMAND For each array arr in arrays, iterate over its indices with their positions; for each position p and index ind, try to add self._rate_index_position(p) to score_table[ind]. If ind is not already a key in score_table, catch the KeyError and skip the update. RESULT score_table]
+            [COMMAND Return the indices sorted in ascending order by the score stored in score_table for each index. RESULT sorted_indices]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: indices is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defines the abstract scoring hook for ranking index positions, and raises NotImplementedError to require subclasses of CodePrinter to provide an implementation." _rate_index_position]
+    [INPUTS]
+        <REF> p </REF>: object "Index position used to calculate the rating score."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the method body; since the implementation is intentionally missing, proceed directly to the NotImplementedError exception path. RESULT missing_implementation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Whenever _rate_index_position is called without a subclass override]
+        [LOG "NotImplementedError: This function must be implemented by subclass of CodePrinter."]
+        [THROW NotImplementedError "Indicates that _rate_index_position must be implemented by a CodePrinter subclass."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Formats a codestring with the proper line ending in subclass implementations, while the base CodePrinter method raises NotImplementedError to force overriding." _get_statement]
+    [INPUTS]
+        <REF> self </REF>: CodePrinter "The CodePrinter instance on which the method is called."
+        <REF> codestring </REF>: str "The code string intended to be formatted with the proper line ending."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inspect the codestring argument and identify the documented purpose of formatting it with the proper line ending. RESULT codestring]
+            [COMMAND Recognize that this base CodePrinter method contains no formatting implementation and therefore cannot produce a normal formatted statement. RESULT not_applicable]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The method is called and reaches its unconditional raise statement because the base implementation does not define the formatting logic.]
+        [LOG "This function must be implemented by subclass of CodePrinter."]
+        [THROW NotImplementedError "Indicates that _get_statement must be overridden by a subclass of CodePrinter."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defines an abstract contract for formatting a text string as a comment by raising NotImplementedError to require subclass implementation." _get_comment]
+    [INPUTS]
+        <REF> text </REF>: string "Text string to be formatted as a comment."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with message 'This function must be implemented by subclass of CodePrinter.' RESULT raised_exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Whenever _get_comment is called, because the base implementation is intentionally abstract.]
+        [LOG "NotImplementedError: This function must be implemented by subclass of CodePrinter."]
+        [THROW NotImplementedError "This function must be implemented by subclass of CodePrinter."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Declares a numeric constant at the top of a function, but is intentionally unimplemented and raises NotImplementedError to enforce subclass overriding." _declare_number_const]
+    [INPUTS]
+        <REF> name </REF>: string "The name of the numeric constant to declare."
+        <REF> value </REF>: numeric "The numeric value to assign to the constant."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to declare a numeric constant named by name with value value at the top of a function. RESULT declaration_attempt]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The method is invoked without being overridden by a subclass]
+        [LOG "This function must be implemented by subclass of CodePrinter."]
+        [THROW NotImplementedError "Indicates that the numeric constant declaration is not implemented in the base class."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to indicate that _format_code must be implemented by a subclass of CodePrinter." _format_code]
+    [INPUTS]
+        <REF> lines </REF>: list "A list of code lines to be formatted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The _format_code method is invoked without a subclass override.]
+        [LOG "This function must be implemented by subclass of CodePrinter."]
+        [THROW NotImplementedError "Signals that the method must be provided by a subclass of CodePrinter."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defines the abstract interface for returning loop opening and ending code lines for the supplied indices, but always raises NotImplementedError to require subclass implementation." _get_loop_opening_ending]
+    [INPUTS]
+        <REF> indices </REF>: unknown "The loop indices for which opening and ending code lines should be generated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to compute the opening and ending code line lists for the supplied indices RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Always, because this base implementation is not implemented]
+        [LOG "This function must be implemented by subclass of CodePrinter."]
+        [THROW NotImplementedError "Indicates that _get_loop_opening_ending must be overridden by a subclass of CodePrinter."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a display name for a dummy expression by prefixing the expression name with an underscore if it already starts with 'Dummy_', otherwise by appending the dummy index with an underscore." _print_Dummy]
+    [INPUTS]
+        <REF> expr </REF>: object "Expression object containing a string name attribute and an integer dummy_index attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The formatted name string produced by the chosen branch."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether expr.name starts with the exact case-sensitive prefix 'Dummy_' and store the boolean result. RESULT starts_with_dummy]
+            [COMMAND Select the alternative flow whose condition matches starts_with_dummy and execute its steps immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: starts_with_dummy is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the true branch of the condition starts_with_dummy, return the string formed by prepending an underscore to expr.name. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: starts_with_dummy is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the false branch of the condition starts_with_dummy, return the string formed by formatting expr.name and expr.dummy_index with the format '%s_%d'. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a newline-separated string by calling self._print on each element of expr.args and joining the resulting strings." _print_CodeBlock]
+    [INPUTS]
+        <REF> self </REF>: object "Printer instance providing a _print method that maps elements to string representations."
+        <REF> expr </REF>: object "Expression node or object whose args attribute is an iterable of elements to be printed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Newline-separated string containing the printed representation of each element in expr.args."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the iterable argument list from expr.args and prepare to iterate over it in order. RESULT args]
+            [COMMAND For each element i in args, call self._print(i) to convert it to a string and collect each converted string into a list. RESULT printed_lines]
+            [COMMAND Join printed_lines with newline characters to create a single newline-separated string. RESULT joined_result]
+            [COMMAND Return joined_result as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the given string value to a string representation using str() and returns it." _print_String]
+    [INPUTS]
+        <REF> string </REF>: str "The value to be converted to a string representation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The string representation of the input value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the input string to a string value using str(string). RESULT converted_string]
+            [COMMAND Return converted_string as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the string value of arg.text wrapped in literal double quotes." _print_QuotedString]
+    [INPUTS]
+        <REF> arg </REF>: object "Object with a text attribute whose string value will be wrapped in double quotes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The string form of arg.text enclosed in literal double quotes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the text attribute from arg. RESULT arg.text]
+            [COMMAND Format arg.text using the pattern '"%s"' so that the result is a string with literal double quotes around the value. RESULT formatted_text]
+            [COMMAND Return formatted_text as the result of the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the input value to a string and returns the result of passing that string to the _get_comment method." _print_Comment]
+    [INPUTS]
+        <REF> string </REF>: object "The value to convert to a string and pass to _get_comment."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The comment returned by _get_comment(str(string))."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert string to a string using str(string), call self._get_comment with that converted string, and return its result immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts an AugmentedAssignment AST node into a statement string by printing its left-hand side, operator, and right-hand side and passing the formatted result to _get_statement." _print_AugmentedAssignment]
+    [INPUTS]
+        <REF> self </REF>: Printer "The printer instance that provides the _print and _get_statement methods."
+        <REF> expr </REF>: AugmentedAssignment AST node "The augmented assignment expression containing lhs, op, and rhs attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The statement string returned by _get_statement for the formatted augmented assignment."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Print the left-hand side expression expr.lhs by calling self._print(expr.lhs) and store the result in lhs_code. RESULT lhs_code]
+            [COMMAND Print the right-hand side expression expr.rhs by calling self._print(expr.rhs) and store the result in rhs_code. RESULT rhs_code]
+            [COMMAND Construct the list [lhs_code, expr.op, rhs_code] to hold the three components to be formatted. RESULT components]
+            [COMMAND Apply self._print to each component in components, including the already-printed lhs_code and rhs_code, using the lambda arg: self._print(arg), and collect the printed values in printed_components. RESULT printed_components]
+            [COMMAND Format printed_components into a string with single-space separators using the format template '{} {} {}'. RESULT formatted_statement]
+            [COMMAND Pass formatted_statement to self._get_statement and return the resulting statement. RESULT statement]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders a function-call AST node as '<name>(<arg1>, <arg2>, ...)' by formatting expr.name and the comma-separated results of self._print applied to each argument." _print_FunctionCall]
+    [INPUTS]
+        <REF> expr </REF>: object "AST node representing a function call, expected to have a string name attribute and an iterable function_args attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Formatted function call string, e.g. 'foo(arg1, arg2)'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the function call name from expr.name. RESULT expr_name]
+            [COMMAND Within the map operation over expr.function_args, for each argument, call self._print on that argument to convert it to a string. RESULT printed_arg_strings]
+            [COMMAND Join the resulting argument strings with ', ', yielding an empty string when expr.function_args is empty. RESULT arg_list_str]
+            [COMMAND Compose the formatted function call using the pattern '<expr_name>(<arg_list_str>)' with the format operation '%s(%s)' % (expr_name, arg_list_str). RESULT formatted_call]
+            [COMMAND Return formatted_call as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the result of calling self._print with expr.symbol." _print_Variable]
+    [INPUTS]
+        <REF> expr </REF>: object "Expression instance that has a symbol attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "Result returned by self._print(expr.symbol); type depends on the printer implementation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read expr.symbol to obtain the symbol value. RESULT symbol_value]
+            [COMMAND Call self._print with symbol_value and return the resulting value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prints a Statement node by unpacking its single argument, printing that argument, and passing the printed result through _get_statement." _print_Statement]
+    [INPUTS]
+        <REF> expr </REF>: object "AST expression node representing a Statement; its args must contain exactly one element."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "Result of _get_statement, representing the statement output."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack expr.args into arg, expecting exactly one element. RESULT arg]
+            [COMMAND Call self._print(arg) to obtain the printed representation of the argument. RESULT printed_arg]
+            [COMMAND Call self._get_statement(printed_arg) to obtain the statement representation and return it. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prints a symbol by delegating to the parent printer, and if the resulting name is a reserved word, either raises ValueError or appends the configured reserved-word suffix; otherwise returns the name unchanged." _print_Symbol]
+    [INPUTS]
+        <REF> self </REF>: object "Current printer instance providing the parent implementation, reserved_words, and _settings."
+        <REF> expr </REF>: Any "The symbol expression to convert to its printed representation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The printed string representation of expr, with reserved_word_suffix appended for reserved symbols when allowed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super()._print_Symbol(expr) and store the returned string in name. RESULT name]
+            [COMMAND Check whether name is in self.reserved_words. RESULT is_reserved_word]
+            [COMMAND If is_reserved_word is false, return name unchanged. RESULT name_output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_reserved_word is true and self._settings['error_on_reserved'] is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return name concatenated with self._settings['reserved_word_suffix']. RESULT reserved_name_output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: is_reserved_word is true and self._settings['error_on_reserved'] is true]
+        [LOG "This expression includes the symbol '{name}' which is a reserved keyword in this language."]
+        [THROW ValueError "Raised when a reserved symbol is used while error_on_reserved is enabled."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Evaluates a NumberSymbol to a Float at the configured precision; if inline mode is enabled, it returns the pretty-printed Float, otherwise it registers the evaluated pair in _number_symbols and returns the original symbol string." _print_NumberSymbol]
+    [INPUTS]
+        <REF> self </REF>: object "Printer instance that provides _settings, _print, and _number_symbols."
+        <REF> expr </REF>: NumberSymbol "Numeric symbol expression to be evaluated and printed or registered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Pretty-printed output in inline mode, or the string form of expr after registration."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the "inline" setting from self._settings with default False and set inline_enabled to its truthiness. RESULT inline_enabled]
+            [COMMAND If inline_enabled is false, evaluate expr with expr.evalf(self._settings["precision"]) and wrap the result in Float. RESULT evaluated_float]
+            [COMMAND Within the non-inline branch where inline_enabled is false, add the pair (expr, evaluated_float) to self._number_symbols. RESULT updated_number_symbols]
+            [COMMAND Within the non-inline branch where inline_enabled is false, return str(expr). RESULT string_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: inline_enabled is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the inline branch, evaluate expr with expr.evalf(self._settings["precision"]) and wrap the result in Float. RESULT inline_float]
+            [COMMAND Within the inline branch, return self._print(inline_float). RESULT inline_print_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the printed representation of a Catalan constant expression by delegating to _print_NumberSymbol." _print_Catalan]
+    [INPUTS]
+        <REF> expr </REF>: Any "The Catalan expression to be printed; passed unchanged to _print_NumberSymbol."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Any "The printed representation returned by _print_NumberSymbol for expr."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _print_NumberSymbol with expr to get the printed representation. RESULT printed_symbol]
+            [COMMAND Return printed_symbol as the result of _print_Catalan. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prints the EulerGamma constant by forwarding the expression to _print_NumberSymbol and returning its output." _print_EulerGamma]
+    [INPUTS]
+        <REF> expr </REF>: object "Symbolic expression representing the EulerGamma constant to be printed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "Result produced by _print_NumberSymbol for the given expression."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._print_NumberSymbol(expr) and return the result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates printing of a GoldenRatio expression to _print_NumberSymbol and returns the rendered output." _print_GoldenRatio]
+    [INPUTS]
+        <REF> expr </REF>: Any "The expression to be rendered by _print_NumberSymbol."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "The output string or representation produced by _print_NumberSymbol for expr."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _print_NumberSymbol on self with expr as its argument. RESULT number_symbol_output]
+            [COMMAND Return number_symbol_output to the caller of _print_GoldenRatio. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates rendering of a TribonacciConstant expression to _print_NumberSymbol and returns the resulting representation directly." _print_TribonacciConstant]
+    [INPUTS]
+        <REF> expr </REF>: object "The TribonacciConstant expression to be printed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The printed representation produced by _print_NumberSymbol."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _print_NumberSymbol on self with expr and immediately return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the result of delegating the rendering of expr as a number or symbol to _print_NumberSymbol." _print_Exp1]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is invoked, used to access _print_NumberSymbol."
+        <REF> expr </REF>: object "The expression to be rendered as a number or symbol."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The string representation returned by _print_NumberSymbol for expr."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _print_NumberSymbol with expr and immediately return the resulting value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prints the Pi expression by delegating to _print_NumberSymbol and returning its result." _print_Pi]
+    [INPUTS]
+        <REF> self </REF>: object "The current printer instance used to call _print_NumberSymbol."
+        <REF> expr </REF>: Expression "The Pi expression to print."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The printed representation returned by _print_NumberSymbol."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _print_NumberSymbol with expr and return its result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Formats a symbolic And expression as a string by sorting its arguments by default sort order, parenthesizing each according to the expression precedence, and joining them with the configured 'and' operator." _print_And]
+    [INPUTS]
+        <REF> expr </REF>: expression "The And expression to be rendered as text."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The joined and parenthesized string representation of the And expression."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the precedence of the given And expression and store it in PREC. RESULT PREC]
+            [COMMAND Sort the arguments of the expression by default sort key to produce a deterministic argument order. RESULT sorted_args]
+            [COMMAND For each argument in sorted_args, call self.parenthesize(a, PREC) to parenthesize the argument according to the expression precedence. RESULT parenthesized_args]
+            [COMMAND Join all parenthesized arguments using self._operators['and'] as the separator. RESULT joined_result]
+            [COMMAND Return the joined string as the rendered And expression. RESULT _print_And_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders a SymPy Or expression as a string by joining its sorted arguments with the configured 'or' operator, parenthesizing each argument according to the expression's precedence." _print_Or]
+    [INPUTS]
+        <REF> expr </REF>: object "SymPy Or expression whose arguments are to be printed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "String representation of the Or expression, with arguments joined by the configured 'or' operator."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute PREC by calling precedence(expr). RESULT PREC]
+            [COMMAND Sort expr.args using default_sort_key to produce a deterministic argument order. RESULT sorted_args]
+            [COMMAND For each argument a in sorted_args, call self.parenthesize(a, PREC) to obtain its parenthesized string representation. RESULT parenthesized_args]
+            [COMMAND Build the join operator string by formatting self._operators['or'] as " %s ". RESULT or_operator]
+            [COMMAND Join all parenthesized_args with or_operator and return the resulting string. RESULT output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders a Boolean XOR expression by joining parenthesized operands with the configured xor operator, deferring to unsupported-operation handling when that operator is not configured." _print_Xor]
+    [INPUTS]
+        <REF> expr </REF>: object "Boolean XOR expression whose arguments are to be rendered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> printed_xor_result </REF>: string "Rendered string for the XOR expression, or the fallback result returned by _print_not_supported when the xor operator is not configured."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the configured XOR operator by calling self._operators.get('xor') and store the result in xor_operator. RESULT xor_operator]
+            [COMMAND If xor_operator is not None, compute the precedence of expr by calling precedence(expr) and store it in PREC. RESULT PREC]
+            [COMMAND For each argument a in expr.args, call self.parenthesize(a, PREC) to generate the parenthesized representation of that argument. RESULT parenthesized_args]
+            [COMMAND Return the string produced by joining every entry in parenthesized_args with the separator created by formatting xor_operator into " %s ". RESULT printed_xor_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: xor_operator is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of self._print_not_supported(expr). RESULT not_supported_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders a binary equivalent expression by parenthesizing each argument with the expression's precedence and joining them with the configured equivalent operator, or falls back to not-supported handling when that operator is not configured." _print_Equivalent]
+    [INPUTS]
+        <REF> expr </REF>: expression "The expression to print, whose arguments are joined by the equivalent operator."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The rendered equivalent expression, or the result of _print_not_supported if the operator is not configured."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the precedence of expr and store it in PREC. RESULT PREC]
+            [COMMAND For each argument a in expr.args, parenthesize a using the precedence PREC. RESULT parenthesized_args]
+            [COMMAND Join the parenthesized arguments with the string formed by surrounding the configured equivalent operator with spaces. RESULT joined_string]
+            [COMMAND Return the joined string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self._operators.get('equivalent') is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._print_not_supported(expr) and return its result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders a Not expression as a string by prefixing the configured 'not' operator to its operand, parenthesized according to the expression precedence." _print_Not]
+    [INPUTS]
+        <REF> expr </REF>: expression object "The Not expression to render; expr.args[0] is the operand expression."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The printed representation of the Not expression."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the precedence of the Not expression and assign it to PREC. RESULT PREC]
+            [COMMAND Return the concatenation of self._operators['not'] and self.parenthesize(expr.args[0], PREC). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Formats a SymPy multiplicative expression as a string by normalizing a negative leading coefficient, separating numerator and denominator factors, and applying precedence-aware parenthesization." _print_Mul]
+    [INPUTS]
+        <REF> self </REF>: printer instance "Printer instance providing self.order, self.parenthesize, and helper functions used for formatting."
+        <REF> expr </REF>: SymPy expression "The multiplicative expression to be rendered as a string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The formatted string representation of the multiplicative expression."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the precedence of expr by calling precedence(expr) and store the result as prec. RESULT prec]
+            [COMMAND Unpack expr.as_coeff_Mul() into c, the numeric coefficient, and e, the remaining non-coefficient expression. RESULT c, e]
+            [COMMAND If c is strictly less than 0, reassign expr to _keep_coeff(-c, e) and set sign to '-'; otherwise set sign to an empty string and leave expr unchanged. RESULT sign, expr]
+            [COMMAND Initialize a as an empty list for numerator items, b as an empty list for denominator items, and pow_paren as an empty list for base**-1 powers whose base is a Mul with more than one argument. RESULT a, b, pow_paren]
+            [COMMAND If self.order is neither 'old' nor 'none', set args to the current expr.as_ordered_factors(); otherwise set args to Mul.make_args(current expr). RESULT args]
+            [COMMAND For each item in args, evaluate in order item.is_commutative, item.is_Pow, item.exp.is_Rational, and item.exp.is_negative. If all are true and item.exp is not equal to -1, append Pow(item.base, -item.exp, evaluate=False) to b. If all are true and item.exp is equal to -1, then when the number of arguments of item.base is not equal to 1 and item.base is an instance of Mul, append item to pow_paren, then append Pow(item.base, -item.exp) to b. If the outer predicate is false, append item to a. RESULT a, b, pow_paren]
+            [COMMAND If a is falsey, meaning empty, assign [S.One] to a; otherwise keep a unchanged. RESULT a]
+            [COMMAND Build a_str by applying self.parenthesize(x, prec) to every x in a, and build b_str by applying self.parenthesize(x, prec) to every x in b. RESULT a_str, b_str]
+            [COMMAND For each item in pow_paren, check whether item.base occurs in b; if it does, locate the index of item.base in b and replace b_str at that index with '(' plus the existing b_str entry plus ')'. RESULT b_str]
+            [COMMAND Join strings in a_str with '*' separators. If b is falsey, return sign plus that joined numerator string. If len(b) equals 1, return sign plus that joined numerator string plus '/' plus b_str[0]. Otherwise return sign plus that joined numerator string plus '/(' plus strings in b_str joined with '*' separators plus ')'. RESULT output_string]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Records expr as unsupported by adding it to self._not_supported when it is hashable, silently ignores TypeError when it is not, and returns the result of self.emptyPrinter(expr)." _print_not_supported]
+    [INPUTS]
+        <REF> expr </REF>: Any "Expression to be recorded as not supported and passed to emptyPrinter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Any "Result returned by self.emptyPrinter(expr)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Try to add expr to the instance set self._not_supported; if the add operation raises a TypeError because expr is unhashable, catch it and do nothing. RESULT self._not_supported]
+            [COMMAND Return the result of calling self.emptyPrinter(expr). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a SymPy expression into a C code string by selecting the C printer class for the requested standard and invoking its doprint method with an optional assignment target." ccode]
+    [INPUTS]
+        <REF> expr </REF>: Expr "SymPy expression to be converted to C code."
+        <REF> assign_to </REF>: optional (str, Symbol, MatrixSymbol, or Indexed) "Optional assignment target; when provided, the generated C code assigns the expression to this target."
+        <REF> standard </REF>: str "C standard name such as 'c99' or 'c89'; defaults to 'c99'. The printer lookup uses its lowercase form."
+        <REF> settings </REF>: dict "Additional keyword settings such as precision, user_functions, dereference, human, and contract, forwarded to the selected C printer constructor."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> code_text </REF>: str "Generated C code representation of expr; includes an assignment prefix if assign_to is provided."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the c_code_printers mapping from sympy.printing.c. RESULT c_code_printers]
+            [COMMAND Normalize the standard argument to lowercase by calling standard.lower(). RESULT normalized_standard]
+            [COMMAND Select the C printer class from the c_code_printers mapping using normalized_standard as the key. RESULT printer_class]
+            [COMMAND Instantiate the selected printer class with the settings dictionary as its single constructor argument. RESULT printer]
+            [COMMAND Call printer.doprint(expr, assign_to) to generate C code for expr, using assign_to as the optional assignment target. RESULT code_text]
+            [COMMAND Return code_text as the generated C code string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: standard.lower() is not a valid key in c_code_printers.]
+        [LOG "No C printer is available for the requested standard."]
+        [THROW KeyError "Raised when the normalized C standard name is not present in c_code_printers."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prints the C representation of a given expression by calling ccode with the expression and optional settings, then printing the result to standard output." print_ccode]
+    [INPUTS]
+        <REF> expr </REF>: expression "The expression to be converted into C code."
+        <REF> settings </REF>: dict "Optional keyword arguments forwarded to ccode to control the conversion."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call ccode(expr, **settings) to generate the C code string for the expression. RESULT c_code_string]
+            [COMMAND Print c_code_string to standard output. RESULT printed_output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a SymPy expression into Fortran source code by creating an FCodePrinter with the supplied settings and calling its doprint method, optionally assigning the result to a target variable." fcode]
+    [INPUTS]
+        <REF> expr </REF>: SymPy Expr "A SymPy expression to be converted into Fortran code."
+        <REF> assign_to </REF>: optional; None, str, Symbol, MatrixSymbol, or Indexed "Optional target for the generated Fortran assignment. When provided, the output is an assignment to this target; when None, only the expression code is generated."
+        <REF> settings </REF>: keyword arguments "Printer settings accepted by FCodePrinter, including precision (default 17), user_functions, human (default True), contract (default True), source_format (fixed or free, default fixed), standard (66, 77, 90, 95, 2003, or 2008; default 77), and name_mangling (default True)."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str or tuple "When human=True, a single Fortran code string. When human=False, a tuple of (symbols_to_declare, not_supported_functions, code_text)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the FCodePrinter class from sympy.printing.fortran. RESULT FCodePrinter]
+            [COMMAND Instantiate FCodePrinter with the settings dictionary. RESULT printer]
+            [COMMAND Call printer.doprint(expr, assign_to) to generate Fortran code for expr, producing an assignment statement when assign_to is supplied and expression-only code when assign_to is None. RESULT code]
+            [COMMAND Return code from the function. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: assign_to is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Include an assignment to assign_to in the generated Fortran output by passing assign_to to doprint. RESULT code with assignment]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: assign_to is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Generate Fortran code for expr without an assignment target by passing assign_to=None to doprint. RESULT expression-only code]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prints the Fortran representation of the given expression by passing expr and optional settings to fcode." print_fcode]
+    [INPUTS]
+        <REF> expr </REF>: expression "The expression to convert into Fortran code."
+        <REF> settings </REF>: keyword arguments "Optional settings forwarded to the fcode function to control the conversion."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call fcode with expr and the provided **settings to obtain the Fortran code string. RESULT fortran_code]
+            [COMMAND Print the fortran_code string to standard output. RESULT output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a SymPy expression into C++ code by selecting the appropriate C++ printer class using the lowercased standard, instantiating it with the collected settings, and calling doprint with the optional assignment target." cxxcode]
+    [INPUTS]
+        <REF> expr </REF>: SymPy expression "The symbolic expression to be converted into C++ code."
+        <REF> assign_to </REF>: optional assignment target "Optional variable or expression that the generated C++ code should be assigned to. Defaults to None, meaning no assignment is generated."
+        <REF> standard </REF>: string "C++ standard identifier, defaulting to 'c++11'. It is normalized to lowercase before being used as a printer-class lookup key."
+        <REF> settings </REF>: keyword arguments "Additional printer settings collected into a dictionary and passed to the selected C++ printer constructor."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The generated C++ code string, optionally containing an assignment statement when assign_to is provided."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the cxx_code_printers dictionary from sympy.printing.cxx. RESULT cxx_code_printers]
+            [COMMAND Normalize the standard parameter to lowercase using standard.lower(). RESULT standard_key]
+            [COMMAND Look up the printer class in cxx_code_printers using standard_key. RESULT printer_class]
+            [COMMAND Instantiate the selected printer class by passing the collected settings dictionary as the constructor argument. RESULT printer_instance]
+            [COMMAND Call printer_instance.doprint(expr, assign_to) to render the expression as C++ code, using assign_to to produce an assignment when it is not None. RESULT generated_code]
+            [COMMAND Return generated_code. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# FILE: sympy/printing/precedence.py
+[DEFINE_WORKER: "Returns the precedence for addition when the item's coefficient is negative, otherwise returns the precedence for multiplication." precedence_Mul]
+    [INPUTS]
+        <REF> item </REF>: object "The item whose coefficient is inspected to decide which precedence value to return."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> precedence_value </REF>: integer "The value from PRECEDENCE for addition if the coefficient is negative, otherwise the value from PRECEDENCE for multiplication."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate `_coeff_isneg(item)` to determine whether the coefficient of item is negative. RESULT is_negative]
+            [COMMAND If `is_negative` is false, return `PRECEDENCE["Mul"]`. RESULT precedence_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: `is_negative` is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return `PRECEDENCE["Add"]` immediately, bypassing the fallthrough return. RESULT precedence_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the precedence associated with the 'Add' operator when item.p is negative, otherwise returns the precedence associated with the 'Mul' operator from the PRECEDENCE table." precedence_Rational]
+    [INPUTS]
+        <REF> item </REF>: object "Object that has a numeric property p used to choose the precedence value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: any "The value from PRECEDENCE under the key 'Add' if item.p < 0; otherwise the value under the key 'Mul'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read item.p and evaluate whether item.p < 0, treating 0 as non-negative. RESULT is_negative]
+            [COMMAND If is_negative is false (item.p >= 0), return PRECEDENCE["Mul"] and exit the function. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: item.p < 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return PRECEDENCE["Add"] immediately and exit the function. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the precedence value for 'Add' when item.p is negative, otherwise returns the precedence value for 'Atom'." precedence_Integer]
+    [INPUTS]
+        <REF> item </REF>: object with numeric p attribute "The precedence item whose p sign determines which PRECEDENCE entry to return."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> precedence </REF>: precedence value "The value from PRECEDENCE for 'Add' when item.p is negative, otherwise the value for 'Atom'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether item.p is strictly less than zero. RESULT condition_p_negative]
+            [COMMAND If condition_p_negative is false, meaning item.p is zero or greater, continue to the final return statement. RESULT continue_to_atom_return]
+            [COMMAND Return PRECEDENCE["Atom"] as the method's final value. RESULT precedence_atom]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: item.p is strictly less than zero]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return PRECEDENCE["Add"] immediately and exit the method. RESULT precedence_add]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the Add precedence constant for negative item values and the Atom precedence constant otherwise." precedence_Float]
+    [INPUTS]
+        <REF> item </REF>: number "The numeric value whose sign determines which precedence constant to return."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: number "The precedence constant selected from PRECEDENCE: the Add constant when item is negative, otherwise the Atom constant."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether item is less than 0, preserving the boundary at 0 so that 0 is not treated as negative. RESULT is_negative]
+            [COMMAND If is_negative is false, return the value stored under the key "Atom" in the PRECEDENCE dictionary as the final result. RESULT PRECEDENCE["Atom"]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_negative is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value stored under the key "Add" in the PRECEDENCE dictionary immediately, without reaching the final return. RESULT PRECEDENCE["Add"]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the precedence level of a PolyElement item by first checking whether it is a generator, then a ground expression, then a term, and finally treating it as additive." precedence_PolyElement]
+    [INPUTS]
+        <REF> item </REF>: PolyElement "The PolyElement item whose precedence is being determined."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> precedence_result </REF>: integer "The precedence level assigned to the item."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If item.is_generator is true, return PRECEDENCE["Atom"]. RESULT precedence_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: item.is_generator is false and item.is_ground is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return precedence(item.coeff(1)). RESULT precedence_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: item.is_generator is false and item.is_ground is false and item.is_term is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return PRECEDENCE["Mul"]. RESULT precedence_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: item.is_generator is false and item.is_ground is false and item.is_term is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return PRECEDENCE["Add"]. RESULT precedence_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the polynomial precedence of the numerator when the denominator is exactly 1, otherwise returns the multiplication precedence." precedence_FracElement]
+    [INPUTS]
+        <REF> item </REF>: fraction element object "Object containing numerator and denominator attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> precedence </REF>: precedence value "The precedence value selected for the given fraction element."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate item.denom. If item.denom is exactly equal to 1, return the result of precedence_PolyElement(item.numer). RESULT poly_precedence]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: item.denom is not equal to 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the multiplication precedence stored at PRECEDENCE["Mul"]. RESULT mul_precedence]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the precedence of the first argument of item, reduced by 0.5." precedence_UnevaluatedExpr]
+    [INPUTS]
+        <REF> item </REF>: object "An object with a non-empty args collection; item.args[0] is passed to the precedence function."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: number "The numeric result of precedence(item.args[0]) minus 0.5."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate item.args[0] and store the element as first_arg. RESULT first_arg]
+            [COMMAND Call precedence(first_arg) and store the returned value as base_precedence. RESULT base_precedence]
+            [COMMAND Subtract the numeric constant 0.5 from base_precedence and store the value as adjusted_precedence. RESULT adjusted_precedence]
+            [COMMAND Return adjusted_precedence from precedence_UnevaluatedExpr. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the precedence of a given object for StrPrinter by checking item.precedence, then class names in MRO against PRECEDENCE_FUNCTIONS and PRECEDENCE_VALUES, and finally falling back to PRECEDENCE['Atom']." precedence]
+    [INPUTS]
+        <REF> item </REF>: object "Object whose precedence value is being determined; may be an instance of a class or a class-like object with a precedence attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> precedence_result </REF>: object "The precedence value resolved from item.precedence, a registered precedence function/value, or PRECEDENCE['Atom']."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If item has an attribute named 'precedence', return item.precedence immediately as the precedence result. RESULT item_precedence]
+            [COMMAND Try to assign mro = item.__class__.__mro__. RESULT mro]
+            [COMMAND For each class i in mro, in method-resolution order, get n = i.__name__. RESULT n]
+            [COMMAND Within the for loop over i, if n is a key in PRECEDENCE_FUNCTIONS, call PRECEDENCE_FUNCTIONS[n](item) and return its result immediately. RESULT function_based_precedence]
+            [COMMAND Within the for loop over i, if n is not in PRECEDENCE_FUNCTIONS but is a key in PRECEDENCE_VALUES, return PRECEDENCE_VALUES[n] immediately. RESULT value_based_precedence]
+            [COMMAND If the for loop completes without finding a matching class name, return PRECEDENCE["Atom"] as the default precedence result. RESULT default_precedence]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Accessing item.__class__.__mro__ raises AttributeError because the item's class does not expose an __mro__.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return PRECEDENCE["Atom"] immediately as the default precedence result. RESULT default_precedence]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines an item's traditional mathematical precedence by recursively unwrapping UnevaluatedExpr, checking the PRECEDENCE_TRADITIONAL class-name table, and falling back to the generic precedence function." precedence_traditional]
+    [INPUTS]
+        <REF> item </REF>: object "The object whose traditional mathematical precedence is to be determined."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> precedence_value </REF>: int "The traditional precedence value of item, either from PRECEDENCE_TRADITIONAL or from the generic precedence function."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the UnevaluatedExpr class from sympy.core.expr into the current scope. RESULT _unevaluated_expr_class]
+            [COMMAND Check whether item is an instance of UnevaluatedExpr. If it is, take the UnevaluatedExpr alternative flow; otherwise continue. RESULT _is_unwrappable]
+            [COMMAND Retrieve item.__class__.__name__ and assign the resulting string to n. RESULT n]
+            [COMMAND Check whether n is a key in the PRECEDENCE_TRADITIONAL dictionary. If it is, take the PRECEDENCE_TRADITIONAL lookup alternative flow; otherwise continue to the fallback. RESULT _has_traditional_precedence]
+            [COMMAND Call the global precedence function with item and return its result as the default fallback. RESULT _fallback_precedence]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: item is an instance of UnevaluatedExpr.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the UnevaluatedExpr branch, recursively call precedence_traditional on item.args[0] and return that value. RESULT _recursive_precedence_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: n is a key in the PRECEDENCE_TRADITIONAL dictionary.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the PRECEDENCE_TRADITIONAL lookup branch, return PRECEDENCE_TRADITIONAL[n]. RESULT _lookup_precedence_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

@@ -1,0 +1,493 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.*;
+2   import java.util.*;
+3   import javax.net.ssl.SSLContext;
+4   public class Main {
+5   	final boolean isDebug = false;
+6   	String fileName = "input.txt";
+7   	FastScanner sc;	
+8   	void solve(){
+9   		final int INF = Integer.MAX_VALUE / 2;
+10  		final int MOD = 1000000007;
+11  		String S = sc.next();
+12  		int[] sumA = new int[S.length()+1];
+13  		int[] sumC = new int[S.length()+1];
+14  		int[] sumQ = new int[S.length()+1];
+15  		long[] pow3 = new long[S.length()+1];
+16  		pow3[0] = 1;
+17  		for(int i = 1; i <= S.length(); i++){
+18  			pow3[i] = pow3[i-1] * 3;
+19  			pow3[i] %= MOD;
+20  		}
+21  		for(int i = 1; i <= S.length(); i++){
+22  			sumA[i] = sumA[i-1];
+23  			sumC[i] = sumC[i-1];
+24  			sumQ[i] = sumQ[i-1];
+25  			if(S.charAt(i-1) == 'A') 
+26  				sumA[i]++;
+27  			if(S.charAt(i-1) == 'C') 
+28  				sumC[i]++;
+29  			if(S.charAt(i-1) == '?') 
+30  				sumQ[i]++;
+31  		}
+32  		long ans = 0;
+33  		for(int i = 2; i <= S.length()-1; i++){
+34  			if(S.charAt(i-1) == 'B'){
+35  				long add;
+36  				add = (sumA[i-1] - sumA[0]);
+37  				add *= (sumC[S.length()] - sumC[i]);
+38  				add %= MOD;
+39  				add *= pow3[sumQ[S.length()]];
+40  				add %= MOD;
+41  				ans += add;
+42  				ans %= MOD;
+43  				if(sumQ[S.length()] >= 1){
+44  					add = (sumA[i-1] - sumA[0]);
+45  					add *= (sumQ[S.length()] - sumQ[i]);
+46  					add %= MOD;
+47  					add *= pow3[sumQ[S.length()] - 1];
+48  					add %= MOD;
+49  					ans += add;
+50  					ans %= MOD;
+51  					add = (sumQ[i-1] - sumQ[0]);
+52  					add *= sumC[S.length()] - sumC[i];
+53  					add %= MOD;
+54  					add *= pow3[sumQ[S.length()] - 1];
+55  					add %= MOD;
+56  					ans += add;
+57  					ans %= MOD;
+58  				}
+59  				if(sumQ[S.length()] >= 2){
+60  					add = (sumQ[i-1] - sumQ[0]);
+61  					add *= (sumQ[S.length()] - sumQ[i]);
+62  					add %= MOD;
+63  					add *= pow3[sumQ[S.length()] - 2];
+64  					add %= MOD;
+65  					ans += add;
+66  					ans %= MOD;
+67  				}
+68  			}
+69  			if(S.charAt(i-1) == '?'){
+70  				long add;
+71  				add = (sumA[i-1] - sumA[0]);
+72  				add *= (sumC[S.length()] - sumC[i]);
+73  				add %= MOD;
+74  				add *= pow3[sumQ[S.length()] - 1];
+75  				add %= MOD;
+76  				ans += add;
+77  				ans %= MOD;
+78  				if(sumQ[S.length()] >= 2){
+79  					add = (sumA[i-1] - sumA[0]);
+80  					add *= (sumQ[S.length()] - sumQ[i]);
+81  					add %= MOD;
+82  					add *= pow3[sumQ[S.length()] - 2];
+83  					add %= MOD;
+84  					ans += add;
+85  					ans %= MOD;
+86  					add = (sumQ[i-1] - sumQ[0]);
+87  					add *= (sumC[S.length()] - sumC[i]);
+88  					add %= MOD;
+89  					add *= pow3[sumQ[S.length()] - 2];
+90  					add %= MOD;
+91  					ans += add;
+92  					ans %= MOD;
+93  				}
+94  				if(sumQ[S.length()] >= 3){
+95  					add = (sumQ[i-1] - sumQ[0]);
+96  					add *= (sumQ[S.length()] - sumQ[i]);
+97  					add %= MOD;
+98  					add *= pow3[sumQ[S.length()] - 3];
+99  					add %= MOD;
+100  					ans += add;
+101  					ans %= MOD;
+102  				}
+103  			}
+104  		}
+105  		System.out.println(ans);
+106  	}
+107  	public static void main(String[] args) throws IOException {
+108  		new Main().m();
+109  	}
+110  	void m() throws IOException {
+111  		long S = System.currentTimeMillis();
+112  		sc = (isDebug) ? new FastScanner(new FileInputStream(fileName)) : new FastScanner(System.in);
+113  		solve();
+114  		long G = System.currentTimeMillis();
+115  		if(isDebug){
+116  			System.out.println("---Debug---");
+117  			System.out.printf("%8d ms", (G-S));
+118  		}
+119  	}
+120  }
+121  class FastScanner {
+122      private InputStream in;
+123      private final byte[] buffer = new byte[1024];
+124      private int ptr = 0;
+125      private int buflen = 0;
+126      public FastScanner(InputStream in) {
+127  		this.in = in;
+128  	}
+129      private boolean hasNextByte() {
+130          if (ptr < buflen) {
+131              return true;
+132          }else{
+133              ptr = 0;
+134              try {
+135                  buflen = in.read(buffer);
+136              } catch (IOException e) {
+137                  e.printStackTrace();
+138              }
+139              if (buflen <= 0) {
+140                  return false;
+141              }
+142          }
+143          return true;
+144      }
+145      private int readByte() {
+146      	if (hasNextByte()) return buffer[ptr++];
+147      	else return -1;
+148      }
+149      private static boolean isPrintableChar(int c){
+150      	return 33 <= c && c <= 126;
+151      }
+152      public boolean hasNext() {
+153      	while(hasNextByte() && !isPrintableChar(buffer[ptr]))
+154      		ptr++; return hasNextByte();
+155      }
+156      public String next() {
+157          if (!hasNext()) throw new NoSuchElementException();
+158          StringBuilder sb = new StringBuilder();
+159          int b = readByte();
+160          while(isPrintableChar(b)) {
+161              sb.appendCodePoint(b);
+162              b = readByte();
+163          }
+164          return sb.toString();
+165      }
+166      public long nextLong() {
+167          if (!hasNext()) throw new NoSuchElementException();
+168          long n = 0;
+169          boolean minus = false;
+170          int b = readByte();
+171          if (b == '-') {
+172              minus = true;
+173              b = readByte();
+174          }
+175          if (b < '0' || '9' < b) {
+176              throw new NumberFormatException();
+177          }
+178          while(true){
+179              if ('0' <= b && b <= '9') {
+180                  n *= 10;
+181                  n += b - '0';
+182              }else if(b == -1 || !isPrintableChar(b)){
+183                  return minus ? -n : n;
+184              }else{
+185                  throw new NumberFormatException();
+186              }
+187              b = readByte();
+188          }
+189      }
+190      public int nextInt() {
+191          long nl = nextLong();
+192          if (nl < Integer.MIN_VALUE || nl > Integer.MAX_VALUE) throw new NumberFormatException();
+193          return (int) nl;
+194      }
+195      public double nextDouble() {
+196      	return Double.parseDouble(next());
+197      }
+198  }
+```
+
+
+**Question**: Which variable instances have information flow over `(add,73)` in function `solve`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+This code counts the number of ways to form the subsequence "ABC" in a string that may contain '?' wildcards, where each '?' can be replaced by any letter. It uses prefix sums to track counts of 'A', 'C', and '?' before and after each position, and precomputed powers of 3 to account for the number of possible replacements of '?' characters. The result is computed modulo 1,000,000,007 and printed.
+

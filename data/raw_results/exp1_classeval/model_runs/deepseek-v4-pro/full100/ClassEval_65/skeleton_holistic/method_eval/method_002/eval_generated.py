@@ -1,0 +1,157 @@
+class NumberWordFormatter:
+    """
+    This is a class that provides to convert numbers into their corresponding English word representation, including handling the conversion of both the integer and decimal parts, and incorporating appropriate connectors and units.
+    """
+
+    def __init__(self):
+        """
+        Initialize NumberWordFormatter object.
+        """
+        self.NUMBER = ["", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"]
+        self.NUMBER_TEEN = ["TEN", "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN", "SIXTEEN", "SEVENTEEN",
+                            "EIGHTEEN",
+                            "NINETEEN"]
+        self.NUMBER_TEN = ["TEN", "TWENTY", "THIRTY", "FORTY", "FIFTY", "SIXTY", "SEVENTY", "EIGHTY", "NINETY"]
+        self.NUMBER_MORE = ["", "THOUSAND", "MILLION", "BILLION"]
+        self.NUMBER_SUFFIX = ["k", "w", "", "m", "", "", "b", "", "", "t", "", "", "p", "", "", "e"]
+
+    def format(self, x):
+        """
+        Converts a number into words format
+        :param x: int or float, the number to be converted into words format
+        :return: str, the number in words format
+        >>> formatter = NumberWordFormatter()
+        >>> formatter.format(123456)
+        "ONE HUNDRED AND TWENTY THREE THOUSAND FOUR HUNDRED AND FIFTY SIX ONLY"
+        """
+        return self.format_string(str(x))
+
+    def format_string(self, x):
+        """
+        Converts a string representation of a number into words format
+        :param x: str, the string representation of a number
+        :return: str, the number in words format
+        >>> formatter = NumberWordFormatter()
+        >>> formatter.format_string("123456")
+        "ONE HUNDRED AND TWENTY THREE THOUSAND FOUR HUNDRED AND FIFTY SIX ONLY"
+        """
+        if '.' in x:
+            int_part, dec_part = x.split('.')
+        else:
+            int_part, dec_part = x, ''
+        
+        int_part = int_part.lstrip('0') or '0'
+        if int_part == '0':
+            int_words = 'ZERO'
+        else:
+            int_words = self._convert_integer(int_part)
+        
+        if dec_part:
+            dec_words = ' '.join(self.NUMBER[int(d)] for d in dec_part if d.isdigit())
+            return f"{int_words} AND {dec_words} ONLY"
+        else:
+            return f"{int_words} ONLY"
+
+    def _convert_integer(self, s):
+        """
+        Converts integer part string into words
+        """
+        s = s.zfill((len(s) + 2) // 3 * 3)
+        groups = [s[max(0, i-3):i] for i in range(len(s), 0, -3)]
+        groups = groups[::-1]
+        
+        parts = []
+        for i, group in enumerate(groups):
+            if int(group) == 0:
+                continue
+            group_words = self.trans_three(group)
+            suffix = self.parse_more(len(groups) - 1 - i)
+            if suffix:
+                parts.append(f"{group_words} {suffix}")
+            else:
+                parts.append(group_words)
+        
+        return ' '.join(parts)
+
+    def trans_two(self, s):
+        """
+        Converts a two-digit number into words format
+        :param s: str, the two-digit number
+        :return: str, the number in words format
+        >>> formatter = NumberWordFormatter()
+        >>> formatter.trans_two("23")
+        "TWENTY THREE"
+        """
+        s = s.zfill(2)
+        if s[0] == '0':
+            return self.NUMBER[int(s[1])]
+        elif s[0] == '1':
+            return self.NUMBER_TEEN[int(s[1])]
+        else:
+            ten = self.NUMBER_TEN[int(s[0]) - 1]
+            one = self.NUMBER[int(s[1])]
+            return f"{ten} {one}".strip()
+
+    def trans_three(self, s):
+        """
+        Converts a three-digit number into words format
+        :param s: str, the three-digit number
+        :return: str, the number in words format
+        >>> formatter = NumberWordFormatter()
+        >>> formatter.trans_three("123")
+        "ONE HUNDRED AND TWENTY THREE"
+        """
+        s = s.zfill(3)
+        hundred = self.NUMBER[int(s[0])]
+        rest = s[1:]
+        if hundred:
+            if int(rest) == 0:
+                return f"{hundred} HUNDRED"
+            else:
+                return f"{hundred} HUNDRED AND {self.trans_two(rest)}"
+        else:
+            return self.trans_two(rest)
+
+    def parse_more(self, i):
+        """
+        Parses the thousand/million/billion suffix based on the index
+        :param i: int, the index representing the magnitude (thousand, million, billion)
+        :return: str, the corresponding suffix for the magnitude
+        >>> formatter = NumberWordFormatter()
+        >>> formatter.parse_more(1)
+        "THOUSAND"
+        """
+        if i < len(self.NUMBER_MORE):
+            return self.NUMBER_MORE[i]
+        return ""
+
+import unittest
+
+class NumberWordFormatterTestTransTwo(unittest.TestCase):
+    def test_trans_two_1(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("23"), "TWENTY THREE")
+
+    def test_trans_two_2(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("10"), "TEN")
+
+    def test_trans_two_3(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("05"), "FIVE")
+
+    def test_trans_two_4(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("00"), "")
+
+    def test_trans_two_5(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("01"), "ONE")
+
+    def test_trans_two_6(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("80"), "EIGHTY")
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

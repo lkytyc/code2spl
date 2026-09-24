@@ -1,0 +1,184 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `VectorUtil.similarity`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes the cosine similarity between two vectors by normalizing each to unit length and returning their dot product, yielding a scalar in [-1.0, 1.0]." similarity]
+    [INPUTS]
+        <REF> vector_1 </REF>: array-like numeric "First input vector; must be non-zero and compatible in shape with vector_2"
+        <REF> vector_2 </REF>: array-like numeric "Second input vector; must be non-zero and compatible in shape with vector_1"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> similarity_score </REF>: float "Cosine similarity of the two input vectors; a real-valued scalar in the range [-1.0, 1.0]"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize vector_1 to unit length (L2 norm = 1) using matutils.unitvec RESULT unit_vector_1]
+            [COMMAND Normalize vector_2 to unit length (L2 norm = 1) using matutils.unitvec; this call is independent of the previous step and may be evaluated in any order RESULT unit_vector_2]
+            [COMMAND Compute the dot product of unit_vector_1 and unit_vector_2 using dot; because both inputs are unit vectors the result equals the cosine of the angle between the originals and is bounded to [-1.0, 1.0] for real-valued inputs RESULT similarity_score]
+            [COMMAND Return similarity_score immediately without storing it in an intermediate variable RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: vector_1 or vector_2 is the zero vector]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND matutils.unitvec returns a zero vector or raises depending on implementation; the dot product result is unreliable and the returned similarity score is undefined RESULT undefined_score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: vector_1 and vector_2 have incompatible shapes]
+        [LOG "dot raises a shape mismatch error because the two unit vectors cannot be combined"]
+        [THROW ShapeMismatchError "Raised by the dot operation when vector_1 and vector_2 do not have the same length after normalization"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `VectorUtil.cosine_similarities`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes the cosine similarity between a single query vector and every row of a matrix, returning a 1-D array of similarity scores in [-1, 1]." cosine_similarities]
+    [INPUTS]
+        <REF> vector_1 </REF>: 1-D numeric array "The query vector whose L2 norm is used as the reference magnitude; must be non-zero to avoid NaN results."
+        <REF> vectors_all </REF>: 2-D numeric array (N x D) "Matrix of N candidate vectors, each of dimension D; rows with zero magnitude produce NaN similarity values."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> similarities </REF>: 1-D numeric array (N,) "Cosine similarity of vector_1 against each row of vectors_all; values are in [-1, 1] when all norms are non-zero, otherwise NaN or inf for zero-norm inputs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the scalar L2 norm of vector_1 using np.linalg.norm and store it as norm; if vector_1 is the zero vector, norm will be 0.0. RESULT norm]
+            [COMMAND Compute the L2 norm of each row of vectors_all along axis=1 using np.linalg.norm, producing a 1-D array of shape (N,); any zero row yields a 0.0 entry in this array. RESULT all_norms]
+            [COMMAND Compute the dot product of each row of vectors_all with vector_1 using the externally bound callable dot, producing a 1-D array of shape (N,). RESULT dot_products]
+            [COMMAND Element-wise divide dot_products by the scalar product (norm * all_norms) to obtain the cosine similarity for each row; division by zero silently produces NaN or inf when any norm is 0.0. RESULT similarities]
+            [COMMAND Return similarities to the caller. RESULT similarities]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: vector_1 is the zero vector, making norm equal to 0.0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND The denominator (norm * all_norms) becomes 0.0 for every element; element-wise division of dot_products by zero produces NaN or inf throughout similarities without raising an exception. RESULT similarities]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: One or more rows of vectors_all are zero vectors, making the corresponding all_norms entry 0.0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each zero-norm row, the denominator (norm * 0.0) is 0.0; element-wise division produces NaN or inf for that element in similarities without raising an exception. RESULT similarities]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `VectorUtil.n_similarity`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes the cosine similarity between the centroids of two lists of vectors by averaging each list into a single unit-normalized vector and returning their dot product." n_similarity]
+    [INPUTS]
+        <REF> vector_list_1 </REF>: list "A non-empty list of numeric vectors (e.g., list of arrays); must contain at least one element"
+        <REF> vector_list_2 </REF>: list "A non-empty list of numeric vectors (e.g., list of arrays); must contain at least one element"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> similarity </REF>: float "Cosine similarity scalar in [-1.0, 1.0] between the centroid of vector_list_1 and the centroid of vector_list_2"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert vector_list_1 into a 2D NumPy array of shape (n_vectors, dim) RESULT array_1]
+            [COMMAND Compute the arithmetic mean of array_1 along axis 0 to produce a single centroid vector of shape (dim,) RESULT centroid_1]
+            [COMMAND L2-normalize centroid_1 to unit length using matutils.unitvec RESULT unit_centroid_1]
+            [COMMAND Convert vector_list_2 into a 2D NumPy array of shape (n_vectors, dim) RESULT array_2]
+            [COMMAND Compute the arithmetic mean of array_2 along axis 0 to produce a single centroid vector of shape (dim,) RESULT centroid_2]
+            [COMMAND L2-normalize centroid_2 to unit length using matutils.unitvec RESULT unit_centroid_2]
+            [COMMAND Compute the dot product of unit_centroid_1 and unit_centroid_2, yielding the cosine similarity scalar RESULT similarity]
+            [COMMAND Return similarity RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: At least one of vector_list_1 or vector_list_2 is empty (i.e., not (len(vector_list_1) and len(vector_list_2)) evaluates to True, using short-circuit evaluation so len(vector_list_2) is only checked when vector_list_1 is non-empty)]
+        [LOG "At least one of the passed list is empty."]
+        [THROW ZeroDivisionError "Raised immediately as a precondition guard before any computation; execution does not continue past this point"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `VectorUtil.compute_idf_weight_dict`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Converts a dictionary of term counts into a smoothed IDF weight dictionary by mapping each term to its log-transformed inverse document frequency, using a +1 smoothing offset to avoid division by zero." compute_idf_weight_dict]
+    [INPUTS]
+        <REF> total_num </REF>: int "Total number of documents, used as the numerator baseline in the IDF formula"
+        <REF> number_dict </REF>: dict "Mapping from term keys to their document frequency counts"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Mapping from the original term keys to their smoothed IDF weight values as float scalars"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dict index_2_key_map, an integer counter index set to 0, and an empty list count_list RESULT index_2_key_map, index, count_list]
+            [COMMAND Iterate over each (key, count) pair in number_dict.items() in insertion order; on each iteration store index_2_key_map[index] = key to record the positional-to-key mapping, append count to count_list to preserve the parallel ordering, then increment index by 1 RESULT index_2_key_map, count_list, index]
+            [COMMAND Convert count_list to a NumPy array a, inheriting dtype from the list elements RESULT a]
+            [COMMAND Overwrite a with the smoothed IDF transform: a = log((total_num + 1) / (a + 1)), where the +1 offsets on both numerator and denominator prevent log(0) and division-by-zero when any count or total_num is 0; higher counts yield lower weights and the result is always finite for non-negative inputs RESULT a]
+            [COMMAND Initialize an empty dict result to accumulate the final key-to-weight mapping RESULT result]
+            [COMMAND Iterate over each (index, w) pair produced by enumerate(a); on each iteration look up key = index_2_key_map[index] to recover the original term key for that position, then assign result[key] = w; this re-indexes the positional array back to semantic term keys RESULT result]
+            [COMMAND Return result RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During the second for loop, index_2_key_map does not contain an entry for a given index value]
+        [LOG "KeyError raised when attempting index_2_key_map[index] lookup for an index that was not populated during the first loop; this can occur if index_2_key_map and count_list become desynchronized"]
+        [THROW KeyError "The integer index generated by enumerate has no corresponding key in index_2_key_map"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+

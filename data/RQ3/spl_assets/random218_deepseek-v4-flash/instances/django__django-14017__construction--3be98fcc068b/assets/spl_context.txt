@@ -1,0 +1,550 @@
+# FILE: django/db/models/query_utils.py
+# CLASS Q
+
+[DEFINE_WORKER: "Initializes the object by building a children list from positional arguments followed by sorted keyword-argument pairs, then forwarding it along with the connector and negated flags to the parent initializer." __init__]
+    [INPUTS]
+        <REF> self </REF>: object "The instance being initialized."
+        <REF> args </REF>: tuple "Positional arguments whose elements are added to the children list in order."
+        <REF> _connector </REF>: object "Optional connector value forwarded to the parent initializer."
+        <REF> _negated </REF>: bool "Optional negation flag forwarded to the parent initializer."
+        <REF> kwargs </REF>: dict "Keyword arguments whose key-value pairs are sorted by key and added as tuples to the children list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the children list by unpacking every element of args in order, then unpacking sorted(kwargs.items()) immediately afterward so each keyword key-value tuple becomes an element of the list. RESULT children]
+            [COMMAND Call super().__init__ on the current instance, passing children=children, connector=_connector, and negated=_negated. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines two Q filter objects using the supplied connector, raising TypeError if the second operand is not a Q; it returns a rebuilt copy of self when other is empty, a rebuilt copy of other when only self is empty, and a new Q containing both operands when neither is empty." _combine]
+    [INPUTS]
+        <REF> self </REF>: Q "The first Q object to combine."
+        <REF> other </REF>: Q "The second Q object to combine; must be an instance of Q."
+        <REF> conn </REF>: str "The connector symbol (e.g., 'AND' or 'OR') used to combine the two Q objects."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Q "The resulting Q object: a rebuilt copy of self when other is empty, a rebuilt copy of other when only self is empty, otherwise a new Q combining both operands under conn."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that other is an instance of Q; if it is not, raise TypeError. RESULT other_is_valid_q]
+            [COMMAND Determine whether other is empty, whether self is empty, or whether both are non-empty; use this to choose the appropriate path. RESULT combine_path]
+            [COMMAND When both self and other are non-empty, create a new Q instance using type(self)(). RESULT obj]
+            [COMMAND When both self and other are non-empty, assign conn to obj.connector. RESULT obj_connector_set]
+            [COMMAND When both self and other are non-empty, call obj.add(self, conn) to add self to obj with the given connector. RESULT self_added]
+            [COMMAND When both self and other are non-empty, call obj.add(other, conn) to add other to obj with the given connector. RESULT other_added]
+            [COMMAND When both self and other are non-empty, return obj as the combined Q object. RESULT combined_q]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: other is empty/falsy, including the case where both self and other are empty.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND When other is empty, call self.deconstruct(), discard the first returned value, and keep the remaining values as args and kwargs. RESULT self_deconstructed]
+            [COMMAND When other is empty, construct a new instance with type(self)(*args, **kwargs) and return it as the combined Q object. RESULT combined_q]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: other is non-empty/truthy and self is empty/falsy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND When other is non-empty and self is empty, call other.deconstruct(), discard the first returned value, and keep the remaining values as args and kwargs. RESULT other_deconstructed]
+            [COMMAND When other is non-empty and self is empty, construct a new instance with type(other)(*args, **kwargs) and return it as the combined Q object. RESULT combined_q]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: other is not an instance of Q]
+        [LOG "Raising TypeError because other must be an instance of Q."]
+        [THROW TypeError "Indicates that the supplied other object is not of type Q."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves this Q expression by adding it to the query with the provided reuse and join settings, promoting any new joins to left outer joins, and returning the resulting clause." resolve_expression]
+    [INPUTS]
+        <REF> self </REF>: object "The Q expression instance on which resolution is performed."
+        <REF> query </REF>: object "The query object against which the Q expression is resolved; defaults to None."
+        <REF> allow_joins </REF>: boolean "Whether joins are permitted while adding the Q expression; passed through to _add_q and defaults to True."
+        <REF> reuse </REF>: object "Optional reusable aliases or constraints passed through to _add_q; defaults to None."
+        <REF> summarize </REF>: boolean "Accepted for API compatibility; ignored by this method; defaults to False."
+        <REF> for_save </REF>: boolean "Accepted for API compatibility; ignored by this method; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clause </REF>: object "The resolved expression clause returned by query._add_q."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call query._add_q(self, reuse, allow_joins=allow_joins, split_subq=False, check_filterable=False) and unpack the returned pair into clause and joins. RESULT clause, joins]
+            [COMMAND Call query.promote_joins(joins) to promote any new joins to left outer joins, preserving rows that would otherwise be filtered because of the Q expression. RESULT query]
+            [COMMAND Return clause as the resolved expression result. RESULT clause]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Serializes a Q object into a fully qualified class path, a tuple of children, and a dictionary of options, normalizing the module path and handling single-child, connector, and negation cases." deconstruct]
+    [INPUTS]
+        <REF> self </REF>: Q "The query expression instance whose children, connector, default, and negated attributes are used to build the deconstruction result."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (path, args, kwargs) containing the normalized class path, positional children arguments, and keyword arguments for reconstructing the query."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct path as the fully-qualified class name of self by formatting self.__class__.__module__ and self.__class__.__name__ using '%s.%s'. RESULT path]
+            [COMMAND If path starts with 'django.db.models.query_utils', replace 'django.db.models.query_utils' with 'django.db.models' in path. RESULT path]
+            [COMMAND Initialize args to an empty tuple. RESULT args]
+            [COMMAND Initialize kwargs to an empty dictionary. RESULT kwargs]
+            [COMMAND If (with short-circuit evaluation) len(self.children) == 1 and the single child is not a Q instance, set child = self.children[0]. RESULT child]
+            [COMMAND In the same branch where the single-child condition is true, set kwargs = {child[0]: child[1]}. RESULT kwargs]
+            [COMMAND If the single-child condition is false (that is, len(self.children) != 1 or the single child is a Q instance), set args = tuple(self.children). RESULT args]
+            [COMMAND In the else branch where the single-child condition is false, if self.connector != self.default, set kwargs = {'_connector': self.connector}. RESULT kwargs]
+            [COMMAND If self.negated, set kwargs['_negated'] = True. RESULT kwargs]
+            [COMMAND Return path, args, and kwargs. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS DeferredAttribute
+
+[DEFINE_WORKER: "Initializes a new instance by assigning the provided field value to the instance attribute self.field." __init__]
+    [INPUTS]
+        <REF> field </REF>: Any "The value to assign to the instance attribute self.field."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the value of the input parameter field to the instance attribute self.field. RESULT self.field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the field value can be fetched from an already-loaded parent instance and returns the parent field value if the field is a primary key and is not the ancestor link field; otherwise returns None." _check_parent_chain]
+    [INPUTS]
+        <REF> self </REF>: object "Receiver object exposing field metadata through self.field and model options methods."
+        <REF> instance </REF>: Django model instance "Model instance that may already have parent field data available."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object or None "The value of getattr(instance, link_field.attname) when the parent-chain condition is satisfied; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the Django model Options object from instance._meta and store it as opts. RESULT opts]
+            [COMMAND Call opts.get_ancestor_link(self.field.model) and store the returned ancestor link field as link_field. RESULT link_field]
+            [COMMAND Evaluate the short-circuit condition self.field.primary_key is truthy AND self.field is not equal to link_field; record whether the parent-chain return path must be taken. RESULT parent_chain_condition_met]
+            [COMMAND If parent_chain_condition_met is false, return None as the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: parent_chain_condition_met is true, meaning self.field.primary_key is truthy and self.field is not equal to link_field.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate getattr(instance, link_field.attname) and return that value as the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS RegisterLookupMixin
+
+[DEFINE_WORKER: "Retrieves the lookup value registered under lookup_name from the class-level lookups mapping, returning None when the name is absent." _get_lookup]
+    [INPUTS]
+        <REF> cls </REF>: type "Class object whose lookup container is accessed."
+        <REF> lookup_name </REF>: str "Name of the lookup to retrieve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Lookup value associated with lookup_name, or None if not found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call get_lookups() on cls to obtain the lookups mapping. RESULT lookups_mapping]
+            [COMMAND Safely retrieve the value associated with lookup_name from lookups_mapping, using None as the fallback when lookup_name is not present. RESULT lookup_value]
+            [COMMAND Return lookup_value. RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects class_lookups dictionaries from every class in the MRO of cls and merges them into one dictionary using cls.merge_dicts." get_lookups]
+    [INPUTS]
+        <REF> cls </REF>: class "Class whose method resolution order is searched for class_lookups attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: dict "Merged dictionary result produced by cls.merge_dicts from the collected class_lookups entries."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Traverse each class in the MRO of cls via inspect.getmro(cls), and for each parent class access its __dict__ to get the 'class_lookups' attribute, using a new empty dict as the default when missing; store the resulting list as class_lookups. RESULT class_lookups]
+            [COMMAND Call cls.merge_dicts(class_lookups) to merge the collected dictionaries into a single combined dictionary and return it. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the lookup object for lookup_name by first checking the instance's lookup registry, then falling back to its output_field lookup, and ensuring the returned value is a Lookup subclass." get_lookup]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance providing _get_lookup and, optionally, output_field."
+        <REF> lookup_name </REF>: string "The name of the lookup to retrieve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Lookup or None "The resolved lookup object, or None when no valid Lookup is found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the Lookup class from django.db.models.lookups. RESULT Lookup]
+            [COMMAND Call self._get_lookup(lookup_name) and store the returned value in found. RESULT found]
+            [COMMAND If found is None and self has an output_field attribute, using short-circuit evaluation, return the result of self.output_field.get_lookup(lookup_name). RESULT output_field_lookup]
+            [COMMAND If found is not None and not issubclass(found, Lookup), using short-circuit evaluation, return None. RESULT None]
+            [COMMAND Return found. RESULT found]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the transform registered for lookup_name, falling back to the output field's transform when no local lookup exists, and returning None for non-Transform lookups." get_transform]
+    [INPUTS]
+        <REF> lookup_name </REF>: str "The lookup/transform name to resolve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Transform | None "The resolved Transform class/instance, or None if lookup_name is not a valid Transform lookup."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the Transform class from django.db.models.lookups. RESULT Transform]
+            [COMMAND Call self._get_lookup(lookup_name) and assign the returned value to found. RESULT found]
+            [COMMAND If found is None and, using short-circuit evaluation, hasattr(self, 'output_field') is true, return self.output_field.get_transform(lookup_name). RESULT return_value]
+            [COMMAND If found is not None and, using short-circuit evaluation, not issubclass(found, Transform) is true, return None. RESULT return_value]
+            [COMMAND Return found. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges a list of dictionaries into a single dictionary, with keys from earlier dictionaries taking precedence over those from later dictionaries." merge_dicts]
+    [INPUTS]
+        <REF> dicts </REF>: list of dicts "List of dictionaries to merge; earlier dictionaries in the list take precedence."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> merged </REF>: dict "A new dictionary containing the merged key-value pairs, with earlier input dictionaries taking precedence."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary named merged. RESULT merged]
+            [COMMAND For each dictionary d in reversed(dicts), update merged with the key-value pairs from d, so that keys from earlier dictionaries in the original list override later ones. RESULT merged]
+            [COMMAND Return merged as the method result. RESULT merged]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clears the lookup cache for each subclass of cls by iterating over subclasses(cls) and calling cache_clear() on each subclass's get_lookups attribute." _clear_cached_lookups]
+    [INPUTS]
+        <REF> cls </REF>: class "The class whose subclasses should have their lookup caches cleared."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate subclasses(cls) to obtain an iterable of all subclasses of cls. RESULT subclass_iterable]
+            [COMMAND For each subclass in subclass_iterable, access the get_lookups attribute on that subclass. RESULT get_lookups]
+            [COMMAND Within the loop over each subclass, call cache_clear() on get_lookups to clear the cached lookups for that subclass. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers a lookup object on a class under an optional name, initializing the class-level lookups dictionary if needed and clearing cached lookups." register_lookup]
+    [INPUTS]
+        <REF> cls </REF>: class "The class on which the lookup should be registered."
+        <REF> lookup </REF>: object "The lookup object to register; must expose lookup_name when lookup_name is not supplied."
+        <REF> lookup_name </REF>: hashable or None "Optional dictionary key for the lookup; defaults to lookup.lookup_name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> lookup </REF>: object "The original lookup object, returned unchanged after registration."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the registry key: set lookup_name to lookup.lookup_name if lookup_name is None, otherwise keep the provided lookup_name. RESULT lookup_name]
+            [COMMAND Ensure cls has its own class_lookups dictionary: if 'class_lookups' is not in cls.__dict__, initialize cls.class_lookups to an empty dictionary. RESULT cls.class_lookups]
+            [COMMAND Store lookup in cls.class_lookups under the key lookup_name, overwriting any existing entry for that key. RESULT cls.class_lookups]
+            [COMMAND Call cls._clear_cached_lookups() to invalidate cached lookups. RESULT _clear_cached_lookups_result]
+            [COMMAND Return the original lookup object. RESULT lookup]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Unregister a lookup from cls.class_lookups by the provided lookup name, falling back to lookup.lookup_name when no name is supplied, then deleting the entry." _unregister_lookup]
+    [INPUTS]
+        <REF> cls </REF>: class "The class whose class_lookups dictionary is modified."
+        <REF> lookup </REF>: object "The lookup object whose lookup_name attribute supplies the deletion key when lookup_name is None."
+        <REF> lookup_name </REF>: string or None "Optional name of the lookup to delete; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If lookup_name is None, set lookup_name to lookup.lookup_name. RESULT lookup_name]
+            [COMMAND Delete the entry with key lookup_name from cls.class_lookups. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS FilteredRelation
+
+[DEFINE_WORKER: "Initializes a relation object by validating and storing the relation name and Q condition, with alias initialized to None and path to an empty list." __init__]
+    [INPUTS]
+        <REF> relation_name </REF>: str "Non-empty relation name for the relation object."
+        <REF> condition </REF>: Q "Q object to use as the initial query condition; defaults to Q()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that relation_name is truthy; if it is falsy, take the ValueError exception flow. RESULT relation_name]
+            [COMMAND Assign relation_name to self.relation_name. RESULT self.relation_name]
+            [COMMAND Initialize self.alias to None. RESULT self.alias]
+            [COMMAND Validate that condition is an instance of Q; if it is not, take the ValueError exception flow. RESULT condition]
+            [COMMAND Assign condition to self.condition. RESULT self.condition]
+            [COMMAND Initialize self.path to an empty list. RESULT self.path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: relation_name is falsy, including None, empty string, empty collection, or zero.]
+        [LOG "relation_name cannot be empty."]
+        [THROW ValueError "Indicates that relation_name was not provided or evaluates to a falsy value."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: condition is not an instance of Q.]
+        [LOG "condition argument must be a Q() instance."]
+        [THROW ValueError "Indicates that condition is not a valid Q object."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a shallow copy of the current FilteredRelation, copying the relation name, condition, alias, and a slice-copied path list." clone]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: FilteredRelation "A new FilteredRelation object with copied relation_name, condition, alias, and a shallow-copied path list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new FilteredRelation instance named clone using self.relation_name as relation_name and self.condition as condition. RESULT clone]
+            [COMMAND Set clone.alias to self.alias. RESULT clone.alias]
+            [COMMAND Assign self.path[:] to clone.path, creating a new list that contains the same element references as self.path. RESULT clone.path]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Stub implementation of resolve_expression that unconditionally raises NotImplementedError to indicate FilteredRelation does not use this expression-resolution method." resolve_expression]
+    [INPUTS]
+        <REF> self </REF>: object "FilteredRelation instance."
+        <REF> args </REF>: tuple "Positional arguments accepted to satisfy the resolve_expression protocol but unused."
+        <REF> kwargs </REF>: dict "Keyword arguments accepted to satisfy the resolve_expression protocol but unused."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not process args or kwargs; immediately raise NotImplementedError with the message 'FilteredRelation.resolve_expression() is unused.' RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The resolve_expression method is called on a FilteredRelation instance.]
+        [LOG "NotImplementedError: FilteredRelation.resolve_expression() is unused."]
+        [THROW NotImplementedError "Signals that this method is intentionally unused, even though QuerySet.annotate() requires expression-like arguments to have resolve_expression()."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the filtered relation condition for a join by building a reusable Q object from self.condition and self.path, then compiles it into SQL using the compiler." as_sql]
+    [INPUTS]
+        <REF> compiler </REF>: object "SQL compiler that exposes query and compile(where)."
+        <REF> connection </REF>: object "Database connection passed to the method; not used by the conversion logic."
+        <REF> condition </REF>: object "Filter condition from self.condition used to build the filtered relation Q."
+        <REF> path </REF>: iterable "Path from self.path converted to a set for the reuse argument."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> compiled_sql </REF>: str "Compiled SQL produced by compiler.compile(where)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the current query object from compiler.query. RESULT query]
+            [COMMAND Build the filtered relation Q by calling query.build_filtered_relation_q(self.condition, reuse=set(self.path)), converting self.path to a set to remove duplicates and snapshot its elements. RESULT where]
+            [COMMAND Compile the built where expression with compiler.compile(where) and return the compiled SQL. RESULT compiled_sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively yields the supplied class and every class reachable through its direct subclasses in depth-first order, preserving the order and duplicates returned by the subclass listing." subclasses]
+    [INPUTS]
+        <REF> cls </REF>: type "The class whose subclass hierarchy is to be traversed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: generator of class objects "A generator that yields cls first, then recursively yields all classes reachable through cls.__subclasses__() in depth-first order; repeated reachable classes may be yielded multiple times."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a generator object for the subclasses function without executing the body; execution is deferred until the caller iterates the returned object. RESULT generator_obj]
+            [COMMAND When iteration begins, yield the input class cls as the first value. RESULT yielded_cls]
+            [COMMAND Obtain direct_subclasses as the list returned by cls.__subclasses__(), preserving the runtime order. RESULT direct_subclasses]
+            [COMMAND For each subclass in direct_subclasses in that order, recursively yield from subclasses(subclass), which yields that subclass first and then its own subclasses; this performs a depth-first traversal and does not deduplicate repeated class visits. RESULT recursive_output]
+            [COMMAND After all direct_subclasses have been processed, complete the generator without yielding any further values. RESULT generator_complete]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a field should be used for select_related descent by validating the remote relation, parent-link direction, requested-name restrictions, nullable-field handling, and deferred-field conflicts." select_related_descend]
+    [INPUTS]
+        <REF> field </REF>: Field "The field instance to inspect for select_related descent."
+        <REF> restricted </REF>: bool "True if the select_related field list has been manually restricted by a requested clause."
+        <REF> requested </REF>: collection "The select_related() requested names, typically a dictionary or set-like object."
+        <REF> load_fields </REF>: collection "The set of field attribute names to be loaded on this model; used to detect deferred fields."
+        <REF> reverse </REF>: bool "True when checking a reverse select_related relation. Defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the field should be descended into for select_related; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that field.remote_field exists; if it does not, the field cannot be descended into. RESULT remote_field_exists]
+            [COMMAND Check that the relation is not a forward parent link; if field.remote_field.parent_link is truthy and reverse is falsy, reject the field. RESULT parent_link_check]
+            [COMMAND If restricted is truthy, verify that the field is requested: for reverse relations compare field.related_query_name() to requested, and for forward relations compare field.name to requested. RESULT restricted_requested_check]
+            [COMMAND If restricted is falsy and field.null is truthy, reject the nullable field. RESULT nullable_check]
+            [COMMAND If load_fields is truthy and field.attname is not in load_fields, check whether the field is both deferred and explicitly requested with restricted truthy and field.name in requested; if so, the combination is invalid. RESULT deferred_conflict_check]
+            [COMMAND Return True because the field passes all select_related descent checks. RESULT should_descend]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: field.remote_field is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False. RESULT decision_false_no_remote_field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field.remote_field.parent_link is truthy and reverse is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False. RESULT decision_false_parent_link_forward]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: restricted is truthy and reverse is truthy and field.related_query_name() is not in requested]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False. RESULT decision_false_reverse_not_requested]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: restricted is truthy and reverse is falsy and field.name is not in requested]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False. RESULT decision_false_forward_not_requested]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: restricted is falsy and field.null is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False. RESULT decision_false_nullable]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: load_fields is truthy and field.attname is not in load_fields and restricted is truthy and field.name is in requested]
+        [LOG "Field {field.model._meta.object_name}.{field.name} cannot be both deferred and traversed using select_related at the same time."]
+        [THROW FieldError "Raised when a field is both deferred and explicitly requested for select_related traversal."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the shortest prefix of lookup_parts that has an existing truthy annotation value, along with the remaining parts after that prefix, or (False, ()) if no prefix matches." refs_expression]
+    [INPUTS]
+        <REF> lookup_parts </REF>: list of strings "The components of a lookup path to be joined with LOOKUP_SEP and checked from shortest prefix to full length."
+        <REF> annotations </REF>: dictionary "Mapping from LOOKUP_SEP-joined prefix strings to annotation values; only existing keys with truthy values trigger a match."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (annotation_value, remaining_parts) for the first matching prefix, or (False, ()) if no matching prefix exists."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set n = 1 and enter a for loop over n in range(1, len(lookup_parts) + 1), so n takes each integer from 1 through len(lookup_parts) inclusive; the empty prefix is not checked, so prefixes are considered from shortest to longest. RESULT n]
+            [COMMAND For each n, construct level_n_lookup by joining the first n elements of lookup_parts with LOOKUP_SEP. RESULT level_n_lookup]
+            [COMMAND Within the loop, check whether level_n_lookup is a key in annotations and, if and only if it is present, whether annotations[level_n_lookup] is truthy; if the key is missing or the value is falsy, continue with the next n. RESULT prefix_matches]
+            [COMMAND Within the loop, if prefix_matches is true, return the tuple (annotations[level_n_lookup], lookup_parts[n:]) immediately, exiting the function. RESULT matched_result]
+            [COMMAND After the loop completes without any matching prefix, return the tuple (False, ()). RESULT fallback_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a Django model is compatible with a target model options object by checking identical concrete models, ancestor/parent relationships, and the primary-key lookup allowance." check_rel_lookup_compatibility]
+    [INPUTS]
+        <REF> model </REF>: Django model class "The model whose compatibility is being checked."
+        <REF> target_opts </REF>: ModelOptions "The target model options object to check against."
+        <REF> field </REF>: Field instance "The lookup field used in the query; its primary_key flag and model may enable the primary-key compatibility exception."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if model is compatible with target_opts, or if field is a primary key and model is compatible with field.model._meta."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define a nested helper function check(opts) that returns true if model._meta.concrete_model equals opts.concrete_model, or if opts.concrete_model is in model._meta.get_parent_list(), or if model is in opts.get_parent_list(). RESULT check]
+            [COMMAND Evaluate check(target_opts) and store the result as base_compatibility. RESULT base_compatibility]
+            [COMMAND If base_compatibility is true, return true immediately, short-circuiting before the primary-key check. RESULT return_value]
+            [COMMAND If base_compatibility is false and getattr(field, 'primary_key', False) is true, evaluate check(field.model._meta) and store the result as primary_key_compatibility. RESULT primary_key_compatibility]
+            [COMMAND When the primary-key exception applies, return primary_key_compatibility. RESULT return_value]
+            [COMMAND If base_compatibility is false and field is not a primary key, return false. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

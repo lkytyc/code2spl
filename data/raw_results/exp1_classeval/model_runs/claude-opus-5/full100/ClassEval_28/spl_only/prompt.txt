@@ -1,0 +1,222 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `DatabaseProcessor.__init__`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Initializes a database handler instance by storing the provided database name as an instance attribute." __init__]
+    [INPUTS]
+        <REF> database_name </REF>: string "The name of the database to associate with this instance"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the value of parameter database_name to the instance attribute self.database_name RESULT self.database_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `DatabaseProcessor.create_table`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Creates a SQLite table with a fixed integer primary key and two caller-specified columns (one TEXT, one INTEGER) if the table does not already exist, then commits and closes the connection." create_table]
+    [INPUTS]
+        <REF> table_name </REF>: str "Name of the table to create; interpolated directly into the DDL string — must be validated against an allowlist by the caller before use"
+        <REF> key1 </REF>: str "Name of the TEXT column; interpolated directly into the DDL string — must be validated against an allowlist by the caller before use"
+        <REF> key2 </REF>: str "Name of the INTEGER column; interpolated directly into the DDL string — must be validated against an allowlist by the caller before use"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Open a SQLite connection to the database file identified by the instance attribute self.database_name and assign the resulting connection object to conn RESULT conn]
+            [COMMAND Obtain a cursor from conn and assign it to cursor RESULT cursor]
+            [COMMAND Build the DDL string create_table_query by f-string interpolation: 'CREATE TABLE IF NOT EXISTS {table_name} (id INTEGER PRIMARY KEY, {key1} TEXT, {key2} INTEGER)' — the fixed SQL skeleton is a literal; table_name, key1, and key2 are injected at evaluation time with no sanitization RESULT create_table_query]
+            [COMMAND Execute create_table_query against the database using cursor.execute RESULT cursor]
+            [COMMAND Commit the transaction by calling conn.commit so the table creation is persisted RESULT conn]
+            [COMMAND Close the connection by calling conn.close, releasing all associated resources RESULT conn]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.database_name is None, an empty string, or an invalid or inaccessible file-system path]
+        [LOG "sqlite3.connect raises sqlite3.OperationalError before any cursor or query is created; conn is never assigned a valid object"]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Any of table_name, key1, or key2 contains characters that produce syntactically invalid SQL when interpolated]
+        [LOG "cursor.execute raises sqlite3.OperationalError; conn.commit and conn.close are never reached, leaving the connection open and the transaction uncommitted"]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `DatabaseProcessor.insert_into_database`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Opens a SQLite connection to the configured database, iterates over a list of records, and inserts each record's name and age into the specified table before committing and closing the connection." insert_into_database]
+    [INPUTS]
+        <REF> table_name </REF>: str "Name of the target table into which rows will be inserted; interpolated directly into the SQL string, so it must be validated against a known allowlist before use to prevent SQL injection"
+        <REF> data </REF>: list "Collection of dict-like objects, each containing at minimum the keys 'name' and 'age', representing the rows to be inserted"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Open a SQLite database connection using self.database_name as the file path and assign the resulting Connection object to conn RESULT conn]
+            [COMMAND Create a Cursor object from conn and assign it to cursor RESULT cursor]
+            [COMMAND For each item in data, construct the parameterized INSERT query string targeting table_name with placeholders for name and age, then execute that query via cursor passing item['name'] and item['age'] as the bound parameter tuple RESULT cursor_state]
+            [COMMAND Commit the open transaction on conn so all inserted rows are persisted RESULT commit_result]
+            [COMMAND Close the database connection conn to release the file handle and associated resources RESULT close_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: data is empty — the iterable contains no elements]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND The for loop body never executes; proceed directly to committing and closing the connection with no rows inserted RESULT no_op]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.database_name is None, points to an unwritable path, or sqlite3.connect raises OperationalError]
+        [LOG "conn is never assigned; cursor is unreachable; no transaction is started and no close is called"]
+        [THROW OperationalError "Raised by sqlite3.connect when the database file cannot be opened or created at the given path"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: cursor.execute fails for any item due to a constraint violation, a missing key in item, or a closed connection]
+        [LOG "Loop aborts at the failing item; rows inserted in prior iterations remain uncommitted and subject to rollback depending on the transaction context; conn.commit and conn.close are never reached"]
+        [THROW DatabaseError "Raised by cursor.execute on constraint violations, programming errors such as a closed connection, or a KeyError if item does not contain 'name' or 'age'"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `DatabaseProcessor.search_database`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Opens a SQLite connection to the instance's database, executes a parameterized SELECT query against the specified table filtering by name, and returns all matching rows as a list or None when no rows match." search_database]
+    [INPUTS]
+        <REF> self </REF>: object "Instance reference providing the database_name attribute used to locate the SQLite database file"
+        <REF> table_name </REF>: string "Name of the database table to query; interpolated directly into the SQL string via f-string, not parameterized — must be validated against an allowlist by the caller to prevent SQL injection"
+        <REF> name </REF>: string "The value to match against the name column in the WHERE clause; passed as a safe parameterized argument to cursor.execute"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list | None "A non-empty list of row tuples when at least one row matches the query; None when the query returns zero rows (the empty-list falsy boundary maps to None at the return gate)"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Open a SQLite database connection using self.database_name and assign it to conn RESULT conn]
+            [COMMAND Create a cursor object from conn and assign it to cursor RESULT cursor]
+            [COMMAND Build the SQL query string by interpolating table_name directly into the f-string 'SELECT * FROM {table_name} WHERE name = ?' and assign it to select_query; note that table_name is not parameterized and must be externally validated RESULT select_query]
+            [COMMAND Execute select_query on cursor with the tuple (name,) as the safe parameterized argument for the WHERE clause placeholder RESULT cursor]
+            [COMMAND Fetch all rows from the cursor result set and assign the resulting list to result; result is always a list and is never None — it is an empty list when zero rows matched RESULT result]
+            [COMMAND Evaluate the truthiness of result: if result is truthy (non-empty list) return result to the caller; if result is falsy (empty list) return None RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: result is an empty list after fetchall, meaning the query matched zero rows]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None to the caller, collapsing the empty-list boundary into a None sentinel RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.database_name is an invalid or inaccessible file path when sqlite3.connect is called]
+        [LOG "sqlite3.OperationalError raised during connection; conn is never assigned and no cursor or query is created"]
+        [THROW sqlite3.OperationalError "Raised by sqlite3.connect when the database file cannot be opened or created at the given path"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: cursor.execute is called before a valid execute has completed, or the connection is closed or in an invalid state when fetchall is called]
+        [LOG "sqlite3.ProgrammingError raised; result is never assigned"]
+        [THROW sqlite3.ProgrammingError "Raised when cursor operations are performed on a closed, uninitialized, or otherwise invalid cursor or connection"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `DatabaseProcessor.delete_from_database`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Deletes a row from the specified database table where the name column matches the given value, using a parameterized query for the name filter while interpolating the table name directly into the SQL string." delete_from_database]
+    [INPUTS]
+        <REF> table_name </REF>: string "Name of the database table to delete from; interpolated directly into the SQL query structure and must be validated against an allowlist to prevent SQL injection"
+        <REF> name </REF>: string "Value to match against the name column in the WHERE clause; safely bound via a parameterized placeholder"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Open a SQLite database connection using the instance attribute self.database_name as the database file path and assign it to conn RESULT conn]
+            [COMMAND Create a cursor object from conn by calling conn.cursor() and assign it to cursor RESULT cursor]
+            [COMMAND Build the delete_query string by interpolating table_name directly into the SQL template 'DELETE FROM {table_name} WHERE name = ?' where the ? placeholder will be bound to name at execution time RESULT delete_query]
+            [COMMAND Execute delete_query against the database via cursor.execute, passing name as the sole bound parameter in a tuple to satisfy the ? placeholder RESULT execute_result]
+            [COMMAND Commit the transaction by calling conn.commit() to persist the deletion RESULT commit_result]
+            [COMMAND Close the database connection by calling conn.close() to release the resource RESULT close_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: sqlite3.connect raises an error because self.database_name is an invalid path, a locked file, or an inaccessible database]
+        [LOG "Connection to the database failed; conn and cursor are never assigned and no SQL is executed"]
+        [THROW sqlite3.OperationalError "Propagates unhandled from sqlite3.connect when the database file cannot be opened"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: cursor.execute raises an error because table_name contains invalid SQL syntax or does not correspond to an existing table, or because the database rejects the statement]
+        [LOG "Query execution failed; the deletion was not performed and the transaction has not been committed"]
+        [THROW sqlite3.OperationalError "Propagates unhandled from cursor.execute; connection is not explicitly closed in this path, risking a resource leak"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+

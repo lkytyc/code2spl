@@ -1,0 +1,130 @@
+class Words2Numbers:
+    def __init__(self):
+        self.numwords = {}
+        self.units = [
+            "zero", "one", "two", "three", "four", "five", "six", "seven",
+            "eight", "nine", "ten", "eleven", "twelve", "thirteen",
+            "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+            "nineteen",
+        ]
+        self.tens = [
+            "",
+            "",
+            "twenty",
+            "thirty",
+            "forty",
+            "fifty",
+            "sixty",
+            "seventy",
+            "eighty",
+            "ninety",
+        ]
+        self.scales = ["hundred", "thousand", "million", "billion", "trillion"]
+
+        self.numwords["and"] = (1, 0)
+        for index, word in enumerate(self.units):
+            self.numwords[word] = (1, index)
+        for index, word in enumerate(self.tens):
+            self.numwords[word] = (1, index * 10)
+        for index, word in enumerate(self.scales):
+            self.numwords[word] = ((10 ** (index * 3)) if index else 2, 0)
+
+        self.ordinal_words = {
+            "first": 1,
+            "second": 2,
+            "third": 3,
+            "fifth": 5,
+            "eighth": 8,
+            "ninth": 9,
+            "twelfth": 12,
+        }
+        self.ordinal_endings = [
+            ("ieth", "y"),
+            ("th", ""),
+        ]
+
+    def text2int(self, textnum):
+        textnum = textnum.replace("-", " ")
+        current = 0
+        result = 0
+        curstring = ""
+        onnumber = False
+
+        for word in textnum.split():
+            if word in self.ordinal_words:
+                scale = 1
+                current += self.ordinal_words[word] * scale
+                onnumber = True
+                continue
+
+            for ending, replacement in self.ordinal_endings:
+                if word.endswith(ending):
+                    word = word[: -len(ending)] + replacement
+                    break
+
+            if word not in self.numwords:
+                if onnumber:
+                    curstring += str(result + current) + " "
+                curstring += word + " "
+                result = 0
+                current = 0
+                onnumber = False
+            else:
+                scale, increment = self.numwords[word]
+                current = current * scale + increment
+                if scale > 100:
+                    result += current
+                    current = 0
+                onnumber = True
+
+        if onnumber:
+            curstring += str(result + current)
+
+        return curstring
+
+    def is_valid_input(self, textnum):
+        textnum = textnum.replace("-", " ")
+        for word in textnum.split():
+            if word in self.ordinal_words:
+                continue
+
+            for ending, replacement in self.ordinal_endings:
+                if word.endswith(ending):
+                    word = word[: -len(ending)] + replacement
+                    break
+
+            if word not in self.numwords:
+                return False
+
+        return True
+
+import unittest
+
+class Words2NumbersTestIsValidInput(unittest.TestCase):
+    def test_is_valid_input(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("twenty-five thousand three hundred and forty-two"))
+
+    def test_is_valid_input2(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("second hundred and third"))
+
+    def test_is_valid_input3(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("twenty-fifth thousand three hundred and forty-second"))
+
+    def test_is_valid_input4(self):
+        w2n = Words2Numbers()
+        self.assertFalse(w2n.is_valid_input("eleventy thousand and five"))
+
+    def test_is_valid_input5(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("seventy two thousand and hundred eleven"))
+
+    def test_is_valid_input6(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("fifteenth hundred"))
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

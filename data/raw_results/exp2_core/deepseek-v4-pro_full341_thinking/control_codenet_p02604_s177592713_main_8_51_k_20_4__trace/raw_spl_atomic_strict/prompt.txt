@@ -1,0 +1,391 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include<stdio.h>
+2   #include<stdlib.h>
+3   #define min(a,b) ((a)>(b)?(b):(a))
+4   int popcount(int n){
+5   	if(!n)return 0;
+6   	return (n&1) + popcount(n>>1);
+7   }
+8   int main(){
+9   	int N, X[20], Y[20], P[20], a[20];
+10  	long Z[1<<16][16][2], ans[20]={1l<<60};
+11  	scanf("%d", &N);
+12  	for(int i=0; i<N; i++){
+13  		scanf("%d%d%d", X+i, Y+i, P+i);
+14  		ans[i+1] = 1l<<60;
+15  	}
+16  	for(int i=0; i<(1<<N); i++){
+17  		for(int j=0; j<N; j++){
+18  			Z[i][j][0] = abs(X[j]);
+19  			Z[i][j][1] = abs(Y[j]);
+20  			for(int k=0; k<N; k++){
+21  				if((i>>k)&1){
+22  					Z[i][j][0] = min(Z[i][j][0], (long)abs(X[j]-X[k]));
+23  					Z[i][j][1] = min(Z[i][j][1], (long)abs(Y[j]-Y[k]));
+24  				}
+25  			}
+26  		}
+27  	}
+28  	while(!a[N]){
+29  		int h=0, v=0;
+30  		for(int i=0; i<N; i++){
+31  			if(a[i]==1)	
+32  				h |= (1<<i);
+33  			if(a[i]==2)	
+34  				v |= (1<<i);
+35  		}
+36  		int t = popcount(h|v);
+37  		long sum = 0;
+38  		for(int i=0; i<N; i++){
+39  			sum += (long)P[i] * min(Z[h][i][0], Z[v][i][1]);
+40  		}
+41  		int i=0;
+42  		while(a[i]==2)
+43  			a[i++]=0;
+44  		a[i]++;
+45  		ans[t] = min(ans[t], sum);
+46  	}
+47  	for(int i=0; i<=N; i++){
+48  		printf("%ld\n", ans[i]);
+49  	}
+50  	return 0;
+51  }
+```
+
+
+**Question**: Does line `21` have control dependence over line `20` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: main
+Target source anchor: variable=<none>, line=21
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND For i from 0 through N-1, read three integers from standard input into X[i], Y[i], P[i] using scanf("%d%d%d", X+i, Y+i, P+i), then set ans[i+1] to 1L<<60. RESULT points_and_ans]
+- [COMMAND For i from 0 through (1<<N)-1 and for j from 0 through N-1, set Z[i][j][0] to abs(X[j]) and Z[i][j][1] to abs(Y[j]). RESULT Z_defaults]
+- [COMMAND Within the i and j loops, for each k from 0 through N-1, if bit k of i is set, update Z[i][j][0] to min(Z[i][j][0], (long)abs(X[j]-X[k])) and Z[i][j][1] to min(Z[i][j][1], (long)abs(Y[j]-Y[k])). RESULT Z_final]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 12: for(int i=0; i<N; i++){
+- line 16: for(int i=0; i<(1<<N); i++){
+- line 17: for(int j=0; j<N; j++){
+- line 20: for(int k=0; k<N; k++){
+- line 21: if((i>>k)&1){
+- line 28: while(!a[N]){
+- line 30: for(int i=0; i<N; i++){
+- line 31: if(a[i]==1)
+- line 33: if(a[i]==2)
+- line 38: for(int i=0; i<N; i++){
+- line 42: while(a[i]==2)
+- line 47: for(int i=0; i<=N; i++){
+- line 50: return 0;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 12, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["N", "for", "i", "int"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["N", "for", "i", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 17, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["N", "for", "int", "j"]}
+- {"definitions": ["k"], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["k"], "roles": ["definition", "control"], "source_identifiers": ["N", "for", "int", "k"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["i", "k"], "roles": ["use", "control"], "source_identifiers": ["i", "if", "k"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["N", "a", "while"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["N", "for", "i", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["i"], "roles": ["use", "control"], "source_identifiers": ["a", "i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 33, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["i"], "roles": ["use", "control"], "source_identifiers": ["a", "i", "if"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["N", "for", "i", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 42, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["i"], "roles": ["use", "control"], "source_identifiers": ["a", "i", "while"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["i"], "roles": ["definition", "control"], "source_identifiers": ["N", "for", "i", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["return"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 8-51
+- source signature: `int main(){`
+- source content hash: `031748294f1f54b7436fb961b9cb6b83d72275962f9bde6df356e34445a522b7`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```cpp
+   8  int main(){
+   9   int N, X[20], Y[20], P[20], a[20];
+  10   long Z[1<<16][16][2], ans[20]={1l<<60};
+  11   scanf("%d", &N);
+  12   for(int i=0; i<N; i++){
+  13    scanf("%d%d%d", X+i, Y+i, P+i);
+  14    ans[i+1] = 1l<<60;
+  15   }
+  16   for(int i=0; i<(1<<N); i++){
+  17    for(int j=0; j<N; j++){
+  18     Z[i][j][0] = abs(X[j]);
+  19     Z[i][j][1] = abs(Y[j]);
+  20     for(int k=0; k<N; k++){
+  21      if((i>>k)&1){
+  22       Z[i][j][0] = min(Z[i][j][0], (long)abs(X[j]-X[k]));
+  23       Z[i][j][1] = min(Z[i][j][1], (long)abs(Y[j]-Y[k]));
+  24      }
+  25     }
+  26    }
+  27   }
+  28   while(!a[N]){
+  29    int h=0, v=0;
+  30    for(int i=0; i<N; i++){
+  31     if(a[i]==1)	
+  32      h |= (1<<i);
+  33     if(a[i]==2)	
+  34      v |= (1<<i);
+  35    }
+  36    int t = popcount(h|v);
+  37    long sum = 0;
+  38    for(int i=0; i<N; i++){
+  39     sum += (long)P[i] * min(Z[h][i][0], Z[v][i][1]);
+  40    }
+  41    int i=0;
+  42    while(a[i]==2)
+  43     a[i++]=0;
+  44    a[i]++;
+  45    ans[t] = min(ans[t], sum);
+  46   }
+  47   for(int i=0; i<=N; i++){
+  48    printf("%ld\n", ans[i]);
+  49   }
+  50   return 0;
+  51  }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads N and N point records, precomputes nearest-coordinate costs for every subset mask, enumerates all ternary horizontal/vertical/no-line assignments to minimize the weighted sum for each selected-line count, and prints the minimum values for counts 0 through N." main]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare N as int, X, Y, P, a as int arrays of size 20, Z as long[1<<16][16][2], and ans as long[20]; initialize ans[0] to 1L<<60 and ans[1..19] to 0 via the initializer, leaving Z and a uninitialized. RESULT declarations]
+            [COMMAND Read one integer from standard input into N using scanf("%d", &N); if the conversion fails, N is not updated. RESULT N]
+            [COMMAND For i from 0 through N-1, read three integers from standard input into X[i], Y[i], P[i] using scanf("%d%d%d", X+i, Y+i, P+i), then set ans[i+1] to 1L<<60. RESULT points_and_ans]
+            [COMMAND For i from 0 through (1<<N)-1 and for j from 0 through N-1, set Z[i][j][0] to abs(X[j]) and Z[i][j][1] to abs(Y[j]). RESULT Z_defaults]
+            [COMMAND Within the i and j loops, for each k from 0 through N-1, if bit k of i is set, update Z[i][j][0] to min(Z[i][j][0], (long)abs(X[j]-X[k])) and Z[i][j][1] to min(Z[i][j][1], (long)abs(Y[j]-Y[k])). RESULT Z_final]
+            [COMMAND While a[N] is zero, process the ternary assignment state stored in a; the source declares a without an initializer, so this reads indeterminate values unless the runtime zero-initializes automatic storage, and the intended enumeration assumes a[0..N] starts as all zeros. RESULT while_control]
+            [COMMAND Inside the while loop, set h and v to 0; for i from 0 through N-1, if a[i] equals 1 set bit i in h, and if a[i] equals 2 set bit i in v. RESULT masks_h_v]
+            [COMMAND Compute t as popcount(h | v), initialize sum to 0, and for i from 0 through N-1 add (long)P[i] * min(Z[h][i][0], Z[v][i][1]) to sum. RESULT t_and_sum]
+            [COMMAND Increment the ternary-number state in a: start at index 0, while a[i] equals 2 set a[i] to 0 and advance i, then increment the first digit that is not 2; if all digits 0 through N-1 were 2, this increments the sentinel a[N]. RESULT updated_a]
+            [COMMAND Update ans[t] to min(ans[t], sum). RESULT ans_updated]
+            [COMMAND After the while loop terminates, for i from 0 through N inclusive, print ans[i] as a long integer followed by a newline using printf("%ld\n", ans[i]). RESULT printed_output]
+            [COMMAND Return 0 from main. RESULT exit_code]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

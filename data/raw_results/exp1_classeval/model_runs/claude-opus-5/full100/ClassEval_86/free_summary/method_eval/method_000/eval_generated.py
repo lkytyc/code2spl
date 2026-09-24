@@ -1,0 +1,87 @@
+class TicTacToe:
+    def __init__(self, N=3):
+        self.N = N
+        self.board = [[' '] * N for _ in range(3)]
+        self.current_player = 'X'
+
+    def make_move(self, row, col):
+        if self.board[row][col] != ' ':
+            return False
+        self.board[row][col] = self.current_player
+        self.current_player = 'O' if self.current_player == 'X' else 'X'
+        return True
+
+    def check_winner(self):
+        board = self.board
+        N = self.N
+
+        for row in range(3):
+            if board[row][0] != ' ' and all(board[row][c] == board[row][0] for c in range(N)):
+                return board[row][0]
+
+        for col in range(N):
+            if board[0][col] != ' ' and all(board[r][col] == board[0][col] for r in range(3)):
+                return board[0][col]
+
+        if board[0][0] != ' ' and all(board[i][i] == board[0][0] for i in range(3)):
+            return board[0][0]
+
+        if board[0][N - 1] != ' ' and all(board[i][N - 1 - i] == board[0][N - 1] for i in range(3)):
+            return board[0][N - 1]
+
+        return None
+
+    def is_board_full(self):
+        for row in self.board:
+            if ' ' in row:
+                return False
+        return True
+
+import unittest
+
+class TicTacToeTestMakeMove(unittest.TestCase):
+    def test_make_move_1(self):
+        ttt = TicTacToe()
+        self.assertEqual(ttt.current_player, 'X')
+        self.assertTrue(ttt.make_move(0, 0))
+        self.assertEqual(ttt.current_player, 'O')
+
+    # move invalid
+    def test_make_move_2(self):
+        ttt = TicTacToe()
+        self.assertEqual(ttt.current_player, 'X')
+        self.assertTrue(ttt.make_move(0, 0))
+        self.assertTrue(ttt.make_move(0, 1))
+        self.assertFalse(ttt.make_move(0, 0))
+        self.assertEqual(ttt.current_player, 'X')
+
+    def test_make_move_3(self):
+        ttt = TicTacToe()
+        self.assertEqual(ttt.current_player, 'X')
+        self.assertTrue(ttt.make_move(0, 0))
+        self.assertTrue(ttt.make_move(0, 1))
+        self.assertTrue(ttt.make_move(1, 1))
+        self.assertEqual(ttt.current_player, 'O')
+
+    def test_make_move_4(self):
+        ttt = TicTacToe()
+        self.assertEqual(ttt.current_player, 'X')
+        self.assertTrue(ttt.make_move(0, 0))
+        self.assertTrue(ttt.make_move(0, 1))
+        self.assertTrue(ttt.make_move(1, 1))
+        self.assertTrue(ttt.make_move(1, 2))
+        self.assertEqual(ttt.current_player, 'X')
+
+    def test_make_move_5(self):
+        ttt = TicTacToe()
+        self.assertEqual(ttt.current_player, 'X')
+        self.assertTrue(ttt.make_move(0, 0))
+        self.assertTrue(ttt.make_move(0, 1))
+        self.assertTrue(ttt.make_move(1, 1))
+        self.assertTrue(ttt.make_move(1, 2))
+        self.assertTrue(ttt.make_move(2, 2))
+        self.assertEqual(ttt.current_player, 'O')
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,208 @@
+from collections import deque
+from decimal import Decimal
+import re
+
+
+class ExpressionCalculator:
+    """
+    This is a class in Python that can perform calculations with basic arithmetic operations, including addition, subtraction, multiplication, division, and modulo.
+    """
+
+    def __init__(self):
+        """
+        Initialize the expression calculator
+        """
+        self.postfix_stack = deque()
+        self.operat_priority = [0, 3, 2, 1, -1, 1, 0, 2]
+
+    def calculate(self, expression):
+        """
+        Calculate the result of the given postfix expression
+        :param expression: string, the postfix expression to be calculated
+        :return: float, the calculated result
+        >>> expression_calculator = ExpressionCalculator()
+        >>> expression_calculator.calculate("2 + 3 * 4")
+        14.0
+
+        """
+        self.postfix_stack = deque()
+        self.prepare(self.transform(expression))
+        result_stack = deque()
+        self.postfix_stack.reverse()
+
+        while self.postfix_stack:
+            current_op = self.postfix_stack.pop()
+            if not self.is_operator(current_op):
+                result_stack.append(current_op.replace('~', '-'))
+            else:
+                second_value = result_stack.pop().replace('~', '-')
+                first_value = result_stack.pop().replace('~', '-')
+                temp_result = self._calculate(first_value, second_value, current_op)
+                result_stack.append(str(temp_result))
+
+        final_result = eval('*'.join(result_stack))
+        return float(final_result)
+
+    def prepare(self, expression):
+        """
+        Prepare the infix expression for conversion to postfix notation
+        :param expression: string, the infix expression to be prepared
+        >>> expression_calculator = ExpressionCalculator()
+        >>> expression_calculator.prepare("2+3*4")
+
+        expression_calculator.postfix_stack = ['2', '3', '4', '*', '+']
+        """
+        op_stack = deque([','])
+        arr = list(expression)
+        current_index = 0
+        count = 0
+
+        for i, current_op in enumerate(arr):
+            if self.is_operator(current_op):
+                if count > 0:
+                    self.postfix_stack.append(''.join(arr[current_index: current_index + count]))
+                peek_op = op_stack[-1]
+                if current_op == ')':
+                    while op_stack[-1] != '(':
+                        self.postfix_stack.append(str(op_stack.pop()))
+                    op_stack.pop()
+                else:
+                    while current_op != '(' and peek_op != ',' and self.compare(current_op, peek_op):
+                        self.postfix_stack.append(str(op_stack.pop()))
+                        peek_op = op_stack[-1]
+                    op_stack.append(current_op)
+                count = 0
+                current_index = i + 1
+            else:
+                count += 1
+
+        if count > 1 or (count == 1 and not self.is_operator(arr[current_index])):
+            self.postfix_stack.append(''.join(arr[current_index: current_index + count]))
+
+        while op_stack[-1] != ',':
+            self.postfix_stack.append(str(op_stack.pop()))
+
+    @staticmethod
+    def is_operator(c):
+        """
+        Check if a character is an operator in {'+', '-', '*', '/', '(', ')', '%'}
+        :param c: string, the character to be checked
+        :return: bool, True if the character is an operator, False otherwise
+        >>> expression_calculator = ExpressionCalculator()
+        >>> expression_calculator.is_operator("+")
+        True
+
+        """
+        return c in {'+', '-', '*', '/', '(', ')', '%'}
+
+    def compare(self, cur, peek):
+        """
+        Compare the precedence of two operators
+        :param cur: string, the current operator
+        :param peek: string, the operator at the top of the operator stack
+        :return: bool, True if the current operator has higher or equal precedence, False otherwise
+        >>> expression_calculator = ExpressionCalculator()
+        >>> expression_calculator.compare("+", "-")
+        True
+
+        """
+        if cur == '%':
+            cur = '/'
+        if peek == '%':
+            peek = '/'
+        peek_priority = self.operat_priority[ord(peek) - 40]
+        cur_priority = self.operat_priority[ord(cur) - 40]
+        return peek_priority >= cur_priority
+
+    @staticmethod
+    def _calculate(first_value, second_value, current_op):
+        """
+        Perform the mathematical calculation based on the given operands and operator
+        :param first_value: string, the first operand
+        :param second_value: string, the second operand
+        :param current_op: string, the operator
+        :return: decimal.Decimal, the calculated result
+        >>> expression_calculator = ExpressionCalculator()
+        >>> expression_calculator._calculate("2", "3", "+")
+        5.0
+
+        """
+        if current_op == '+':
+            return Decimal(first_value) + Decimal(second_value)
+        if current_op == '-':
+            return Decimal(first_value) - Decimal(second_value)
+        if current_op == '*':
+            return Decimal(first_value) * Decimal(second_value)
+        if current_op == '/':
+            return Decimal(first_value) / Decimal(second_value)
+        if current_op == '%':
+            return Decimal(first_value) % Decimal(second_value)
+        raise ValueError("Raised when the operator is unsupported.")
+
+    @staticmethod
+    def transform(expression):
+        """
+        Transform the infix expression to a format suitable for conversion
+        :param expression: string, the infix expression to be transformed
+        :return: string, the transformed expression
+        >>> expression_calculator = ExpressionCalculator()
+        >>> expression_calculator.transform("2 + 3 * 4")
+        "2+3*4"
+
+        """
+        expression = re.sub(r"\s+", "", expression)
+        expression = re.sub(r"=$", "", expression)
+        arr = list(expression)
+
+        for i, c in enumerate(arr):
+            if c == '-':
+                if i == 0:
+                    arr[i] = '~'
+                else:
+                    prev_c = arr[i - 1]
+                    if prev_c in {'+', '-', '*', '/', '(', 'E', 'e'}:
+                        arr[i] = '~'
+
+        if arr and arr[0] == '~' and len(arr) > 1 and arr[1] == '(':
+            arr[0] = '-'
+            return '0' + ''.join(arr)
+
+        return ''.join(arr)
+
+import unittest
+
+class ExpressionCalculatorTestCompare(unittest.TestCase):
+    def setUp(self):
+        self.expression_calculator = ExpressionCalculator()
+
+    def test_compare_1(self):
+        result = self.expression_calculator.compare("+", "-")
+        self.assertTrue(result)
+
+    def test_compare_2(self):
+        result = self.expression_calculator.compare("*", "/")
+        self.assertTrue(result)
+
+    def test_compare_3(self):
+        result = self.expression_calculator.compare("+", "*")
+        self.assertTrue(result)
+
+    def test_compare_4(self):
+        result = self.expression_calculator.compare("*", "+")
+        self.assertFalse(result)
+
+    def test_compare_5(self):
+        result = self.expression_calculator.compare("/", "+")
+        self.assertFalse(result)
+
+    def test_compare_6(self):
+        result = self.expression_calculator.compare("%", "+")
+        self.assertFalse(result)
+
+    def test_compare_7(self):
+        result = self.expression_calculator.compare("+", "%")
+        self.assertTrue(result)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

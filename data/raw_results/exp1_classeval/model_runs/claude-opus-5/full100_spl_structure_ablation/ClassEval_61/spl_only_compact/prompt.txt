@@ -1,0 +1,130 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: MusicPlayer
+# Fields: volume, current_song, playlist
+# Calls: remove_song→stop
+
+## __init__()
+Summary: Initializes a music player instance by setting up an empty playlist, a null current song reference, and a default volume level of 50.
+1. Initialize self.playlist to an empty list, establishing a per-instance mutable container for songs with no shared-state risk between instances → self.playlist
+2. Initialize self.current_song to None, establishing a null sentinel indicating that no song is currently selected or playing; downstream consumers must guard against None before dereferencing → self.current_song
+3. Initialize self.volume to the integer literal 50, representing a mid-range default on an implicit 0-to-100 scale where 0 is muted and 100 is full volume → self.volume
+
+## add_song(song: any)
+Summary: Appends the given song to the end of the instance's playlist in place.
+#   song: any — The song value to be added to the playlist; type is determined by the caller and is not validated or transformed.
+1. Append song to the end of self.playlist in place using list.append, mutating self.playlist directly with no return value produced → self.playlist
+   ! log: "AttributeError raised because append cannot be called on an uninitialized or non-list self.playlist"
+   ! raise: ExceptionName "Exception description"
+
+## play()
+Summary: Returns the first track in the playlist when a current song is active, signals missing current song with False when tracks exist but no song is set, and implicitly returns None when the playlist is empty.
+1. Check whether self.playlist is truthy (non-empty) AND self.current_song is truthy (non-None/non-falsy); both conditions must hold simultaneously → branch_condition_1
+2. If branch_condition_1 is true, return self.playlist[0] — the first track; the playlist is confirmed non-empty so the index is safe; exit the method immediately → early_return_first_track
+3. If branch_condition_1 is false, evaluate the elif: check whether len(self.playlist) is truthy (equivalent to self.playlist being non-empty); this branch is reached only when self.playlist is empty OR self.current_song is falsy → branch_condition_2
+4. If branch_condition_2 is true, the playlist has items but self.current_song must be falsy (the only way to reach here with a non-empty playlist); return False as a sentinel indicating no current song is set despite tracks being available; exit the method immediately → early_return_false_sentinel
+5. If both conditions are false (playlist is empty regardless of current_song), no branch executes and the method falls through, returning None implicitly → implicit_return_none
+   ? Skip the first if-branch because self.current_song fails the truthy check
+   ? Enter the elif branch because len(self.playlist) is truthy; return False to signal the missing current song
+   ? Both the if and elif conditions evaluate to false; fall through without executing any return statement
+   ? Return None implicitly as the method body is exhausted
+
+## previous_song(self: object) → boolean
+Summary: Moves the current song to the previous track in the playlist by decrementing the index, returning true on success or false if no song is playing or the current track is already the first in the playlist.
+#   self: object — The player instance containing current_song (the active track or None) and playlist (an ordered list of songs)
+#   → result: boolean — True if the current song was successfully moved to the previous track; False if no song is playing or the current song is already at index 0
+1. Check whether self.current_song is truthy (i.e., a song is currently set and not None or empty) → has_current_song
+2. If self.current_song is truthy, retrieve the index of self.current_song in self.playlist using list.index(), storing the result as current_index → current_index
+3. Within the outer truthy-song branch, check whether current_index is strictly greater than 0 → can_go_previous
+4. Within the outer truthy-song branch and the inner current_index > 0 branch, assign self.playlist[current_index - 1] to self.current_song → self.current_song
+5. Within the outer truthy-song branch and the inner current_index > 0 branch, return True to signal successful navigation to the previous track → return_value
+   ? Return False immediately without modifying any state, because previous-track navigation is meaningless when nothing is playing
+   ? Within the outer truthy-song branch, when current_index is not greater than 0, return False without modifying self.current_song, because there is no earlier track to navigate to
+
+## remove_song(song: object)
+Summary: Removes a specified song from the playlist if it exists, and stops playback if that song is currently playing.
+#   song: object — The song to be removed from the playlist
+1. Check whether song exists in self.playlist → song_in_playlist
+2. If song_in_playlist is true, remove the first occurrence of song from self.playlist → playlist_updated
+3. Within the removal branch, check whether self.current_song is equal to song → is_current_song
+4. If is_current_song is true, call self.stop() to halt playback → playback_stopped
+   ? Skip all actions; neither removal nor playback stop is performed
+   ? Remove the first occurrence of song from self.playlist without stopping playback
+
+## set_volume(volume: numeric) → boolean or None
+Summary: Validates that the given volume value falls within the inclusive range [0, 100] and assigns it to the instance attribute if valid, returning False immediately if the value is out of range.
+#   volume: numeric — The volume level to set; must be a numeric value between 0 and 100 inclusive
+#   → result: boolean or None — Returns False if volume is outside the valid range [0, 100]; returns None implicitly when the assignment succeeds and execution continues normally
+1. Check whether volume satisfies the chained comparison 0 <= volume <= 100, meaning volume is greater than or equal to 0 AND less than or equal to 100, with both boundaries inclusive → condition_result
+2. If condition_result is true, assign the validated volume value to the instance attribute self.volume → self.volume
+   ? Immediately return False to the caller, signaling that the provided volume value is invalid and short-circuiting any further execution of the method
+
+## shuffle() → boolean
+Summary: Shuffles the playlist in place using a random permutation and returns true if the shuffle occurred, or false if the playlist was empty or absent.
+#   → result: boolean — True if the playlist contained at least one element and was shuffled; false if the playlist was falsy (empty, None, or otherwise absent)
+1. Evaluate the truthiness of self.playlist to determine whether it contains at least one element → playlist_is_truthy
+2. If playlist_is_truthy is true, import the random module → random_module
+3. Call random.shuffle on self.playlist to mutate it in place using a Fisher-Yates permutation of all n elements → shuffled_playlist
+4. Return true to signal that the shuffle was performed → return_value
+   ? Return false immediately to signal that no shuffle was performed and self.playlist was not modified
+
+## stop() → bool
+Summary: Clears the currently playing song by setting it to None and returns True if a song was active, or returns False without modifying state if nothing was playing.
+#   → result: bool — True if a song was active and has been cleared; False if no song was playing and no state was changed.
+1. Check whether self.current_song is truthy (non-None, non-empty, non-zero). → condition_current_song_truthy
+2. If condition_current_song_truthy is true, set self.current_song to None to clear the active song. → current_song_cleared
+3. If condition_current_song_truthy is true, return True to signal that a song was present and has been stopped. → return_value
+   ? Return False immediately without modifying any instance state, signaling that there was nothing to stop.
+
+## switch_song(self: object) → boolean
+Summary: Advances the playlist to the next track by verifying a current song is set and is not the last entry, updating the current song reference and returning True on success, or returning False if no song is active or the end of the playlist has been reached.
+#   self: object — Instance carrying current_song (the active track or a falsy value) and playlist (an ordered list of tracks)
+#   → result: boolean — True if the playlist was successfully advanced to the next track; False if there is no active song or the current song is already the last entry
+1. Check whether self.current_song is truthy; if it is falsy, skip to the outer else branch → current_song_exists
+2. Call self.playlist.index(self.current_song) to obtain the zero-based position of the current song in the playlist; assign the result to current_index → current_index
+3. Compare current_index against len(self.playlist) - 1 using a strict less-than check; this boundary is exclusive of the last element, so the condition is true only when at least one more track follows → has_next_song
+4. If has_next_song is true, assign self.playlist[current_index + 1] to self.current_song, mutating instance state to point to the immediately following track → self.current_song
+5. Return True to signal that the playlist was successfully advanced → return_value
+   ? Leave self.current_song unchanged; no state mutation occurs
+   ? Return False to indicate the end of the playlist has been reached
+   ? Skip the entire inner block without reading or modifying self.playlist; no state mutation occurs
+   ? Return False to indicate that no current song is set
+   ! log: "ValueError raised by list.index because current_song is not found in playlist; the method does not catch this exception and it propagates to the caller"
+   ! raise: ValueError "Raised by the built-in list.index call when self.current_song cannot be located in self.playlist; no fallback or return value is provided by this method"
+

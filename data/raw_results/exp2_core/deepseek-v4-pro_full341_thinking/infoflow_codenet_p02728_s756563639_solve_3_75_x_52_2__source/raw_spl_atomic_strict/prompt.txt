@@ -1,0 +1,605 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   from collections import deque
+2   MOD = 10 ** 9 + 7
+3   def solve(n, edge_list):
+4       factorial = [1] * n
+5       for i in range(1, n):
+6           factorial[i] = (factorial[i - 1] * i) % MOD
+7       factorial_inv = [1] * n
+8       factorial_inv[-1] = pow(factorial[-1], MOD - 2, MOD)
+9       for i in range(n - 2, 0, -1):
+10          factorial_inv[i] = (factorial_inv[i + 1] * (i + 1)) % MOD
+11      g = [[] for _ in range(n)]
+12      for i in range(n - 1):
+13          a, b = edge_list[i]
+14          g[a].append(b)
+15          g[b].append(a)
+16      order = []
+17      parent = [-1] * n
+18      parent[0] = 0
+19      children = [[] for _ in range(n)]
+20      queue = deque([0])
+21      while len(queue) > 0:
+22          p = queue.popleft()
+23          order.append(p)
+24          for q in g[p]:
+25              if parent[q] == -1:
+26                  parent[q] = p
+27                  children[p].append(q)
+28                  queue.append(q)
+29      count_children_res = [-1] * n
+30      for x in order[::-1]:
+31          if len(children[x]) == 0:
+32              count_children_res[x] = 0
+33          else:
+34              total = 0
+35              for y in children[x]:
+36                  total += count_children_res[y]
+37              r = len(children[x]) + total
+38              count_children_res[x] = r
+39      assign_children_res = [-1] * n
+40      for x in order[::-1]:
+41          if len(children[x]) == 0:
+42              assign_children_res[x] = 1
+43          else:
+44              r = factorial[count_children_res[x]]
+45              for y in children[x]:
+46                  r *= assign_children_res[y]
+47                  r *= factorial_inv[count_children_res[y] + 1]
+48                  r %= MOD
+49              assign_children_res[x] = r
+50      assign_parents_res = [-1] * n
+51      assign_parents_res[0] = 1
+52      for x in order[1:]:
+53          p = parent[x]
+54          r = assign_children_res[p]
+55          r *= pow(assign_children_res[x], MOD - 2, MOD)
+56          r *= factorial[count_children_res[x] + 1]
+57          r *= factorial_inv[count_children_res[p]]
+58          r *= assign_parents_res[p]
+59          r *= factorial[n - count_children_res[x] - 2]
+60          r *= factorial_inv[n - count_children_res[p] - 1]
+61          r %= MOD
+62          assign_parents_res[x] = r
+63      res_list = [0] * n
+64      res_list[0] = assign_children_res[0]
+65      for i in range(1, n):
+66          res = factorial[n - 1]
+67          for j in children[i]:
+68              res *= assign_children_res[j]
+69              res *= factorial_inv[count_children_res[j] + 1]
+70              res %= MOD
+71          res *= assign_parents_res[i]
+72          res *= factorial_inv[n - 1 - count_children_res[i]]
+73          res %= MOD
+74          res_list[i] = res
+75      return res_list
+76  def main():
+77      n = int(input())
+78      edge_list = []
+79      for _ in range(n - 1):
+80          a, b = map(int, input().split())
+81          edge_list.append((a - 1, b - 1))
+82      res_list = solve(n, edge_list)
+83      for res in res_list:
+84          print(res)
+85  def test():
+86      assert solve(3, [(0, 1), (0, 2)]) == [2, 1, 1]
+87      assert solve(2, [(0, 1)]) == [1, 1]
+88      assert solve(5, [(0, 1), (1, 2), (2, 3), (2, 4)]) == [2, 8, 12, 3, 3]
+89      assert solve(8, [(0, 1), (1, 2), (2, 3), (2, 4), (2, 5), (5, 6), (5, 7)]) == [40, 280, 840, 120, 120, 504, 72, 72]
+90  if __name__ == "__main__":
+91      test()
+92      main()
+```
+
+
+**Question**: Which variable instances have information flow over `(x,52)` in function `solve`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: solve
+Target source anchor: variable=x, line=52
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: solve
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Compute descendant counts bottom-up: for each x in reversed(order), if children[x] is empty, set count_children_res[x] = 0; otherwise compute total as the sum of count_children_res[y] over all children y of x, set r = len(children[x]) + total, and set count_children_res[x] = r. RESULT count_children_res]
+- [COMMAND Compute bottom-up child assignment values: for each x in reversed(order), if children[x] is empty, set assign_children_res[x] = 1; otherwise set r = factorial[count_children_res[x]], and for each child y of x, multiply r by assign_children_res[y] and by factorial_inv[count_children_res[y] + 1], reducing modulo MOD after each multiplication, then set assign_children_res[x] = r. RESULT assign_children_res]
+- [COMMAND Run BFS on g from root 0: while queue is not empty, pop p from queue, append p to order, and for each neighbor q in g[p], if parent[q] == -1, set parent[q] = p, append q to children[p], and enqueue q. This fills order, parent, and children. RESULT order]
+- [COMMAND Compute top-down parent assignment values: for each x in order[1:], let p = parent[x], and compute r = assign_children_res[p] * pow(assign_children_res[x], MOD - 2, MOD) * factorial[count_children_res[x] + 1] * factorial_inv[count_children_res[p]] * assign_parents_res[p] * factorial[n - count_children_res[x] - 2] * factorial_inv[n - count_children_res[p] - 1], reducing modulo MOD, then set assign_parents_res[x] = r. RESULT assign_parents_res]
+- [COMMAND Initialize order as an empty list. RESULT order]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 4: factorial = [1] * n
+- line 5: for i in range(1, n):
+- line 6: factorial[i] = (factorial[i - 1] * i) % MOD
+- line 7: factorial_inv = [1] * n
+- line 8: factorial_inv[-1] = pow(factorial[-1], MOD - 2, MOD)
+- line 9: for i in range(n - 2, 0, -1):
+- line 10: factorial_inv[i] = (factorial_inv[i + 1] * (i + 1)) % MOD
+- line 11: g = [[] for _ in range(n)]
+- line 12: for i in range(n - 1):
+- line 13: a, b = edge_list[i]
+- line 16: order = []
+- line 17: parent = [-1] * n
+- line 18: parent[0] = 0
+- line 19: children = [[] for _ in range(n)]
+- line 20: queue = deque([0])
+- line 21: while len(queue) > 0:
+- line 22: p = queue.popleft()
+- line 24: for q in g[p]:
+- line 25: if parent[q] == -1:
+- line 26: parent[q] = p
+- line 29: count_children_res = [-1] * n
+- line 30: for x in order[::-1]:
+- line 31: if len(children[x]) == 0:
+- line 32: count_children_res[x] = 0
+- line 33: else:
+- line 34: total = 0
+- line 35: for y in children[x]:
+- line 36: total += count_children_res[y]
+- line 37: r = len(children[x]) + total
+- line 38: count_children_res[x] = r
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 4, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["factorial", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 5, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["for", "i", "in", "n", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 6, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["MOD", "factorial", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 7, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["factorial_inv", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 8, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["MOD", "factorial", "factorial_inv", "pow"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 9, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["for", "i", "in", "n", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 10, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["MOD", "factorial_inv", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 11, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["in"], "roles": ["use"], "source_identifiers": ["_", "for", "g", "in", "n", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 12, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["for", "i", "in", "n", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "b", "edge_list", "i"]}
+- {"definitions": ["order"], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["order"], "roles": ["definition"], "source_identifiers": ["order"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 17, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["n", "parent"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["parent"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["in"], "roles": ["use"], "source_identifiers": ["_", "children", "for", "in", "n", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["deque", "queue"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["len", "queue", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["p", "popleft", "queue"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["for", "g", "in", "p", "q"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 25, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "parent", "q"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["p", "parent", "q"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["count_children_res", "n"]}
+- {"definitions": ["x"], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["x", "in", "order"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "in", "order", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["x"], "roles": ["use", "control"], "source_identifiers": ["children", "if", "len", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 32, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["x"], "roles": ["use"], "source_identifiers": ["count_children_res", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 33, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["total"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 35, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["x", "in"], "roles": ["use", "control"], "source_identifiers": ["children", "for", "in", "x", "y"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["count_children_res", "total", "y"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 37, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["x"], "roles": ["use"], "source_identifiers": ["children", "len", "r", "total", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["x"], "roles": ["use"], "source_identifiers": ["count_children_res", "r", "x"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 3-75
+- source signature: `def solve(n, edge_list):`
+- source content hash: `acb96de87df3454e73c7ae75aad482e712cd9ddfd8d43685fea2f0d714671108`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```python
+   3  def solve(n, edge_list):
+   4      factorial = [1] * n
+   5      for i in range(1, n):
+   6          factorial[i] = (factorial[i - 1] * i) % MOD
+   7      factorial_inv = [1] * n
+   8      factorial_inv[-1] = pow(factorial[-1], MOD - 2, MOD)
+   9      for i in range(n - 2, 0, -1):
+  10          factorial_inv[i] = (factorial_inv[i + 1] * (i + 1)) % MOD
+  11      g = [[] for _ in range(n)]
+  12      for i in range(n - 1):
+  13          a, b = edge_list[i]
+  14          g[a].append(b)
+  15          g[b].append(a)
+  16      order = []
+  17      parent = [-1] * n
+  18      parent[0] = 0
+  19      children = [[] for _ in range(n)]
+  20      queue = deque([0])
+  21      while len(queue) > 0:
+  22          p = queue.popleft()
+  23          order.append(p)
+  24          for q in g[p]:
+  25              if parent[q] == -1:
+  26                  parent[q] = p
+  27                  children[p].append(q)
+  28                  queue.append(q)
+  29      count_children_res = [-1] * n
+  30      for x in order[::-1]:
+  31          if len(children[x]) == 0:
+  32              count_children_res[x] = 0
+  33          else:
+  34              total = 0
+  35              for y in children[x]:
+  36                  total += count_children_res[y]
+  37              r = len(children[x]) + total
+  38              count_children_res[x] = r
+  39      assign_children_res = [-1] * n
+  40      for x in order[::-1]:
+  41          if len(children[x]) == 0:
+  42              assign_children_res[x] = 1
+  43          else:
+  44              r = factorial[count_children_res[x]]
+  45              for y in children[x]:
+  46                  r *= assign_children_res[y]
+  47                  r *= factorial_inv[count_children_res[y] + 1]
+  48                  r %= MOD
+  49              assign_children_res[x] = r
+  50      assign_parents_res = [-1] * n
+  51      assign_parents_res[0] = 1
+  52      for x in order[1:]:
+  53          p = parent[x]
+  54          r = assign_children_res[p]
+  55          r *= pow(assign_children_res[x], MOD - 2, MOD)
+  56          r *= factorial[count_children_res[x] + 1]
+  57          r *= factorial_inv[count_children_res[p]]
+  58          r *= assign_parents_res[p]
+  59          r *= factorial[n - count_children_res[x] - 2]
+  60          r *= factorial_inv[n - count_children_res[p] - 1]
+  61          r %= MOD
+  62          assign_parents_res[x] = r
+  63      res_list = [0] * n
+  64      res_list[0] = assign_children_res[0]
+  65      for i in range(1, n):
+  66          res = factorial[n - 1]
+  67          for j in children[i]:
+  68              res *= assign_children_res[j]
+  69              res *= factorial_inv[count_children_res[j] + 1]
+  70              res %= MOD
+  71          res *= assign_parents_res[i]
+  72          res *= factorial_inv[n - 1 - count_children_res[i]]
+  73          res %= MOD
+  74          res_list[i] = res
+  75      return res_list
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Computes a per-vertex modular combinatorial assignment count for a rooted tree by BFS-ordering the tree, precomputing factorials, and performing bottom-up and top-down dynamic-programming passes." solve]
+    [INPUTS]
+        <REF> n </REF>: int "Number of vertices in the tree."
+        <REF> edge_list </REF>: list[tuple[int, int]] "List of n-1 undirected edges, each a 0-indexed pair of vertex labels."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list[int] "List of length n containing the computed modular value for each vertex."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Precompute factorials modulo the global MOD: set factorial to a list of n ones, then for i from 1 to n-1 inclusive, set factorial[i] = (factorial[i-1] * i) % MOD. RESULT factorial]
+            [COMMAND Precompute inverse factorials: set factorial_inv to a list of n ones, set factorial_inv[-1] = pow(factorial[-1], MOD - 2, MOD), then for i from n-2 down to 1 inclusive, set factorial_inv[i] = (factorial_inv[i+1] * (i+1)) % MOD. RESULT factorial_inv]
+            [COMMAND Build undirected adjacency list g: create g as a list of n independent empty lists, then for i from 0 to n-2 inclusive, unpack edge_list[i] as a and b, append b to g[a], and append a to g[b]. RESULT g]
+            [COMMAND Initialize order as an empty list. RESULT order]
+            [COMMAND Initialize parent as a list of n copies of -1 and set parent[0] = 0. RESULT parent]
+            [COMMAND Initialize children as a list of n independent empty lists. RESULT children]
+            [COMMAND Initialize queue as deque([0]). RESULT queue]
+            [COMMAND Run BFS on g from root 0: while queue is not empty, pop p from queue, append p to order, and for each neighbor q in g[p], if parent[q] == -1, set parent[q] = p, append q to children[p], and enqueue q. This fills order, parent, and children. RESULT order]
+            [COMMAND Initialize count_children_res as a list of n copies of -1. RESULT count_children_res]
+            [COMMAND Compute descendant counts bottom-up: for each x in reversed(order), if children[x] is empty, set count_children_res[x] = 0; otherwise compute total as the sum of count_children_res[y] over all children y of x, set r = len(children[x]) + total, and set count_children_res[x] = r. RESULT count_children_res]
+            [COMMAND Initialize assign_children_res as a list of n copies of -1. RESULT assign_children_res]
+            [COMMAND Compute bottom-up child assignment values: for each x in reversed(order), if children[x] is empty, set assign_children_res[x] = 1; otherwise set r = factorial[count_children_res[x]], and for each child y of x, multiply r by assign_children_res[y] and by factorial_inv[count_children_res[y] + 1], reducing modulo MOD after each multiplication, then set assign_children_res[x] = r. RESULT assign_children_res]
+            [COMMAND Initialize assign_parents_res as a list of n copies of -1 and set assign_parents_res[0] = 1. RESULT assign_parents_res]
+            [COMMAND Compute top-down parent assignment values: for each x in order[1:], let p = parent[x], and compute r = assign_children_res[p] * pow(assign_children_res[x], MOD - 2, MOD) * factorial[count_children_res[x] + 1] * factorial_inv[count_children_res[p]] * assign_parents_res[p] * factorial[n - count_children_res[x] - 2] * factorial_inv[n - count_children_res[p] - 1], reducing modulo MOD, then set assign_parents_res[x] = r. RESULT assign_parents_res]
+            [COMMAND Initialize res_list as a list of n zeros and set res_list[0] = assign_children_res[0]. RESULT res_list]
+            [COMMAND Compute final results for non-root vertices: for i from 1 to n-1 inclusive, set res = factorial[n-1]; for each child j of i, multiply res by assign_children_res[j] and by factorial_inv[count_children_res[j] + 1], reducing modulo MOD after each multiplication; after the child loop, multiply res by assign_parents_res[i] and by factorial_inv[n - 1 - count_children_res[i]], reduce modulo MOD, and set res_list[i] = res. RESULT res_list]
+            [COMMAND Return res_list as the final result. RESULT res_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

@@ -1,0 +1,358 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.*;
+2   import java.util.*;
+3   import java.math.*;
+4   public class Main {
+5       InputStream is;
+6       PrintWriter out;
+7       String INPUT = "";
+8       static int mod = 1_000_000_007;
+9       long inf = Long.MAX_VALUE/2;
+10      void solve(){
+11          int n = ni();
+12          int[] a = new int[n];
+13          for(int i = 0; i < n; i++){
+14              a[i] = ni();
+15          }
+16          boolean[] seen = new boolean[n];
+17          ArrayList<Integer> ans = new ArrayList<>();
+18          int t = 1;
+19          int l = 0;
+20          int r = n-1;
+21          while(true){
+22              outer:
+23              for(int i = n-1; i >= 0; i--){
+24                  if(seen[i]) continue;
+25                  if(i<l){
+26                      out.println(-1);
+27                      return;
+28                  }
+29                  if(a[i]==t){
+30                      seen[i] = true;
+31                      ans.add(a[i]);
+32                      boolean flag = true;
+33                      for(int j = i+1; j < n; j++){
+34                          if(!seen[j]){
+35                              flag = false;
+36                          }
+37                      }
+38                      if(flag){
+39                          break;
+40                      }
+41                      else{
+42                          t++;
+43                          i = n;
+44                          continue;
+45                      }
+46                  }
+47              }
+48              if(!seen[n-1]){
+49                  out.println(-1);
+50                  return;
+51              }
+52              boolean flag = true;
+53              for(int i = n-1; i >= 0; i--){
+54                  if(!seen[i]){
+55                      t = a[i+1];
+56                      flag = false;
+57                      r = i;
+58                      for(int j = i; j >= 0; j--){
+59                          if(seen[j]) break;
+60                          l = j;
+61                      }
+62                      break;
+63                  }
+64              }
+65              if(flag) break;
+66          }
+67          for(int i : ans){
+68              out.println(i);
+69          }
+70      }
+71      void run() throws Exception
+72      {
+73          is = INPUT.isEmpty() ? System.in : new ByteArrayInputStream(INPUT.getBytes());
+74          out = new PrintWriter(System.out);
+75          long s = System.currentTimeMillis();
+76          solve();
+77          out.flush();
+78          if(!INPUT.isEmpty())tr(System.currentTimeMillis()-s+"ms");
+79      }
+80      public static void main(String[] args) throws Exception { new Main().run(); }
+81      private byte[] inbuf = new byte[1024];
+82      private int lenbuf = 0, ptrbuf = 0;
+83      private int readByte()
+84      {
+85          if(lenbuf == -1)throw new InputMismatchException();
+86          if(ptrbuf >= lenbuf){
+87              ptrbuf = 0;
+88              try { lenbuf = is.read(inbuf); } catch (IOException e) { throw new InputMismatchException(); }
+89              if(lenbuf <= 0)return -1;
+90          }
+91          return inbuf[ptrbuf++];
+92      }
+93      private boolean isSpaceChar(int c) { return !(c >= 33 && c <= 126); }
+94      private int skip() { int b; while((b = readByte()) != -1 && isSpaceChar(b)); return b; }
+95      private double nd() { return Double.parseDouble(ns()); }
+96      private char nc() { return (char)skip(); }
+97      private String ns()
+98      {
+99          int b = skip();
+100          StringBuilder sb = new StringBuilder();
+101          while(!(isSpaceChar(b) && b != ' ')){
+102              sb.appendCodePoint(b);
+103              b = readByte();
+104          }
+105          return sb.toString();
+106      }
+107      private char[] ns(int n)
+108      {
+109          char[] buf = new char[n];
+110          int b = skip(), p = 0;
+111          while(p < n && !(isSpaceChar(b))){
+112              buf[p++] = (char)b;
+113              b = readByte();
+114          }
+115          return n == p ? buf : Arrays.copyOf(buf, p);
+116      }
+117      private char[][] nm(int n, int m)
+118      {
+119          char[][] map = new char[n][];
+120          for(int i = 0;i < n;i++)map[i] = ns(m);
+121          return map;
+122      }
+123      private int[] na(int n)
+124      {
+125          int[] a = new int[n];
+126          for(int i = 0;i < n;i++)a[i] = ni();
+127          return a;
+128      }
+129      private int ni()
+130      {
+131          int num = 0, b;
+132          boolean minus = false;
+133          while((b = readByte()) != -1 && !((b >= '0' && b <= '9') || b == '-'));
+134          if(b == '-'){
+135              minus = true;
+136              b = readByte();
+137          }
+138          while(true){
+139              if(b >= '0' && b <= '9'){
+140                  num = num * 10 + (b - '0');
+141              }else{
+142                  return minus ? -num : num;
+143              }
+144              b = readByte();
+145          }
+146      }
+147      private long nl()
+148      {
+149          long num = 0;
+150          int b;
+151          boolean minus = false;
+152          while((b = readByte()) != -1 && !((b >= '0' && b <= '9') || b == '-'));
+153          if(b == '-'){
+154              minus = true;
+155              b = readByte();
+156          }
+157          while(true){
+158              if(b >= '0' && b <= '9'){
+159                  num = num * 10 + (b - '0');
+160              }else{
+161                  return minus ? -num : num;
+162              }
+163              b = readByte();
+164          }
+165      }
+166      private static void tr(Object... o) { System.out.println(Arrays.deepToString(o)); }
+167  }
+```
+
+
+**Question**: Does line `24` have control dependence over line `55` in function `solve`? If so, provide a trace.
+
+**Output**:
+

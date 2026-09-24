@@ -1,0 +1,450 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include <stdio.h>
+2   #include <stdlib.h>
+3   #include <math.h>
+4   #include <string.h>
+5   void solveQ(int F);
+6   int main(int argc, char *argv[]) {
+7   	int T, F;
+8   	scanf("%d", &T);
+9   	scanf("%d", &F);
+10  	for (int i=0; i<T; i++) {
+11  		solveQ(F);
+12  	}
+13  	return 0;
+14  }
+15  void solveQ(int F) {
+16  	char S[6], l;
+17  	int C[5] = {0, 0, 0, 0, 0};
+18  	int n = 0, x, hasLet=0, letter;
+19  	for (int d = 1; d<=5; d++) {
+20  		for (int i=0; i<119; i++) {
+21  			for (int j=0; j<5; j++) {
+22  				if (hasLet > 1) {
+23  					break;
+24  				}
+25  				if ( C[j] < 24 ) {
+26  					hasLet++;
+27  					letter = j;
+28  				}
+29  			}
+30  			if (hasLet > 1) {
+31  				hasLet = 0;
+32  			} else {
+33  				hasLet = 0;
+34  				S[d-1] = 'A' + letter;
+35  				C[0] = 0; C[1] = 0; C[2] = 0; C[3] = 0; C[4] = 0;
+36  				if (d == 5) {
+37  					break;
+38  				}
+39  				for (int k = d-1; d>=0; d--) {
+40  					C[S[k]-'A'] = 24;
+41  				}
+42  				break;
+43  			}
+44  			x = 5*i + d;
+45  			printf("%d\n", x);
+46  			fflush(stdout);
+47  			scanf("%c", &l);
+48  			C[l - 'A']++;
+49  			for (int j=0; j<5; j++) {
+50  				if (hasLet > 1) {
+51  					break;
+52  				}
+53  				if ( C[j] < 24 ) {
+54  					hasLet++;
+55  				}
+56  			}
+57  		}
+58  	}
+59  	S[5] = '\0';
+60  	printf("%s\n", S);
+61  	fflush(stdout);
+62  	scanf("%c", &l);
+63  	if (l == 'Y') {
+64  		return;
+65  	} else {
+66  		exit(0);
+67  	}
+68  }
+```
+
+
+**Question**: Does `(k,39)` have data dependence over `(C,48)` in function `solveQ`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: solveQ
+Target source anchor: variable=C, line=48
+Trace source anchor: variable=k, line=39
+Attached SPL owners: solveQ
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Declare local variables: char S[6] and char l; int C[5] initialized to {0,0,0,0,0}; int n initialized to 0; int x and int letter left uninitialized; int hasLet initialized to 0. RESULT S, l, C, n, x, letter, hasLet]
+- [COMMAND Within the d-loop and i-loop, run a j-loop with int j from 0 to 4 inclusive. At the beginning of each j iteration, if hasLet > 1, break out of this j-loop. If C[j] < 24, increment hasLet and set letter = j. RESULT hasLet, letter]
+- [COMMAND In the query block of the true branch, compute x = 5*i + d; print x followed by a newline; flush stdout; read one character into l with scanf("%c", &l); increment C[l - 'A'] by 1 (assuming l is in the range 'A' through 'E'). RESULT x, l, C]
+- [COMMAND After the outer loop has finished, set S[5] = '\0'; print the string S followed by a newline; flush stdout; read one character into l with scanf("%c", &l). RESULT S, l]
+- [COMMAND After the first j-loop, if hasLet is not greater than 1, take the placement branch: set hasLet to 0; set S[d-1] to 'A' + letter (reading letter, which may be uninitialized or stale if no qualifying C[j] was found); reset C[0] through C[4] to 0; if d == 5, break out of the i-loop; otherwise execute the k-loop described next and then break out of the i-loop. RESULT hasLet, S, C]
+- [COMMAND In the placement branch when d is not 5, execute for (int k = d-1; d >= 0; d--) and set C[S[k] - 'A'] = 24; k is never updated, so C[S[k]-'A'] is set repeatedly for the same k while d is decremented down to -1. RESULT C, k, d]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 17: int C[5] = {0, 0, 0, 0, 0};
+- line 35: C[0] = 0; C[1] = 0; C[2] = 0; C[3] = 0; C[4] = 0;
+- line 48: C[l - 'A']++;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["C"], "disposition": "inspect_against_official_dependence_definition", "line": 17, "position": "before_target", "reason": "C", "relevant_identifiers": ["C"], "roles": ["definition"], "source_identifiers": ["C", "int"]}
+- {"definitions": ["C"], "disposition": "inspect_against_official_dependence_definition", "line": 35, "position": "before_target", "reason": "C", "relevant_identifiers": ["C"], "roles": ["definition"], "source_identifiers": ["C"]}
+- {"definitions": ["C"], "disposition": "inspect_against_official_dependence_definition", "line": 48, "position": "target", "reason": "C", "relevant_identifiers": ["C", "l", "A"], "roles": ["definition", "use"], "source_identifiers": ["A", "C", "l"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solveQ`
+- source lines: 15-68
+- source signature: `void solveQ(int F) {`
+- source content hash: `94650b7fa12b6245d94f6e4b5b241c3cd0b0b6d221c5cf77ba0b1c730afa39ff`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```cpp
+  15  void solveQ(int F) {
+  16   char S[6], l;
+  17   int C[5] = {0, 0, 0, 0, 0};
+  18   int n = 0, x, hasLet=0, letter;
+  19   for (int d = 1; d<=5; d++) {
+  20    for (int i=0; i<119; i++) {
+  21     for (int j=0; j<5; j++) {
+  22      if (hasLet > 1) {
+  23       break;
+  24      }
+  25      if ( C[j] < 24 ) {
+  26       hasLet++;
+  27       letter = j;
+  28      }
+  29     }
+  30     if (hasLet > 1) {
+  31      hasLet = 0;
+  32     } else {
+  33      hasLet = 0;
+  34      S[d-1] = 'A' + letter;
+  35      C[0] = 0; C[1] = 0; C[2] = 0; C[3] = 0; C[4] = 0;
+  36      if (d == 5) {
+  37       break;
+  38      }
+  39      for (int k = d-1; d>=0; d--) {
+  40       C[S[k]-'A'] = 24;
+  41      }
+  42      break;
+  43     }
+  44     x = 5*i + d;
+  45     printf("%d\n", x);
+  46     fflush(stdout);
+  47     scanf("%c", &l);
+  48     C[l - 'A']++;
+  49     for (int j=0; j<5; j++) {
+  50      if (hasLet > 1) {
+  51       break;
+  52      }
+  53      if ( C[j] < 24 ) {
+  54       hasLet++;
+  55      }
+  56     }
+  57    }
+  58   }
+  59   S[5] = '\0';
+  60   printf("%s\n", S);
+  61   fflush(stdout);
+  62   scanf("%c", &l);
+  63   if (l == 'Y') {
+  64    return;
+  65   } else {
+  66    exit(0);
+  67   }
+  68  }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Interactively identifies a 5-character string by repeatedly printing query indices, reading single-letter responses, accumulating counts, and returning only when the judge confirms with 'Y'." solveQ]
+    [INPUTS]
+        <REF> F </REF>: int "Unused integer parameter accepted by the function."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare local variables: char S[6] and char l; int C[5] initialized to {0,0,0,0,0}; int n initialized to 0; int x and int letter left uninitialized; int hasLet initialized to 0. RESULT S, l, C, n, x, letter, hasLet]
+            [COMMAND Start the outer for loop with int d initialized to 1; continue while d <= 5; increment d by 1 after each full iteration. RESULT d]
+            [COMMAND Within the outer d-loop, start an inner for loop with int i initialized to 0; continue while i < 119; increment i by 1 after each full inner iteration. RESULT i]
+            [COMMAND Within the d-loop and i-loop, run a j-loop with int j from 0 to 4 inclusive. At the beginning of each j iteration, if hasLet > 1, break out of this j-loop. If C[j] < 24, increment hasLet and set letter = j. RESULT hasLet, letter]
+            [COMMAND After the first j-loop, if hasLet > 1, set hasLet to 0 and continue to the query block in the same i iteration. RESULT hasLet]
+            [COMMAND After the first j-loop, if hasLet is not greater than 1, take the placement branch: set hasLet to 0; set S[d-1] to 'A' + letter (reading letter, which may be uninitialized or stale if no qualifying C[j] was found); reset C[0] through C[4] to 0; if d == 5, break out of the i-loop; otherwise execute the k-loop described next and then break out of the i-loop. RESULT hasLet, S, C]
+            [COMMAND In the placement branch when d is not 5, execute for (int k = d-1; d >= 0; d--) and set C[S[k] - 'A'] = 24; k is never updated, so C[S[k]-'A'] is set repeatedly for the same k while d is decremented down to -1. RESULT C, k, d]
+            [COMMAND After the k-loop and the break out of the i-loop, the outer-loop update increments d from -1 to 0, so the next outer iteration begins with d = 0; if the placement branch is taken in that iteration, it accesses S[d-1] = S[-1], which is an out-of-bounds access. RESULT d]
+            [COMMAND In the query block of the true branch, compute x = 5*i + d; print x followed by a newline; flush stdout; read one character into l with scanf("%c", &l); increment C[l - 'A'] by 1 (assuming l is in the range 'A' through 'E'). RESULT x, l, C]
+            [COMMAND In the same i iteration after the query input, run a second j-loop from j = 0 to 4 inclusive. At the beginning of each j iteration, if hasLet > 1, break out of this j-loop. If C[j] < 24, increment hasLet. RESULT hasLet]
+            [COMMAND After completing the inner i-loop (including cases where it was broken out of), execute the outer-loop update and condition to determine whether to run another d iteration. RESULT d]
+            [COMMAND After the outer loop has finished, set S[5] = '\0'; print the string S followed by a newline; flush stdout; read one character into l with scanf("%c", &l). RESULT S, l]
+            [COMMAND If l == 'Y', return from the function; otherwise call exit(0), terminating the program. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

@@ -1,0 +1,332 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   from math import sqrt, pow, log, ceil, log10
+2   from sys import stdin, setrecursionlimit
+3   from sets import Set
+4   setrecursionlimit(100000)
+5   debug = False
+6   def isCycleCorrect(A, C, L, ans):
+7       la = len(ans)
+8       for i in range(A):
+9           pos = 0
+10          isThereAWinner = False
+11          while (isThereAWinner == False) and (pos < L[i] * la):
+12              if C[i][pos % L[i]] != ans[pos % la]:
+13                  if debug:
+14                      print "->", C[i][pos % L[i]], ans[pos % la], A, i
+15                  if (C[i][pos % L[i]], ans[pos % la]) == ('R', 'S'):
+16                      return False
+17                  if (C[i][pos % L[i]], ans[pos % la]) == ('S', 'R'):
+18                      isThereAWinner = True
+19                      break
+20                  if (C[i][pos % L[i]], ans[pos % la]) == ('R', 'P'):
+21                      isThereAWinner = True
+22                      break
+23                  if (C[i][pos % L[i]], ans[pos % la]) == ('P', 'R'):
+24                      return False
+25                  if (C[i][pos % L[i]], ans[pos % la]) == ('P', 'S'):
+26                      isThereAWinner = True
+27                      break
+28                  if (C[i][pos % L[i]], ans[pos % la]) == ('S', 'P'):
+29                      return False
+30              pos += 1
+31          return False
+32      return True
+33  def solve(A, C, L):
+34      ans = ""
+35      pos = 0
+36      isAlive = [True] * A
+37      while True:
+38          possibilities = {}
+39          possibilities['R'] = 0
+40          possibilities['S'] = 0
+41          possibilities['P'] = 0
+42          predR = []
+43          predS = []
+44          predP = []
+45          if debug:
+46              print "alive ans", isAlive, ans
+47          if not any(isAlive):
+48              print ans
+49              return
+50          for i in range(A):
+51              if isAlive[i]:
+52                  possibilities[C[i][pos % L[i]]] = 1
+53                  if C[i][pos % L[i]] == 'R':
+54                      predR += [i]
+55                  if C[i][pos % L[i]] == 'S':
+56                      predS += [i]
+57                  if C[i][pos % L[i]] == 'P':
+58                      predP += [i]
+59                  if possibilities['R'] + possibilities['S'] + possibilities['P'] == 3:
+60                      print "IMPOSSIBLE"
+61                      return
+62          (r, s, p) = (possibilities['R'], possibilities['S'], possibilities['P'])
+63          if debug:
+64              print "->", (r, s, p)
+65          if (r, s, p) == (1, 0, 0):
+66              ans += "P"
+67              print ans
+68              return
+69          if (r, s, p) == (0, 1, 0):
+70              ans += "R"
+71              print ans
+72              return
+73          if (r, s, p) == (0, 0, 1):
+74              ans += "S"
+75              print ans
+76              return
+77          if len(ans) == 500:
+78              print "IMPOSSIBLE"
+79              if debug:
+80                  print "LEN", ans
+81              return
+82          if (r, s, p) == (1, 1, 0):
+83              for i in predS:
+84                  isAlive[i] = False
+85              ans += "R"
+86          if (r, s, p) == (1, 0, 1):
+87              for i in predR:
+88                  isAlive[i] = False
+89              ans += "P"
+90          if (r, s, p) == (0, 1, 1):
+91              for i in predP:
+92                  isAlive[i] = False
+93              ans += "S"
+94          pos += 1
+95  T = int(stdin.readline())
+96  for i in range(1,T+1):
+97      A = stdin.readline()
+98      A = int(A)
+99      C = [""] * A
+100      L = [0] * A
+101      for j in range(A):
+102          C[j] = stdin.readline().rstrip() 
+103          L[j] = len(C[j])
+104      print "Case #" + str(i) + ":", 
+105      if debug:
+106          print " -> ", A, C, L
+107      solve(A, C, L)
+```
+
+
+**Question**: Does `(possibilities,41)` have data dependence over `(i,87)` in function `solve`? If so, provide a trace.
+
+**Output**:
+

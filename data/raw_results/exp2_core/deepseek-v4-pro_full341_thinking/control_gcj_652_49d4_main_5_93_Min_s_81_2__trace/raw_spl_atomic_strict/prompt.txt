@@ -1,0 +1,501 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   import sys
+2   import numpy as np
+3   def eprint(*args, **kwargs):
+4       print(*args, file=sys.stderr, **kwargs)
+5   def main():
+6       T = int(raw_input())     
+7       for i in xrange(1, T + 1):
+8           tmp = raw_input()
+9           tmpList = map(int, tmp.split())
+10          N = int(tmpList[0])                          
+11          K = int(tmpList[1])                          
+12          stall_occupied = [True]                 
+13          for j in xrange(N):
+14              stall_occupied.append(False)
+15          stall_occupied.append(True)
+16          Ls = []
+17          Rs = []
+18          Min_s = []
+19          Max_s = []
+20          for j in xrange(N+2):
+21              if stall_occupied[j]:
+22                  Ls.append(-1)
+23                  Rs.append(-1)
+24              else:
+25                  Ls.append(j - 1)
+26                  Rs.append(N - j)
+27              Min_s.append(min(Ls[-1], Rs[-1]))
+28              Max_s.append(max(Ls[-1], Rs[-1]))
+29          for k in xrange(K):
+30              maximal = max(Min_s)
+31              if Min_s.count(maximal) > 1:
+32                  values = np.array(Min_s)
+33                  idxs = np.where(values == maximal)[0]
+34                  max_of_idxs = []
+35                  for j in idxs:
+36                      max_of_idxs.append(Max_s[j])
+37                  max_max = max(max_of_idxs)
+38                  if(max_of_idxs.count(max_max) > 1):
+39                      values1 = np.array(max_of_idxs)
+40                      idxs1 = np.where(values1 == max_max)[0]
+41                      idx = idxs[idxs1[0]]
+42                  else:
+43                      idx = idxs[max_of_idxs.index(max_max)]
+44                  y =  max(Ls[idx], Rs[idx])
+45                  z =  min(Ls[idx], Rs[idx])
+46                  stall_occupied[idx] = True
+47                  Ls[idx] = -1
+48                  Rs[idx] = -1
+49                  Min_s[idx] = -1
+50                  Max_s[idx] = -1
+51                  leftIdx = idx - 1
+52                  while leftIdx > 0:
+53                      if stall_occupied[leftIdx]:
+54                          break
+55                      Rs[leftIdx] = idx - leftIdx - 1
+56                      Min_s[leftIdx] = min(Rs[leftIdx], Ls[leftIdx])
+57                      Max_s[leftIdx] = max(Rs[leftIdx], Ls[leftIdx])
+58                      leftIdx -= 1
+59                  rightIdx = idx + 1
+60                  while rightIdx < N + 2:
+61                      if stall_occupied[rightIdx]:
+62                          break
+63                      Ls[rightIdx] = rightIdx - idx - 1
+64                      Min_s[rightIdx] = min(Rs[rightIdx], Ls[rightIdx])
+65                      Max_s[rightIdx] = max(Rs[rightIdx], Ls[rightIdx])
+66                      rightIdx += 1
+67              else:
+68                  idx = Min_s.index(maximal)
+69                  y =  max(Ls[idx], Rs[idx])
+70                  z =  min(Ls[idx], Rs[idx])
+71                  stall_occupied[idx] = True
+72                  Ls[idx] = -1
+73                  Rs[idx] = -1
+74                  Min_s[idx] = -1
+75                  Max_s[idx] = -1
+76                  leftIdx = idx - 1
+77                  while leftIdx > 0:
+78                      if stall_occupied[leftIdx]:
+79                          break
+80                      Rs[leftIdx] = idx - leftIdx - 1
+81                      Min_s[leftIdx] = min(Rs[leftIdx], Ls[leftIdx])
+82                      Max_s[leftIdx] = max(Rs[leftIdx], Ls[leftIdx])
+83                      leftIdx -= 1
+84                  rightIdx = idx + 1
+85                  while rightIdx < N + 2:
+86                      if stall_occupied[rightIdx]:
+87                          break
+88                      Ls[rightIdx] = rightIdx - idx - 1
+89                      Min_s[rightIdx] = min(Rs[rightIdx], Ls[rightIdx])
+90                      Max_s[rightIdx] = max(Rs[rightIdx], Ls[rightIdx])
+91                      rightIdx += 1
+92          print("Case #{}: {} {}".format(i, y, z))
+93          sys.stdout.flush()
+94  if __name__ == "__main__":
+95      main()
+```
+
+
+**Question**: Does line `7` have control dependence over line `81` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: main
+Target source anchor: variable=<none>, line=7
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a loop header whose condition controls its next execution: {'kind': 'line', 'line': 7, 'reason': 'the target is a loop header whose condition controls its next execution'}
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND For each test case i from 1 to T inclusive, read the next input line, split it into integers, and assign N = int(tmpList[0]) and K = int(tmpList[1]). RESULT N,K]
+- [COMMAND After completing all K people in test case i, print "Case #{}: {} {}".format(i, y, z) and flush standard output. RESULT printed_output]
+- [COMMAND Create a numpy array from Min_s and obtain idxs as all indices where Min_s == maximal, in ascending index order. RESULT idxs]
+- [COMMAND Build max_of_idxs by appending Max_s[j] for each j in idxs. RESULT max_of_idxs]
+- [COMMAND Read the number of test cases T from standard input using raw_input and int conversion. RESULT T]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 7: for i in xrange(1, T + 1):
+- line 13: for j in xrange(N):
+- line 20: for j in xrange(N+2):
+- line 21: if stall_occupied[j]:
+- line 24: else:
+- line 29: for k in xrange(K):
+- line 31: if Min_s.count(maximal) > 1:
+- line 35: for j in idxs:
+- line 38: if(max_of_idxs.count(max_max) > 1):
+- line 42: else:
+- line 52: while leftIdx > 0:
+- line 53: if stall_occupied[leftIdx]:
+- line 54: break
+- line 60: while rightIdx < N + 2:
+- line 61: if stall_occupied[rightIdx]:
+- line 62: break
+- line 67: else:
+- line 77: while leftIdx > 0:
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 7, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["i", "in", "xrange", "T"], "roles": ["definition", "use", "control"], "source_identifiers": ["T", "for", "i", "in", "xrange"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["in", "xrange"], "roles": ["use", "control"], "source_identifiers": ["N", "for", "in", "j", "xrange"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["in", "xrange"], "roles": ["use", "control"], "source_identifiers": ["N", "for", "in", "j", "xrange"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "j", "stall_occupied"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["in", "xrange"], "roles": ["use", "control"], "source_identifiers": ["K", "for", "in", "k", "xrange"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["Min_s", "count", "if", "maximal"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 35, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["for", "idxs", "in", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["count", "if", "max_max", "max_of_idxs"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 42, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 52, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["leftIdx", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 53, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "leftIdx", "stall_occupied"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["break"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 60, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["N", "rightIdx", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 61, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "rightIdx", "stall_occupied"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 62, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["break"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 67, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 77, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["leftIdx", "while"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 5-93
+- source signature: `def main():`
+- source content hash: `4dbba1d00689d4b04ebbc07c468bce683091716ad8686e65961f8a4436741942`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```python
+   5  def main():
+   6      T = int(raw_input())     
+   7      for i in xrange(1, T + 1):
+   8          tmp = raw_input()
+   9          tmpList = map(int, tmp.split())
+  10          N = int(tmpList[0])                          
+  11          K = int(tmpList[1])                          
+  12          stall_occupied = [True]                 
+  13          for j in xrange(N):
+  14              stall_occupied.append(False)
+  15          stall_occupied.append(True)
+  16          Ls = []
+  17          Rs = []
+  18          Min_s = []
+  19          Max_s = []
+  20          for j in xrange(N+2):
+  21              if stall_occupied[j]:
+  22                  Ls.append(-1)
+  23                  Rs.append(-1)
+  24              else:
+  25                  Ls.append(j - 1)
+  26                  Rs.append(N - j)
+  27              Min_s.append(min(Ls[-1], Rs[-1]))
+  28              Max_s.append(max(Ls[-1], Rs[-1]))
+  29          for k in xrange(K):
+  30              maximal = max(Min_s)
+  31              if Min_s.count(maximal) > 1:
+  32                  values = np.array(Min_s)
+  33                  idxs = np.where(values == maximal)[0]
+  34                  max_of_idxs = []
+  35                  for j in idxs:
+  36                      max_of_idxs.append(Max_s[j])
+  37                  max_max = max(max_of_idxs)
+  38                  if(max_of_idxs.count(max_max) > 1):
+  39                      values1 = np.array(max_of_idxs)
+  40                      idxs1 = np.where(values1 == max_max)[0]
+  41                      idx = idxs[idxs1[0]]
+  42                  else:
+  43                      idx = idxs[max_of_idxs.index(max_max)]
+  44                  y =  max(Ls[idx], Rs[idx])
+  45                  z =  min(Ls[idx], Rs[idx])
+  46                  stall_occupied[idx] = True
+  47                  Ls[idx] = -1
+  48                  Rs[idx] = -1
+  49                  Min_s[idx] = -1
+  50                  Max_s[idx] = -1
+  51                  leftIdx = idx - 1
+  52                  while leftIdx > 0:
+  53                      if stall_occupied[leftIdx]:
+  54                          break
+  55                      Rs[leftIdx] = idx - leftIdx - 1
+  56                      Min_s[leftIdx] = min(Rs[leftIdx], Ls[leftIdx])
+  57                      Max_s[leftIdx] = max(Rs[leftIdx], Ls[leftIdx])
+  58                      leftIdx -= 1
+  59                  rightIdx = idx + 1
+  60                  while rightIdx < N + 2:
+  61                      if stall_occupied[rightIdx]:
+  62                          break
+  63                      Ls[rightIdx] = rightIdx - idx - 1
+  64                      Min_s[rightIdx] = min(Rs[rightIdx], Ls[rightIdx])
+  65                      Max_s[rightIdx] = max(Rs[rightIdx], Ls[rightIdx])
+  66                      rightIdx += 1
+  67              else:
+  68                  idx = Min_s.index(maximal)
+  69                  y =  max(Ls[idx], Rs[idx])
+  70                  z =  min(Ls[idx], Rs[idx])
+  71                  stall_occupied[idx] = True
+  72                  Ls[idx] = -1
+  73                  Rs[idx] = -1
+  74                  Min_s[idx] = -1
+  75                  Max_s[idx] = -1
+  76                  leftIdx = idx - 1
+  77                  while leftIdx > 0:
+  78                      if stall_occupied[leftIdx]:
+  79                          break
+  80                      Rs[leftIdx] = idx - leftIdx - 1
+  81                      Min_s[leftIdx] = min(Rs[leftIdx], Ls[leftIdx])
+  82                      Max_s[leftIdx] = max(Rs[leftIdx], Ls[leftIdx])
+  83                      leftIdx -= 1
+  84                  rightIdx = idx + 1
+  85                  while rightIdx < N + 2:
+  86                      if stall_occupied[rightIdx]:
+  87                          break
+  88                      Ls[rightIdx] = rightIdx - idx - 1
+  89                      Min_s[rightIdx] = min(Rs[rightIdx], Ls[rightIdx])
+  90                      Max_s[rightIdx] = max(Rs[rightIdx], Ls[rightIdx])
+  91                      rightIdx += 1
+  92          print("Case #{}: {} {}".format(i, y, z))
+  93          sys.stdout.flush()
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Simulates the Bathroom Stalls process for every test case by greedily selecting stalls with the largest minimum distance, tie-breaking by largest maximum distance and then leftmost index, and prints the final selected stall's max and min distances." main]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the number of test cases T from standard input using raw_input and int conversion. RESULT T]
+            [COMMAND For each test case i from 1 to T inclusive, read the next input line, split it into integers, and assign N = int(tmpList[0]) and K = int(tmpList[1]). RESULT N,K]
+            [COMMAND Within the test case loop, initialize stall_occupied as a list containing True, followed by N False values, followed by True, for a total length of N+2. RESULT stall_occupied]
+            [COMMAND Within the test case loop, for each stall index j from 0 to N+1 inclusive, initialize Ls[j] and Rs[j]: if stall_occupied[j] is True set both to -1; otherwise set Ls[j] = j - 1 and Rs[j] = N - j. Then append Min_s[j] = min(Ls[j], Rs[j]) and Max_s[j] = max(Ls[j], Rs[j]). RESULT Ls,Rs,Min_s,Max_s]
+            [COMMAND Within the test case loop, for each person k from 0 to K-1, compute maximal = max(Min_s). If Min_s.count(maximal) is exactly 1, select idx = Min_s.index(maximal); if more than one index has this maximal value, use the tie-breaking alternative flow. RESULT idx]
+            [COMMAND Within the same for-k loop, after selecting idx, set y = max(Ls[idx], Rs[idx]) and z = min(Ls[idx], Rs[idx]). RESULT y,z]
+            [COMMAND Within the same for-k loop, mark stall_occupied[idx] as True and set Ls[idx], Rs[idx], Min_s[idx], and Max_s[idx] to -1. RESULT stall_occupied,Ls,Rs,Min_s,Max_s]
+            [COMMAND Within the same for-k loop, update empty stalls to the left of idx: start with leftIdx = idx - 1 and while leftIdx > 0, break if stall_occupied[leftIdx] is True; otherwise set Rs[leftIdx] = idx - leftIdx - 1, update Min_s[leftIdx] = min(Rs[leftIdx], Ls[leftIdx]) and Max_s[leftIdx] = max(Rs[leftIdx], Ls[leftIdx]), then decrement leftIdx. RESULT Ls,Rs,Min_s,Max_s]
+            [COMMAND Within the same for-k loop, update empty stalls to the right of idx: start with rightIdx = idx + 1 and while rightIdx < N + 2, break if stall_occupied[rightIdx] is True; otherwise set Ls[rightIdx] = rightIdx - idx - 1, update Min_s[rightIdx] = min(Rs[rightIdx], Ls[rightIdx]) and Max_s[rightIdx] = max(Rs[rightIdx], Ls[rightIdx]), then increment rightIdx. RESULT Ls,Rs,Min_s,Max_s]
+            [COMMAND After completing all K people in test case i, print "Case #{}: {} {}".format(i, y, z) and flush standard output. RESULT printed_output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When more than one stall index has Min_s equal to maximal, select the stall using Max_s as the secondary tie-breaker, preserving the code's leftmost preference if a further tie occurs.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a numpy array from Min_s and obtain idxs as all indices where Min_s == maximal, in ascending index order. RESULT idxs]
+            [COMMAND Build max_of_idxs by appending Max_s[j] for each j in idxs. RESULT max_of_idxs]
+            [COMMAND Compute max_max = max(max_of_idxs). RESULT max_max]
+            [COMMAND If max_of_idxs.count(max_max) > 1, create a numpy array from max_of_idxs, find idxs1 where max_of_idxs == max_max, and set idx = idxs[idxs1[0]]; otherwise set idx = idxs[max_of_idxs.index(max_max)]. RESULT idx]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

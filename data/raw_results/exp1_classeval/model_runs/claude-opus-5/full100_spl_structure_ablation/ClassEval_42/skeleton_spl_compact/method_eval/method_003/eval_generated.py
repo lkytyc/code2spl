@@ -1,0 +1,81 @@
+class Hotel:
+    """
+    This is a class as hotel management system, managing the booking, check-in, check-out, and availability of rooms in a hotel with different room types.
+    """
+
+    def __init__(self, name, rooms):
+        self.name = name
+        self.available_rooms = rooms
+        self.booked_rooms = {}
+
+    def book_room(self, room_type, room_number, name):
+        if room_type not in self.available_rooms:
+            return False
+
+        if room_number <= self.available_rooms[room_type]:
+            if room_type not in self.booked_rooms:
+                self.booked_rooms[room_type] = {}
+            self.booked_rooms[room_type][name] = room_number
+            self.available_rooms[room_type] -= room_number
+            return 'Success!'
+        elif self.available_rooms[room_type] != 0:
+            return self.available_rooms[room_type]
+        else:
+            return False
+
+    def check_in(self, room_type, room_number, name):
+        if room_type not in self.booked_rooms:
+            return False
+
+        if name not in self.booked_rooms[room_type]:
+            return None
+
+        if room_number > self.booked_rooms[room_type][name]:
+            return False
+        elif room_number == self.booked_rooms[room_type][name]:
+            self.booked_rooms[room_type].pop(name)
+        else:
+            self.booked_rooms[room_type][name] -= room_number
+
+    def check_out(self, room_type, room_number):
+        if room_type in self.available_rooms:
+            self.available_rooms[room_type] += room_number
+        else:
+            self.available_rooms[room_type] = room_number
+
+    def get_available_rooms(self, room_type):
+        return self.available_rooms[room_type]
+
+import unittest
+
+class HotelTestAvailableRooms(unittest.TestCase):
+    def setUp(self):
+        self.hotel = Hotel('Test Hotel', {'single': 3, 'double': 2, 'triple': 2})
+
+    def test_get_available_rooms(self):
+        result = self.hotel.get_available_rooms('single')
+        self.assertEqual(result, 3)
+
+    def test_get_available_rooms_2(self):
+        self.hotel.book_room('single', 2, 'guest 1')
+        result = self.hotel.get_available_rooms('single')
+        self.assertEqual(result, 1)
+
+    def test_get_available_rooms_3(self):
+        self.hotel.book_room('single', 3, 'guest 1')
+        result = self.hotel.get_available_rooms('single')
+        self.assertEqual(result, 0)
+
+    def test_get_available_rooms_4(self):
+        self.hotel.book_room('single', 3, 'guest 1')
+        result = self.hotel.get_available_rooms('double')
+        self.assertEqual(result, 2)
+
+    def test_get_available_rooms_5(self):
+        self.hotel.book_room('single', 3, 'guest 1')
+        result = self.hotel.get_available_rooms('triple')
+        self.assertEqual(result, 2)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,127 @@
+class Interpolation:
+    """
+    This is a class that implements the Linear interpolation operation of one-dimensional and two-dimensional data
+    """
+
+    def __init__(self):
+        pass
+
+    @staticmethod
+    def interpolate_1d(x, y, x_interp):
+        """
+        Linear interpolation of one-dimensional data
+        :param x: The x-coordinate of the data point, list.
+        :param y: The y-coordinate of the data point, list.
+        :param x_interp: The x-coordinate of the interpolation point, list.
+        :return: The y-coordinate of the interpolation point, list.
+        >>> interpolation = Interpolation()
+        >>> interpolation.interpolate_1d([1, 2, 3], [1, 2, 3], [1.5, 2.5])
+        [1.5, 2.5]
+
+        """
+        result = []
+        for xi in x_interp:
+            if xi <= x[0]:
+                result.append(y[0])
+            elif xi >= x[-1]:
+                result.append(y[-1])
+            else:
+                for i in range(len(x) - 1):
+                    if x[i] <= xi <= x[i + 1]:
+                        t = (xi - x[i]) / (x[i + 1] - x[i])
+                        yi = y[i] + t * (y[i + 1] - y[i])
+                        result.append(yi)
+                        break
+        return result
+
+    @staticmethod
+    def interpolate_2d(x, y, z, x_interp, y_interp):
+        """
+        Linear interpolation of two-dimensional data
+        :param x: The x-coordinate of the data point, list.
+        :param y: The y-coordinate of the data point, list.
+        :param z: The z-coordinate of the data point, list.
+        :param x_interp: The x-coordinate of the interpolation point, list.
+        :param y_interp: The y-coordinate of the interpolation point, list.
+        :return: The z-coordinate of the interpolation point, list.
+        >>> interpolation = Interpolation()
+        >>> interpolation.interpolate_2d([1, 2, 3], [1, 2, 3], [[1, 2, 3], [4, 5, 6], [7, 8, 9]], [1.5, 2.5], [1.5, 2.5])
+        [3.0, 7.0]
+
+        """
+        result = []
+        for xi, yi in zip(x_interp, y_interp):
+            # Find surrounding indices for x
+            if xi <= x[0]:
+                x0_idx, x1_idx = 0, 0
+                tx = 0.0
+            elif xi >= x[-1]:
+                x0_idx, x1_idx = len(x) - 1, len(x) - 1
+                tx = 0.0
+            else:
+                for i in range(len(x) - 1):
+                    if x[i] <= xi <= x[i + 1]:
+                        x0_idx, x1_idx = i, i + 1
+                        tx = (xi - x[i]) / (x[i + 1] - x[i])
+                        break
+
+            # Find surrounding indices for y
+            if yi <= y[0]:
+                y0_idx, y1_idx = 0, 0
+                ty = 0.0
+            elif yi >= y[-1]:
+                y0_idx, y1_idx = len(y) - 1, len(y) - 1
+                ty = 0.0
+            else:
+                for j in range(len(y) - 1):
+                    if y[j] <= yi <= y[j + 1]:
+                        y0_idx, y1_idx = j, j + 1
+                        ty = (yi - y[j]) / (y[j + 1] - y[j])
+                        break
+
+            # Bilinear interpolation
+            z00 = z[y0_idx][x0_idx]
+            z01 = z[y0_idx][x1_idx]
+            z10 = z[y1_idx][x0_idx]
+            z11 = z[y1_idx][x1_idx]
+
+            z0 = z00 + tx * (z01 - z00)
+            z1 = z10 + tx * (z11 - z10)
+            zi = z0 + ty * (z1 - z0)
+            result.append(zi)
+        return result
+
+import unittest
+
+class InterpolationTestInterpolate1d(unittest.TestCase):
+    def test_interpolate_1d(self):
+        interpolation = Interpolation()
+        self.assertEqual(interpolation.interpolate_1d([1, 2, 3], [1, 2, 3], [1.5, 2.5]), [1.5, 2.5])
+
+    def test_interpolate_1d_2(self):
+        interpolation = Interpolation()
+        self.assertEqual(interpolation.interpolate_1d([1, 6, 4], [1, 2, 5], [1.5, 2.5]), [1.1, 1.3])
+
+    def test_interpolate_1d_3(self):
+        interpolation = Interpolation()
+        self.assertEqual(interpolation.interpolate_1d([1, 6, 4], [1, 7, 5], [1.5, 2.5]), [1.6, 2.8])
+
+    def test_interpolate_1d_4(self):
+        interpolation = Interpolation()
+        self.assertEqual(interpolation.interpolate_1d([1, 6, 4], [1, 2, 5], [2, 3]), [1.2, 1.4])
+
+    def test_interpolate_1d_5(self):
+        interpolation = Interpolation()
+        self.assertEqual(interpolation.interpolate_1d([1, 6, 4], [1, 7, 5], [2, 3]), [2.2, 3.4])
+
+    def test_interpolate_1d_6(self):
+        interpolation = Interpolation()
+        self.assertEqual(interpolation.interpolate_1d([1, 6, 4], [1, 7, 5], []), [])
+
+    def test_interpolate_1d_7(self):
+        interpolation = Interpolation()
+        self.assertEqual(interpolation.interpolate_1d([], [], [[], []]), [])
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,275 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   def vestigial(pinax):
+2   	size = len(pinax[0])
+3   	result = []
+4   	row_digits = []
+5   	column_digits = []
+6   	for i in range(0, size):
+7   		column_digits.append([])
+8   	same_row_counter = 0 
+9   	same_column_counter = [0]*size
+10  	trail = 0
+11  	for row in range(0, size):
+12  		del row_digits[:]
+13  		for column in range(0, size):
+14  			if(row==column):
+15  				trail += pinax[row][row]
+16  			if(len(row_digits)==column):
+17  				for i in range(0, len(row_digits)+1):
+18  					if (i ==(len(row_digits))): 
+19  						row_digits.append(pinax[row][column])
+20  						break
+21  					elif (row_digits[i] == pinax[row][column]):
+22  						same_row_counter +=1
+23  						break
+24  			for i in range(0, len(column_digits[column])+1):
+25  				if(i== len(column_digits[column])):
+26  					column_digits[column].append(pinax[row][column])
+27  					break
+28  				elif(column_digits[column][i] == pinax[row][column]):
+29  					same_column_counter[column] =1
+30  					break
+31  	sumC = 0
+32  	for i in range(0, size):
+33  		sumC += same_column_counter[i]
+34  	result.append(trail)	
+35  	result.append(same_row_counter)
+36  	result.append(sumC)
+37  	return result
+38  def main():
+39  	testCases = int(raw_input())
+40  	for i in range(0, testCases):
+41  		size = int(raw_input())
+42  		pinax = [[]]*size
+43  		for j in range(0, size):
+44  			pinax[j] = list(map(int, raw_input().split()))
+45  		result = vestigial(pinax)
+46  		print("Case #" + str(i) + ": " + str(result[0]) + " " + str(result[1]) + " " + str(result[2]) )
+47  main()
+```
+
+
+**Question**: Which variable instances have data dependence over `(i,24)` in function `vestigial`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function vestigial: Computes and returns a list of three integers: the sum of the diagonal entries, the number of rows containing at least one duplicate, and the number of columns containing at least one duplicate, for a square matrix-like input pinax.
+It takes pinax (list of lists (matrix-like)) — The input matrix-like structure; its square size is derived from len(pinax[0]).
+It returns result (list of three integers) — Returns [trail, same_row_counter, sumC], where trail is the diagonal sum, same_row_counter is the count of rows with at least one duplicate, and sumC is the count of columns with at least one duplicate.
+The behaviour proceeds in this order:
+1. Determine size as len(pinax[0]) and initialize result, row_digits, and column_digits as empty lists. This produces initial_state.
+2. For i from 0 through size-1, append a new empty list to column_digits so that column_digits has one distinct-value list per column. This produces column_digits.
+3. Set same_row_counter to 0, same_column_counter to a list of size zeros, and trail to 0. This produces counters.
+4. For each row from 0 through size-1: clear row_digits by deleting all its elements at the start of the row. For each column from 0 through size-1 in that row: if row equals column, add pinax[row][row] to trail; if len(row_digits) equals column, scan i from 0 through len(row_digits); when i equals len(row_digits), append pinax[row][column] to row_digits and break, and when row_digits[i] equals pinax[row][column], increment same_row_counter and break; then scan i from 0 through len(column_digits[column]); when i equals len(column_digits[column]), append pinax[row][column] to column_digits[column] and break, and when column_digits[column][i] equals pinax[row][column], set same_column_counter[column] to 1 and break. Because a found row duplicate prevents an append, the row-duplicate check is skipped for all later columns in that row. This produces processed_state.
+5. Set sumC to 0, then for each i from 0 through size-1 add same_column_counter[i] to sumC. This produces sumC.
+6. Append trail, same_row_counter, and sumC to result in that order, then return result. This produces result.

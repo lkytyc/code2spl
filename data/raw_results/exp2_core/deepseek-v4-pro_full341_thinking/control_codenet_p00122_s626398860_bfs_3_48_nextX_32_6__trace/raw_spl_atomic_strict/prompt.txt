@@ -1,0 +1,413 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.*;
+2   public class Main {
+3   	public static boolean bfs (int sx,int sy, int[] spx, int[] spy) {
+4   		int size = 10, spCnt = 0;
+5   		int[] dx = {-1,0,1,-1,0,1,-2,-2,-2,2,2,2};
+6   		int[] dy = {-2,-2,-2,2,2,2,-1,0,1,-1,0,1};
+7   		int[] dx2 = {0,0,1,1,1,0,-1,-1,-1};
+8   		int[] dy2 = {0,-1,-1,0,1,1,1,0,-1,-1};
+9   		boolean[][] park = new boolean[size][size];
+10  		Queue<Integer> queueX = new LinkedList<Integer>();
+11  		Queue<Integer> queueY = new LinkedList<Integer>();
+12  		queueX.add(sx);
+13  		queueY.add(sy);
+14  		while (!queueX.isEmpty()) {
+15  			if (spCnt == spx.length) {
+16  				return true;
+17  			}
+18  			for (int i = 0; i < dx2.length; i++) {
+19  				int y = spy[spCnt] + dy2[i];
+20  				int x = spx[spCnt] + dx2[i];
+21  				if (0 <= y && y < size &&
+22  					0 <= x && x < size) {
+23  					park[y][x] = true;
+24  				}
+25  			}
+26  			Queue<Integer> nx = new LinkedList<Integer>();
+27  			Queue<Integer> ny = new LinkedList<Integer>();
+28  			while (!queueX.isEmpty()) {
+29  				int x = queueX.poll();
+30  				int y = queueY.poll();
+31  				for (int i = 0; i < dx.length; i++) {
+32  					int nextX = x + dx[i];
+33  					int nextY = y + dy[i];
+34  					if (0 <= nextX && nextX < 10 &&
+35  						0 <= nextY && nextY < 10 &&
+36  						park[nextY][nextX]) {
+37  						nx.add(nextX);
+38  						ny.add(nextY);
+39  					}
+40  				}
+41  			}
+42  			spCnt++;
+43  			park = new boolean[size][size];
+44  			queueX = nx;
+45  			queueY = ny;
+46  		}
+47  		return false;
+48  	}
+49  	public static void main(String[] args) {
+50  		Scanner sc = new Scanner(System.in);
+51  		while (true) {
+52  			int sx = sc.nextInt();
+53  			int sy = sc.nextInt();
+54  			if (sx == 0 && sy == 0) break;
+55  			sc.nextLine();
+56  			int n = sc.nextInt();
+57  			int[] spx = new int[n];
+58  			int[] spy = new int[n];
+59  			sc.nextLine();
+60  			for (int i = 0; i < n; i++) {
+61  				spx[i] = sc.nextInt();
+62  				spy[i] = sc.nextInt();
+63  			}
+64  			sc.nextLine();
+65  			System.out.println(bfs(sx,sy,spx,spy) ? "OK" : "NA");
+66  		}
+67  	}
+68  }
+```
+
+
+**Question**: Does line `21` have control dependence over line `32` in function `bfs`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: bfs
+Target source anchor: variable=<none>, line=21
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: bfs
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Inside the outer while loop, for each index i from 0 through 8 inclusive (because dx2.length is 9), compute y = spy[spCnt] + dy2[i] and x = spx[spCnt] + dx2[i]; if 0 <= y < size and 0 <= x < size, set park[y][x] to true. This loop is bounded by dx2.length, so dy2[9] is unused. RESULT park]
+- [COMMAND Inside the outer while loop, start an inner while loop that drains the old queueX; while queueX is not empty, poll the head x from queueX and the head y from queueY. RESULT x, y]
+- [COMMAND Initialize size to 10 and spCnt to 0; define dx = {-1,0,1,-1,0,1,-2,-2,-2,2,2,2} and dy = {-2,-2,-2,2,2,2,-1,0,1,-1,0,1} with length 12; define dx2 = {0,0,1,1,1,0,-1,-1,-1} with length 9 and dy2 = {0,-1,-1,0,1,1,1,0,-1,-1} with length 10; create a 10x10 boolean park grid filled with false; create FIFO queues queueX and queueY; enqueue sx into queueX and sy into queueY. RESULT initial_state]
+- [COMMAND Within the inner while loop over the old queue, for each polled (x, y), iterate i from 0 through 11 inclusive over the 12 dx/dy offsets; compute nextX = x + dx[i] and nextY = y + dy[i]; if 0 <= nextX < 10 and 0 <= nextY < 10 (using literal 10, not size) and park[nextY][nextX] is true, add nextX to nx and nextY to ny. Due to short-circuit evaluation, park is indexed only after both bounds checks pass. RESULT nextX, nextY, nx, ny]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 14: while (!queueX.isEmpty()) {
+- line 15: if (spCnt == spx.length) {
+- line 16: return true;
+- line 18: for (int i = 0; i < dx2.length; i++) {
+- line 21: if (0 <= y && y < size &&
+- line 28: while (!queueX.isEmpty()) {
+- line 31: for (int i = 0; i < dx.length; i++) {
+- line 34: if (0 <= nextX && nextX < 10 &&
+- line 47: return false;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 14, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["isEmpty", "queueX", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 15, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "length", "spCnt", "spx"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["return", "true"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["dx2", "for", "i", "int", "length"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["y", "size"], "roles": ["use", "control"], "source_identifiers": ["if", "size", "y"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["isEmpty", "queueX", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["dx", "for", "i", "int", "length"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "nextX"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["false", "return"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `bfs`
+- source lines: 3-48
+- source signature: `public static boolean bfs (int sx,int sy, int[] spx, int[] spy) {`
+- source content hash: `43919aba49c0bb2df706c33899d6fd8b48154c61639ca30dbeb91fb28397e348`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+   3   public static boolean bfs (int sx,int sy, int[] spx, int[] spy) {
+   4    int size = 10, spCnt = 0;
+   5    int[] dx = {-1,0,1,-1,0,1,-2,-2,-2,2,2,2};
+   6    int[] dy = {-2,-2,-2,2,2,2,-1,0,1,-1,0,1};
+   7    int[] dx2 = {0,0,1,1,1,0,-1,-1,-1};
+   8    int[] dy2 = {0,-1,-1,0,1,1,1,0,-1,-1};
+   9    boolean[][] park = new boolean[size][size];
+  10    Queue<Integer> queueX = new LinkedList<Integer>();
+  11    Queue<Integer> queueY = new LinkedList<Integer>();
+  12    queueX.add(sx);
+  13    queueY.add(sy);
+  14    while (!queueX.isEmpty()) {
+  15     if (spCnt == spx.length) {
+  16      return true;
+  17     }
+  18     for (int i = 0; i < dx2.length; i++) {
+  19      int y = spy[spCnt] + dy2[i];
+  20      int x = spx[spCnt] + dx2[i];
+  21      if (0 <= y && y < size &&
+  22       0 <= x && x < size) {
+  23       park[y][x] = true;
+  24      }
+  25     }
+  26     Queue<Integer> nx = new LinkedList<Integer>();
+  27     Queue<Integer> ny = new LinkedList<Integer>();
+  28     while (!queueX.isEmpty()) {
+  29      int x = queueX.poll();
+  30      int y = queueY.poll();
+  31      for (int i = 0; i < dx.length; i++) {
+  32       int nextX = x + dx[i];
+  33       int nextY = y + dy[i];
+  34       if (0 <= nextX && nextX < 10 &&
+  35        0 <= nextY && nextY < 10 &&
+  36        park[nextY][nextX]) {
+  37        nx.add(nextX);
+  38        ny.add(nextY);
+  39       }
+  40      }
+  41     }
+  42     spCnt++;
+  43     park = new boolean[size][size];
+  44     queueX = nx;
+  45     queueY = ny;
+  46    }
+  47    return false;
+  48   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Performs a staged BFS on a fixed 10x10 grid, checking whether a non-empty frontier can reach the 3x3 neighborhood of each successive waypoint and returning true once all waypoints are consumed." bfs]
+    [INPUTS]
+        <REF> sx </REF>: int "Starting x-coordinate enqueued in the initial BFS queue."
+        <REF> sy </REF>: int "Starting y-coordinate enqueued in the initial BFS queue."
+        <REF> spx </REF>: int[] "Array of x-coordinates for the waypoints to be consumed in order."
+        <REF> spy </REF>: int[] "Array of y-coordinates for the waypoints to be consumed in order; paired with spx."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "Returns true if all waypoints are consumed while the queue is still non-empty; returns false if the queue becomes empty first."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize size to 10 and spCnt to 0; define dx = {-1,0,1,-1,0,1,-2,-2,-2,2,2,2} and dy = {-2,-2,-2,2,2,2,-1,0,1,-1,0,1} with length 12; define dx2 = {0,0,1,1,1,0,-1,-1,-1} with length 9 and dy2 = {0,-1,-1,0,1,1,1,0,-1,-1} with length 10; create a 10x10 boolean park grid filled with false; create FIFO queues queueX and queueY; enqueue sx into queueX and sy into queueY. RESULT initial_state]
+            [COMMAND Begin the outer while loop, repeatedly continuing as long as queueX is not empty. RESULT queueX]
+            [COMMAND Inside the outer while loop, before marking the current waypoint, evaluate whether spCnt equals spx.length; the result selects the success alternative. RESULT success_condition]
+            [COMMAND Inside the outer while loop, for each index i from 0 through 8 inclusive (because dx2.length is 9), compute y = spy[spCnt] + dy2[i] and x = spx[spCnt] + dx2[i]; if 0 <= y < size and 0 <= x < size, set park[y][x] to true. This loop is bounded by dx2.length, so dy2[9] is unused. RESULT park]
+            [COMMAND Inside the outer while loop, create new empty queues nx and ny to hold the next frontier. RESULT nx, ny]
+            [COMMAND Inside the outer while loop, start an inner while loop that drains the old queueX; while queueX is not empty, poll the head x from queueX and the head y from queueY. RESULT x, y]
+            [COMMAND Within the inner while loop over the old queue, for each polled (x, y), iterate i from 0 through 11 inclusive over the 12 dx/dy offsets; compute nextX = x + dx[i] and nextY = y + dy[i]; if 0 <= nextX < 10 and 0 <= nextY < 10 (using literal 10, not size) and park[nextY][nextX] is true, add nextX to nx and nextY to ny. Due to short-circuit evaluation, park is indexed only after both bounds checks pass. RESULT nextX, nextY, nx, ny]
+            [COMMAND After the inner while loop has drained the old queue, increment spCnt by 1. RESULT spCnt]
+            [COMMAND After incrementing spCnt, reset park to a new size by size boolean grid filled with false. RESULT park]
+            [COMMAND After resetting park, assign queueX = nx and queueY = ny, then continue with the next iteration of the outer while loop by rechecking whether queueX is empty. RESULT queueX, queueY]
+            [COMMAND When the outer while loop exits because queueX is empty, return false. RESULT false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: At the top of an outer while iteration, queueX is not empty and spCnt equals spx.length.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return true immediately because all waypoints have been consumed while the frontier is still non-empty. RESULT true]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

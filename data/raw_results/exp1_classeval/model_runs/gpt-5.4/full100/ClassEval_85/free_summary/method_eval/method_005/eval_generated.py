@@ -1,0 +1,83 @@
+class Thermostat:
+    def __init__(self, current_temperature, target_temperature, mode):
+        self.current_temperature = current_temperature
+        self.target_temperature = target_temperature
+        self.mode = mode
+
+    def get_target_temperature(self):
+        return self.target_temperature
+
+    def set_target_temperature(self, target_temperature):
+        self.target_temperature = target_temperature
+
+    def get_mode(self):
+        return self.mode
+
+    def set_mode(self, mode):
+        if mode not in ("heat", "cool"):
+            return False
+        self.mode = mode
+        return True
+
+    def choose_mode_automatically(self):
+        if self.current_temperature < self.target_temperature:
+            self.mode = "heat"
+        else:
+            self.mode = "cool"
+
+    def check_conflict(self):
+        if self.current_temperature > self.target_temperature:
+            if self.mode == "cool":
+                return True
+            self.mode = "cool"
+            return False
+        else:
+            if self.mode == "heat":
+                return True
+            self.mode = "heat"
+            return False
+
+    def simulate_operation(self):
+        self.choose_mode_automatically()
+        steps = 0
+
+        if self.mode == "heat":
+            while self.current_temperature < self.target_temperature:
+                self.current_temperature += 1
+                steps += 1
+        else:
+            while self.current_temperature > self.target_temperature:
+                self.current_temperature -= 1
+                steps += 1
+
+        return steps
+
+import unittest
+
+class ThermostatTestAutoCheckConflict(unittest.TestCase):
+    def test_auto_check_conflict_1(self):
+        t = Thermostat(30, 25, 'cool')
+        self.assertTrue(t.auto_check_conflict())
+
+    def test_auto_check_conflict_2(self):
+        t = Thermostat(30, 25, 'heat')
+        self.assertFalse(t.auto_check_conflict())
+        self.assertEqual(t.mode, 'cool')
+
+    def test_auto_check_conflict_3(self):
+        t = Thermostat(25, 30, 'heat')
+        self.assertTrue(t.auto_check_conflict())
+
+    def test_auto_check_conflict_4(self):
+        t = Thermostat(25, 30, 'cool')
+        self.assertFalse(t.auto_check_conflict())
+        self.assertEqual(t.mode, 'heat')
+
+    def test_auto_check_conflict_5(self):
+        t = Thermostat(25, 25, 'cool')
+        self.assertFalse(t.auto_check_conflict())
+        self.assertEqual(t.mode, 'cool')
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

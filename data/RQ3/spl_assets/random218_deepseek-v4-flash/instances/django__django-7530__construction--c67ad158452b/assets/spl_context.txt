@@ -1,0 +1,144 @@
+# FILE: django/core/management/commands/makemigrations.py
+# CLASS Command
+
+[DEFINE_WORKER: "Registers command-line options on an argparse parser for Django's makemigrations command, defining positional app-label arguments and boolean/string flags for migration creation options." add_arguments]
+    [INPUTS]
+        <REF> self </REF>: object "The command instance; unused by the argument-registration logic."
+        <REF> parser </REF>: ArgumentParser "The argparse parser on which the command-line options are registered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Register the positional argument 'args' with metavar 'app_label', nargs='*', and help 'Specify the app label(s) to create migrations for.', collecting supplied app-label strings into dest 'args' as a list; with no app labels, argparse defaults it to an empty list. RESULT args]
+            [COMMAND Register the flag '--dry-run' with action store_true, dest 'dry_run', default False, and help 'Just show what migrations would be made; don't actually write them.', so dry_run becomes True only when the flag is present. RESULT dry_run]
+            [COMMAND Register the flag '--merge' with action store_true, dest 'merge', default False, and help 'Enable fixing of migration conflicts.', so merge becomes True only when the flag is present. RESULT merge]
+            [COMMAND Register the flag '--empty' with action store_true, dest 'empty', default False, and help 'Create an empty migration.', so empty becomes True only when the flag is present. RESULT empty]
+            [COMMAND Register the flags '--noinput' and '--no-input' with action store_false, dest 'interactive', default True, and help 'Tells Django to NOT prompt the user for input of any kind.', so interactive becomes False when either flag is present and remains True otherwise. RESULT interactive]
+            [COMMAND Register the flags '-n' and '--name' with action store, dest 'name', default None, and help 'Use this name for migration file(s).', so name is set to the provided string value when the option is present. RESULT name]
+            [COMMAND Register the deprecated flags '-e' and '--exit' with action store_true, dest 'exit_code', default False, and help 'Exit with error code 1 if no changes needing migrations are found. Deprecated, use the --check option instead.', so exit_code becomes True when either flag is present. RESULT exit_code]
+            [COMMAND Register the flag '--check' with action store_true, dest 'check_changes', implicit default False, and help 'Exit with a non-zero status if model changes are missing migrations.', so check_changes becomes True only when the flag is present. RESULT check_changes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates requested app labels, checks migration consistency and conflicts, and either merges, creates empty migrations, or writes generated migration files for detected model changes." handle]
+    [INPUTS]
+        <REF> app_labels </REF>: tuple "Positional app label arguments supplied to the command."
+        <REF> options </REF>: dict "Command options including verbosity, interactive, dry_run, merge, empty, name, exit_code, and check_changes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: None or object "Normally None; may be the result of self.handle_merge when merging with conflicts."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read options['verbosity'], options['interactive'], options['dry_run'], options['merge'], options['empty'], options['name'], options['exit_code'], and options['check_changes'] into the corresponding self attributes and local check_changes variable. RESULT self]
+            [COMMAND If self.exit_code is truthy, call warnings.warn('The --exit option is deprecated in favor of the --check option.', RemovedInDjango20Warning). RESULT self]
+            [COMMAND Reassign app_labels to set(app_labels) and initialize bad_app_labels as an empty set. RESULT app_labels]
+            [COMMAND For each app_label in app_labels, try apps.get_app_config(app_label); on LookupError add app_label to bad_app_labels. RESULT bad_app_labels]
+            [COMMAND If bad_app_labels is non-empty, write "App '<app_label>' could not be found. Is it in INSTALLED_APPS?" to self.stderr for each bad label, then call sys.exit(2). RESULT exit_status_2]
+            [COMMAND Create loader = MigrationLoader(None, ignore_no_migrations=True). RESULT loader]
+            [COMMAND Build consistency_check_labels as a set of config.label from apps.get_app_configs(); set aliases_to_check to connections if settings.DATABASE_ROUTERS is truthy, otherwise [DEFAULT_DB_ALIAS]. RESULT aliases_to_check]
+            [COMMAND For each alias in sorted(aliases_to_check), get connection = connections[alias]; if connection.settings_dict['ENGINE'] != 'django.db.backends.dummy' and any router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name) for app_label in consistency_check_labels and model in apps.get_models(app_label), call loader.check_consistent_history(connection). RESULT loader]
+            [COMMAND Detect conflicts by assigning conflicts = loader.detect_conflicts(). RESULT conflicts]
+            [COMMAND If app_labels is truthy, rebuild conflicts as a dictionary containing only entries with app_label in app_labels. RESULT conflicts]
+            [COMMAND If conflicts is truthy and self.merge is false, build name_str from conflicts and raise CommandError with the message about multiple leaf nodes and --merge. RESULT raised_error]
+            [COMMAND If self.merge is truthy and conflicts is falsy, write 'No conflicts detected to merge.' to self.stdout and return. RESULT None]
+            [COMMAND If self.merge is truthy and conflicts is truthy, return self.handle_merge(loader, conflicts). RESULT handle_merge_result]
+            [COMMAND If self.interactive is truthy, create InteractiveMigrationQuestioner(specified_apps=app_labels, dry_run=self.dry_run); otherwise create NonInteractiveMigrationQuestioner(specified_apps=app_labels, dry_run=self.dry_run). RESULT questioner]
+            [COMMAND Create autodetector = MigrationAutodetector(loader.project_state(), ProjectState.from_apps(apps), questioner). RESULT autodetector]
+            [COMMAND If self.empty is truthy and app_labels is falsy, raise CommandError('You must supply at least one app label when using --empty.'). RESULT raised_error]
+            [COMMAND If self.empty is truthy and app_labels is truthy, create changes = {app: [Migration('custom', app)] for app in app_labels}, assign changes = autodetector.arrange_for_graph(changes=changes, graph=loader.graph, migration_name=self.migration_name), write migration files, and return. RESULT changes]
+            [COMMAND Detect changes by assigning changes = autodetector.changes(graph=loader.graph, trim_to_apps=app_labels or None, convert_apps=app_labels or None, migration_name=self.migration_name). RESULT changes]
+            [COMMAND If changes is falsy, write the appropriate 'No changes detected' message to self.stdout when verbosity >= 1, using app_labels.pop() for exactly one label; then if self.exit_code is truthy call sys.exit(1). RESULT None]
+            [COMMAND If changes is truthy, call self.write_migration_files(changes); then if check_changes is truthy call sys.exit(1). RESULT changes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: merge mode is enabled and no conflicts are detected]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Write 'No conflicts detected to merge.' to stdout. RESULT None]
+            [COMMAND Return from the method. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: merge mode is enabled and conflicts are detected]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of self.handle_merge(loader, conflicts). RESULT handle_merge_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: empty migration mode is enabled and at least one app label is provided]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a fake changes dictionary mapping each app in app_labels to [Migration('custom', app)]. RESULT changes]
+            [COMMAND Arrange the custom migrations in the graph using autodetector.arrange_for_graph with migration_name=self.migration_name. RESULT changes]
+            [COMMAND Write the migration files for the arranged changes. RESULT None]
+            [COMMAND Return from the method. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: changes is empty after autodetection]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If verbosity is at least 1, write a 'No changes detected' message tailored to the number of app labels. RESULT None]
+            [COMMAND If self.exit_code is truthy, call sys.exit(1). RESULT exit_status_1]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: changes is non-empty after autodetection]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Write the migration files for the detected changes. RESULT None]
+            [COMMAND If check_changes is truthy, call sys.exit(1). RESULT exit_status_1]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: conflicts are present and merge mode is not enabled]
+        [LOG "Conflicting migrations detected; multiple leaf nodes in the migration graph: (name_str). To fix them run 'python manage.py makemigrations --merge'"]
+        [THROW CommandError "Raises CommandError to abort the command and instruct the user to run --merge."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: empty migration mode is enabled but no app labels were supplied]
+        [LOG "You must supply at least one app label when using --empty."]
+        [THROW CommandError "Raises CommandError because --empty requires at least one app label."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Writes migration files for each app and migration in the changes dictionary, creating migration directories and __init__.py files when needed, while optionally printing migration descriptions or full migration content based on verbosity and dry_run settings." write_migration_files]
+    [INPUTS]
+        <REF> self </REF>: object "Caller instance providing verbosity, dry_run, stdout, and style attributes."
+        <REF> changes </REF>: dict "Dictionary mapping app labels to lists of migration objects to be written."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize directory_created as an empty dictionary to track app labels whose migration directories have already been initialized. RESULT directory_created]
+            [COMMAND For each app_label and app_migrations pair in changes.items(), process the app and its migrations. RESULT app_label, app_migrations]
+            [COMMAND If self.verbosity >= 1, write a heading to stdout using self.style.MIGRATE_HEADING with the text 'Migrations for '<app_label>':' followed by a newline. RESULT result]
+            [COMMAND For each migration in app_migrations, create a MigrationWriter instance for it. RESULT writer]
+            [COMMAND If self.verbosity >= 1, attempt to compute migration_string as os.path.relpath(writer.path); on ValueError, fall back to setting migration_string to writer.path. RESULT migration_string]
+            [COMMAND If self.verbosity >= 1 and migration_string starts with '..', set migration_string to writer.path. RESULT migration_string]
+            [COMMAND If self.verbosity >= 1, write '  <migration_string>:\n' to stdout using self.style.MIGRATE_LABEL for the migration display string. RESULT result]
+            [COMMAND If self.verbosity >= 1, for each operation in migration.operations, write '    - <operation.describe()>\n' to stdout. RESULT result]
+            [COMMAND If not self.dry_run, compute migrations_directory as os.path.dirname(writer.path). RESULT migrations_directory]
+            [COMMAND If not self.dry_run and there is no truthy directory_created entry for app_label, perform one-time directory initialization for the current app: create migrations_directory if os.path.isdir(migrations_directory) is false, set init_path to os.path.join(migrations_directory, '__init__.py'), create the empty file at init_path if os.path.isfile(init_path) is false, and set directory_created[app_label] = True. RESULT directory_created]
+            [COMMAND If not self.dry_run, compute migration_string as writer.as_string(). RESULT migration_string]
+            [COMMAND If not self.dry_run, open writer.path with io.open in write mode with encoding='utf-8' and write migration_string to the file. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.dry_run is truthy, so the 'if not self.dry_run' branch is skipped, and self.verbosity is exactly 3.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For the current migration, write a heading to stdout using self.style.MIGRATE_HEADING with the text 'Full migrations file '<writer.filename>':' followed by a newline. RESULT result]
+            [COMMAND For the current migration, write writer.as_string() followed by a newline to stdout. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

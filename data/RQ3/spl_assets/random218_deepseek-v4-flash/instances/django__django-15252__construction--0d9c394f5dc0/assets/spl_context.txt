@@ -1,0 +1,354 @@
+# FILE: django/db/migrations/executor.py
+# CLASS MigrationExecutor
+
+[DEFINE_WORKER: "Initializes the migration execution context by storing the connection, creating the migration loader and recorder from that connection, and saving the optional progress callback." __init__]
+    [INPUTS]
+        <REF> connection </REF>: object "Database connection used for migration loading and recording."
+        <REF> progress_callback </REF>: callable or None "Optional callback for progress updates; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the provided connection reference in self.connection. RESULT self.connection]
+            [COMMAND Construct MigrationLoader using self.connection and assign the instance to self.loader. RESULT self.loader]
+            [COMMAND Construct MigrationRecorder using self.connection and assign the instance to self.recorder. RESULT self.recorder]
+            [COMMAND Assign the progress_callback parameter to self.progress_callback. RESULT self.progress_callback]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Given requested migration targets, constructs an ordered list of (Migration instance, backwards?) actions, handling full-app unmigration, same-app rollback of applied targets, forward application of unapplied targets, and graph reloads for replaced migrations." migration_plan]
+    [INPUTS]
+        <REF> targets </REF>: iterable of (app_label, migration_name_or_None) tuples "Target migration states to include in the plan; a target whose second element is None means unmigrate the entire app."
+        <REF> clean_start </REF>: bool "When True, start with an empty applied-migration record; otherwise initialize it from self.loader.applied_migrations."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> plan </REF>: list of (Migration, bool) tuples "Ordered list of migration actions, where True indicates a backward/unapply action and False indicates a forward/apply action."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create an empty list named plan. RESULT plan]
+            [COMMAND Initialize the applied migration record: if clean_start is truthy, set applied to an empty dictionary; otherwise set applied to a shallow copy of self.loader.applied_migrations. RESULT applied]
+            [COMMAND For each target in targets, select and execute the applicable alternative flow based on whether target[1] is None, whether target is in applied, and whether a replaced migration must be reloaded; these steps mutate plan and applied for each target. RESULT target]
+            [COMMAND Return plan. RESULT plan]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: clean_start is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set applied to an empty dictionary instead of copying the loader's applied migrations. RESULT applied]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over targets, target[1] is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each root in self.loader.graph.root_nodes() where root[0] equals target[0], iterate through self.loader.graph.backwards_plan(root). RESULT root]
+            [COMMAND For each migration in that backwards plan, if migration is in applied, append (self.loader.graph.nodes[migration], True) to plan and pop migration from applied. RESULT plan]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over targets, target is in applied and self.loader.replace_migrations is true and target is not in self.loader.graph.node_map]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.loader.replace_migrations to False. RESULT self.loader.replace_migrations]
+            [COMMAND Rebuild the migration graph by calling self.loader.build_graph(). RESULT self.loader.graph]
+            [COMMAND Return self.migration_plan(targets, clean_start=clean_start) to restart planning from scratch and discard any plan built so far. RESULT plan]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over targets, target is in applied and no graph reload is needed]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build next_in_app as the sorted list of nodes n from self.loader.graph.node_map[target].children where n[0] equals target[0]. RESULT next_in_app]
+            [COMMAND For each node in next_in_app, iterate through self.loader.graph.backwards_plan(node). RESULT node]
+            [COMMAND For each migration in that backwards plan, if migration is in applied, append (self.loader.graph.nodes[migration], True) to plan and pop migration from applied. RESULT plan]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over targets, target is not in applied]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each migration in self.loader.graph.forwards_plan(target), if migration is not in applied, append (self.loader.graph.nodes[migration], False) to plan and set applied[migration] to self.loader.graph.nodes[migration]. RESULT plan]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a ProjectState containing all unmigrated apps and, when with_applied_migrations is true, replays already-applied migrations onto that state to reflect their effects." _create_project_state]
+    [INPUTS]
+        <REF> with_applied_migrations </REF>: boolean "If truthy, creates a full migration plan from a clean start and applies the already-applied migrations to the new ProjectState."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> state </REF>: ProjectState "The constructed ProjectState with unmigrated apps as its real_apps, optionally including the state mutations from applied migrations."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a ProjectState instance with real_apps set to self.loader.unmigrated_apps and assign it to state. RESULT state]
+            [COMMAND If with_applied_migrations is truthy, execute the applied-migration replay steps from the alternative flow. RESULT state]
+            [COMMAND Return state. RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: with_applied_migrations is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute full_plan by calling self.migration_plan with self.loader.graph.leaf_nodes() and clean_start=True. RESULT full_plan]
+            [COMMAND Build applied_migrations as a set containing self.loader.graph.nodes[key] for every key in self.loader.applied_migrations where key is present in self.loader.graph.nodes. RESULT applied_migrations]
+            [COMMAND Within the for loop over each (migration, _) tuple in full_plan, if migration is in applied_migrations, call migration.mutate_state(state, preserve=False). RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Migrates the database to the given targets by ensuring the migration table exists, computing forward and backward migration plans, applying the appropriate migrations, and returning the updated project state." migrate]
+    [INPUTS]
+        <REF> targets </REF>: migration target or list of migration targets "Target migration nodes to migrate up to."
+        <REF> plan </REF>: list of (migration, backwards) tuples or None "Optional precomputed migration plan; if None, it is computed from targets."
+        <REF> state </REF>: ProjectState or None "Optional current project state; if None, it is created from applied migrations when needed."
+        <REF> fake </REF>: bool "If True, record migrations without applying their database operations."
+        <REF> fake_initial </REF>: bool "If True, skip initial migration operations when migrating forward."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> state </REF>: ProjectState "The resulting project state after the migration plan has been applied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ensure the django_migrations table is present by calling self.recorder.ensure_schema(). RESULT none]
+            [COMMAND If plan is None, compute plan by calling self.migration_plan(targets). RESULT plan]
+            [COMMAND Compute full_plan by calling self.migration_plan(self.loader.graph.leaf_nodes(), clean_start=True). RESULT full_plan]
+            [COMMAND Compute all_forwards as True only if every entry in plan has backwards=False. RESULT all_forwards]
+            [COMMAND Compute all_backwards as True only if every entry in plan has backwards=True. RESULT all_backwards]
+            [COMMAND Dispatch on the migration plan: if plan is empty, use the empty-plan alternative; elif all_forwards == all_backwards, raise InvalidMigrationPlan via the exception flow; elif all_forwards, use the all-forwards alternative; else use the all-backwards alternative. RESULT state]
+            [COMMAND Check for replacements by calling self.check_replacements(). RESULT none]
+            [COMMAND Return the resulting state. RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: plan is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the empty-plan branch, if state is None, create a project state that includes applied migrations by calling self._create_project_state(with_applied_migrations=True). RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: plan is non-empty, all_forwards == all_backwards is False, and all_forwards is True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the all-forwards branch, if state is None, create a project state that includes applied migrations by calling self._create_project_state(with_applied_migrations=True). RESULT state]
+            [COMMAND In the all-forwards branch, apply all forward migrations by calling self._migrate_all_forwards(state, plan, full_plan, fake=fake, fake_initial=fake_initial). RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: plan is non-empty, all_forwards == all_backwards is False, and all_forwards is False (therefore the plan is all-backwards)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the all-backwards branch, apply all backward migrations by calling self._migrate_all_backwards(plan, full_plan, fake=fake). RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: plan is non-empty and all_forwards == all_backwards]
+        [LOG "Migration plans with both forwards and backwards migrations are not supported. Please split your migration process into separate plans of only forwards OR backwards migrations."]
+        [THROW InvalidMigrationPlan "Raised when the migration plan contains both forwards and backwards migrations."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Applies all pending migrations from plan in the order they appear in full_plan, stopping early once no pending migrations remain, and renders state.apps before applying a pending migration if that attribute has not already been loaded." _migrate_all_forwards]
+    [INPUTS]
+        <REF> state </REF>: object "Current migration state; may be replaced by the result of applying migrations."
+        <REF> plan </REF>: Iterable[tuple] "Iterable of 2-tuples whose first element is a migration instance to run; used to build the set of pending migrations."
+        <REF> full_plan </REF>: Iterable[tuple] "Ordered iterable of 2-tuples of the form (migration instance, ignored second value) defining the sequence in which migrations may be applied."
+        <REF> fake </REF>: bool "Boolean flag forwarded to apply_migration for fake migration behavior."
+        <REF> fake_initial </REF>: bool "Boolean flag forwarded to apply_migration for fake initial migration behavior."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> state </REF>: object "Final state after all pending migrations are applied, or the original state if no migrations were pending."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build migrations_to_run as a set containing the first element of each item in plan, removing duplicates. RESULT migrations_to_run]
+            [COMMAND Begin iterating over full_plan in order, unpacking each entry as migration and an ignored second value. RESULT None]
+            [COMMAND At the top of each full_plan iteration, check whether migrations_to_run is empty. RESULT migrations_to_run_is_empty]
+            [COMMAND If migrations_to_run_is_empty is true, break out of the full_plan loop. RESULT None]
+            [COMMAND If migrations_to_run_is_empty is false, check whether the current migration is in migrations_to_run. RESULT migration_is_pending]
+            [COMMAND If migration_is_pending is false, continue to the next full_plan entry without applying a migration. RESULT None]
+            [COMMAND If migration_is_pending is true, check whether the string 'apps' is absent from state.__dict__. RESULT apps_missing]
+            [COMMAND If apps_missing is false, skip the render block and proceed directly to applying the current migration. RESULT None]
+            [COMMAND If apps_missing is true, evaluate whether self.progress_callback is truthy. RESULT callback_available]
+            [COMMAND If apps_missing is true and callback_available is true, call self.progress_callback('render_start'). RESULT None]
+            [COMMAND If apps_missing is true, access state.apps to trigger rendering and discard the returned value. RESULT None]
+            [COMMAND If apps_missing is true and callback_available is true, call self.progress_callback('render_success'). RESULT None]
+            [COMMAND If migration_is_pending is true, call self.apply_migration(state, migration, fake=fake, fake_initial=fake_initial) and assign the returned state to state. RESULT state]
+            [COMMAND If migration_is_pending is true, remove migration from migrations_to_run. RESULT migrations_to_run]
+            [COMMAND After the loop exits, return the final state. RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Unapplies the migrations listed in plan by walking full_plan to capture the project state before each planned migration, rolling those migrations back in plan order, and reconstructing the post-unapply project state from the remaining applied migrations." _migrate_all_backwards]
+    [INPUTS]
+        <REF> plan </REF>: list of 2-tuples (migration_instance, True) "Ordered migrations to unapply; must be non-empty because the last entry is used to locate the post-unapply reconstruction start."
+        <REF> full_plan </REF>: list of 2-tuples (migration_instance, ignored) "Full ordered migration plan used to compute the state before each migration in plan."
+        <REF> fake </REF>: boolean "Flag forwarded to unapply_migration; controls whether each migration is actually unapplied or only simulated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> state </REF>: project state object "Final project state after unapplying the planned migrations and reapplying all other applied migrations encountered afterward."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create migrations_to_run as the set of m[0] for every tuple m in plan. RESULT migrations_to_run]
+            [COMMAND Initialize states as an empty dictionary for storing the project state before each migration to unapply. RESULT states]
+            [COMMAND Initialize state by calling self._create_project_state(). RESULT state]
+            [COMMAND Build applied_migrations as the set of self.loader.graph.nodes[key] for each key in self.loader.applied_migrations when key is present in self.loader.graph.nodes, skipping absent keys. RESULT applied_migrations]
+            [COMMAND If self.progress_callback is truthy, call self.progress_callback('render_start'). RESULT progress_callback]
+            [COMMAND In the loop over full_plan, at the beginning of each iteration, check whether migrations_to_run is empty; if it is empty, break out of the loop. RESULT migrations_to_run]
+            [COMMAND In the same loop over full_plan, when the current migration is in migrations_to_run, first force lazy state rendering by accessing state.apps if 'apps' is not already in state.__dict__, then set states[migration] to the current state, set state to migration.mutate_state(state, preserve=True), and remove migration from migrations_to_run. RESULT state]
+            [COMMAND In the same loop over full_plan, when the current migration is not in migrations_to_run but is in applied_migrations, call migration.mutate_state(state, preserve=False) without storing a snapshot and without removing the migration from migrations_to_run. RESULT state]
+            [COMMAND If self.progress_callback is truthy, call self.progress_callback('render_success'). RESULT progress_callback]
+            [COMMAND For each (migration, _) pair in plan, in plan order, look up states[migration], call self.unapply_migration(states[migration], migration, fake=fake), and then remove migration from applied_migrations. RESULT applied_migrations]
+            [COMMAND Set last_unapplied_migration to plan[-1][0], the first element of the last entry in plan. RESULT last_unapplied_migration]
+            [COMMAND Set state to states[last_unapplied_migration]. RESULT state]
+            [COMMAND Iterate through enumerate(full_plan) and locate the first index whose migration equals last_unapplied_migration. RESULT index]
+            [COMMAND After finding the matched index, iterate over each (migration, _) in full_plan[index:], including the matched migration, and for each migration present in applied_migrations call migration.mutate_state(state, preserve=False); after completing this suffix loop, break out of the outer enumeration loop. RESULT state]
+            [COMMAND Return state. RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Applies a migration forward, recording it either when the schema editor has no deferred SQL or after any soft-applied initial migration has been detected as already applied." apply_migration]
+    [INPUTS]
+        <REF> state </REF>: object "The migration state to be transformed and returned after applying the migration."
+        <REF> migration </REF>: object "The migration object providing the apply operation and the atomic flag used to create the schema editor."
+        <REF> fake </REF>: boolean "When true, the migration is treated as already applied or simulated and is not executed; defaults to False."
+        <REF> fake_initial </REF>: boolean "When true, perform a soft-applied detection for an initial migration before deciding whether to apply it normally; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> state </REF>: object "The updated migration state returned to the caller."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set migration_recorded to False as the initial recording flag. RESULT migration_recorded]
+            [COMMAND If self.progress_callback is truthy, invoke self.progress_callback("apply_start", migration, fake). RESULT none]
+            [COMMAND Evaluate the outer guard `if not fake:`. If fake is True, skip the body of this guard and proceed directly to the final recording step; if fake is False, continue with the next steps inside this guard. RESULT none]
+            [COMMAND Within the `if not fake:` body, evaluate `if fake_initial:`. If fake_initial is True, call self.detect_soft_applied(state, migration) and unpack the returned tuple into applied and state. RESULT applied, state]
+            [COMMAND Within the same `if not fake:` body, after the soft-apply check, evaluate `if applied:`. If applied is True, set fake to True to mark the migration as already applied. RESULT fake]
+            [COMMAND Within the same `if not fake:` body, evaluate the second `if not fake:` guard. If fake is still False, open the context manager `with self.connection.schema_editor(atomic=migration.atomic) as schema_editor:`. RESULT schema_editor]
+            [COMMAND Inside the schema editor context, apply the migration by setting `state = migration.apply(state, schema_editor)`. RESULT state]
+            [COMMAND Inside the schema editor context, evaluate `if not schema_editor.deferred_sql:`. If schema_editor.deferred_sql is empty, call self.record_migration(migration) and set migration_recorded to True; otherwise leave migration_recorded as False and defer recording. RESULT migration_recorded]
+            [COMMAND After the outer `if not fake:` block, evaluate `if not migration_recorded:`. If migration_recorded is False, call self.record_migration(migration) to ensure the migration is recorded exactly once in all paths. RESULT none]
+            [COMMAND If self.progress_callback is truthy, invoke self.progress_callback("apply_success", migration, fake) using the possibly updated fake flag. RESULT none]
+            [COMMAND Return the final state. RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Records a migration as applied, marking each replaced migration as applied when migration.replaces is truthy, otherwise recording the migration itself." record_migration]
+    [INPUTS]
+        <REF> migration </REF>: Migration "The migration object being recorded; it may have replaces, app_label, and name attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of migration.replaces. RESULT replaces_truthiness]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: replaces_truthiness is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each app_label, name pair in migration.replaces, call self.recorder.record_applied(app_label, name). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: replaces_truthiness is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.recorder.record_applied(migration.app_label, migration.name) once. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Runs a migration backwards by optionally unapplying it via a schema editor, recording unapplied statuses for any replaced migrations and the migration itself, and reporting progress through an optional callback." unapply_migration]
+    [INPUTS]
+        <REF> state </REF>: object "Migration state to be updated by unapplying the migration."
+        <REF> migration </REF>: Migration "Migration object that provides atomic, replaces, app_label, name, and unapply() behavior."
+        <REF> fake </REF>: bool "If true, skip the actual schema unapply but still record statuses and report progress."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> state </REF>: object "Updated state after unapply, or the original state when fake is true."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.progress_callback is truthy, call self.progress_callback('unapply_start', migration, fake). RESULT None]
+            [COMMAND If not fake, open a schema editor with self.connection.schema_editor(atomic=migration.atomic) as schema_editor, and inside that context set state = migration.unapply(state, schema_editor). RESULT state]
+            [COMMAND If migration.replaces is truthy, loop over each (app_label, name) in migration.replaces and call self.recorder.record_unapplied(app_label, name). RESULT None]
+            [COMMAND Call self.recorder.record_unapplied(migration.app_label, migration.name). RESULT None]
+            [COMMAND If self.progress_callback is truthy, call self.progress_callback('unapply_success', migration, fake). RESULT None]
+            [COMMAND Return state. RESULT state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Marks replacement migrations as applied when every migration they replace is already applied and the replacement itself has not already been applied." check_replacements]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the current snapshot of applied migrations from self.recorder.applied_migrations() and assign it to applied. RESULT applied]
+            [COMMAND Iterate over all replacement entries in self.loader.replacements.items(). For each replacement key and migration, compute all_applied = all(m in applied for m in migration.replaces), treating an empty migration.replaces as True. If all_applied is True and key is not already in applied, call self.recorder.record_applied(*key) to record the replacement as applied, unpacking key as positional arguments. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Detects whether an initial migration has been implicitly applied by verifying that every CreateModel table and every AddField column or implicit many-to-many table exists in the database, returning (False, project_state) on the first missing object and (found_create_model_migration or found_add_field_migration, after_state) otherwise." detect_soft_applied]
+    [INPUTS]
+        <REF> project_state </REF>: ProjectState | None "The current project state to mutate, or None to load the state at the end of the migration."
+        <REF> migration </REF>: Migration "The migration to check for implicit application; only CreateModel and AddField operations are considered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (found, after_state) where found is True when at least one CreateModel or AddField operation was verified and all required database objects exist, and after_state is the project state after applying the migration."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define nested helper should_skip_detecting_model(migration, model) that returns True if model._meta.proxy is true, or model._meta.managed is false, or router.allow_migrate(self.connection.alias, migration.app_label, model_name=model._meta.model_name) is false, using short-circuit evaluation; otherwise return False. RESULT should_skip_detecting_model]
+            [COMMAND If migration.initial is None and any(app == migration.app_label for app, name in migration.dependencies) is true, using short-circuiting any(), return (False, project_state). RESULT initial_dependency_return]
+            [COMMAND If migration.initial is False, return (False, project_state). RESULT initial_false_return]
+            [COMMAND If project_state is None, set after_state to self.loader.project_state((migration.app_label, migration.name), at_end=True); otherwise set after_state to migration.mutate_state(project_state). RESULT after_state]
+            [COMMAND Set apps to after_state.apps, found_create_model_migration to False, found_add_field_migration to False, and fold_identifier_case to self.connection.features.ignores_table_name_case. RESULT flags_and_apps]
+            [COMMAND Open a database cursor and set existing_table_names to the set returned by self.connection.introspection.table_names(cursor); if fold_identifier_case is true, replace existing_table_names with the set of name.casefold() for each name in existing_table_names. RESULT existing_table_names]
+            [COMMAND For each operation in migration.operations, dispatch on operation type; operations that are neither migrations.CreateModel nor migrations.AddField are ignored. RESULT operation_loop]
+            [COMMAND Within the for operation loop, if operation is migrations.CreateModel: get model from apps.get_model(migration.app_label, operation.name); if model._meta.swapped, replace model with global_apps.get_model(model._meta.swapped); if should_skip_detecting_model(migration, model) is true, continue to the next operation; otherwise set db_table to model._meta.db_table, casefold db_table if fold_identifier_case is true, and if db_table is not in existing_table_names return (False, project_state); otherwise set found_create_model_migration to True. RESULT create_model_handling]
+            [COMMAND Within the for operation loop, if operation is migrations.AddField: get model from apps.get_model(migration.app_label, operation.model_name); if model._meta.swapped, replace model with global_apps.get_model(model._meta.swapped); if should_skip_detecting_model(migration, model) is true, continue to the next operation; otherwise set table to model._meta.db_table and field to model._meta.get_field(operation.name). RESULT add_field_preparation]
+            [COMMAND Within the AddField branch, if field.many_to_many is true: set through_db_table to field.remote_field.through._meta.db_table; if fold_identifier_case is true, casefold through_db_table; if through_db_table is not in existing_table_names return (False, project_state); otherwise set found_add_field_migration to True and continue to the next operation. RESULT many_to_many_handling]
+            [COMMAND Within the AddField branch for a non-many-to-many field, open a database cursor and set columns to self.connection.introspection.get_table_description(cursor, table). RESULT table_columns]
+            [COMMAND Within the AddField branch, for each column in columns: set field_column to field.column and column_name to column.name; if fold_identifier_case is true, set column_name to column_name.casefold() and field_column to field_column.casefold(); if column_name equals field_column, set found_add_field_migration to True and break out of the column loop. RESULT add_field_column_found]
+            [COMMAND After the column loop in the AddField branch, if the loop completed without a break because no matching column was found, return (False, project_state). RESULT missing_column_return]
+            [COMMAND After processing all operations, return (found_create_model_migration or found_add_field_migration, after_state). RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

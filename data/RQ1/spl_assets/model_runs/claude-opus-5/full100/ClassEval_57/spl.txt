@@ -1,0 +1,82 @@
+# CLASS MetricsCalculator2
+
+# JSON_PARSE_ERROR: No JSON object/array found in LLM output
+# RAW_LLM_OUTPUT:
+Understood. Ready to convert methods to JSON templates following the schema. Send the method code and I'll produce the JSON output.
+
+[DEFINE_WORKER: "Computes Mean Reciprocal Rank (MRR) over one or more ranked result sets, returning both the aggregate MRR scalar and the per-query list of individual reciprocal-rank scores." mrr]
+    [INPUTS]
+        <REF> data </REF>: tuple | list "Either a single (sub_list, total_num) tuple representing one ranked query result, or a list of such tuples representing multiple queries. sub_list is an array-like of relevance scores; total_num is the count of total candidates."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> mrr_score </REF>: float "The mean reciprocal rank across all queries; equals the single query's reciprocal rank when input is a tuple."
+        <REF> separate_result </REF>: list[float] "A list of per-query reciprocal rank scores; contains a single element when input is a tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether data is neither a list nor a tuple; if so, raise an Exception with message 'the input must be a tuple([0,...,1,...],int) or a iteration of list of tuple' RESULT type_guard]
+            [COMMAND Check whether len(data) == 0; if so, return immediately with (0.0, [0.0]) RESULT empty_guard]
+            [COMMAND Check whether type(data) == tuple (strict type check, not isinstance); if true, enter the single-query branch RESULT is_tuple_check]
+            [COMMAND Within the tuple branch, unpack data into (sub_list, total_num) and convert sub_list to a numpy array RESULT sub_list_array]
+            [COMMAND Within the tuple branch, check whether total_num == 0; if true, return immediately with (0.0, [0.0]) RESULT zero_total_guard_tuple]
+            [COMMAND Within the tuple branch else path (total_num > 0), build ranking_array as 1.0 / (np.array(range(len(sub_list))) + 1), producing reciprocal weights [1, 1/2, 1/3, ..., 1/n] RESULT ranking_array_tuple]
+            [COMMAND Within the tuple branch else path, compute mr_np as the element-wise product of sub_list and ranking_array RESULT mr_np_tuple]
+            [COMMAND Within the tuple branch else path, initialize mr = 0.0, then iterate over mr_np in order; on the first element team where team > 0, set mr = team and break (first-hit scan; if no positive element exists, mr remains 0.0) RESULT mr_tuple]
+            [COMMAND Within the tuple branch else path, return (mr, [mr]) RESULT return_tuple_result]
+            [COMMAND Check whether type(data) == list (strict type check); if true, enter the multi-query branch RESULT is_list_check]
+            [COMMAND Within the list branch, initialize separate_result as an empty list RESULT separate_result_init]
+            [COMMAND Within the list branch, iterate over each (sub_list, total_num) pair in data, converting sub_list to a numpy array at each iteration RESULT list_loop]
+            [COMMAND Within the list branch for loop, check whether total_num == 0; if true, set mr = 0.0 for this iteration (no array computation) RESULT zero_total_guard_list]
+            [COMMAND Within the list branch for loop else path (total_num > 0), build ranking_array as 1.0 / (np.array(range(len(sub_list))) + 1), producing reciprocal weights [1, 1/2, 1/3, ..., 1/n] RESULT ranking_array_list]
+            [COMMAND Within the list branch for loop else path, compute mr_np as the element-wise product of sub_list and ranking_array RESULT mr_np_list]
+            [COMMAND Within the list branch for loop else path, initialize mr = 0.0, then iterate over mr_np in order; on the first element team where team > 0, set mr = team and break (first-hit scan; if no positive element exists, mr remains 0.0) RESULT mr_list_item]
+            [COMMAND Within the list branch for loop, append mr to separate_result after each iteration regardless of which inner branch was taken RESULT append_mr]
+            [COMMAND After the list branch for loop completes, return (np.mean(separate_result), separate_result) RESULT return_list_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: type(data) is not list and type(data) is not tuple]
+        [LOG "Input data is neither a list nor a tuple; cannot compute MRR"]
+        [THROW Exception "Raised with message 'the input must be a tuple([0,...,1,...],int) or a iteration of list of tuple' when the input type is invalid"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes Average Precision (AP) for a single ranked result tuple or Mean Average Precision (MAP) for a list of ranked result tuples, returning the scalar score alongside a per-query breakdown." map]
+    [INPUTS]
+        <REF> data </REF>: tuple | list "Either a single tuple of (sub_list, total_num) where sub_list is a binary relevance list and total_num is the count of relevant items, or a list of such tuples for multi-query MAP computation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> score </REF>: float "The AP value when data is a tuple, or the mean AP across all queries when data is a list."
+        <REF> breakdown </REF>: list[float] "A single-element list [ap] when data is a tuple, or the full list of per-query AP values when data is a list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether data is neither a list nor a tuple; if so, raise an exception with message 'the input must be a tuple([0,...,1,...],int) or a iteration of list of tuple'. RESULT type_guard]
+            [COMMAND Check whether len(data) equals 0; if so, return immediately with (0.0, [0.0]). RESULT empty_guard]
+            [COMMAND Check whether type(data) is exactly tuple (strict check, not isinstance); if so, unpack data into (sub_list, total_num) and convert sub_list to a NumPy array. RESULT tuple_unpack]
+            [COMMAND Within the tuple branch, check whether total_num equals 0; if so, return immediately with (0.0, [0.0]) to avoid division by zero. RESULT tuple_zero_guard]
+            [COMMAND Within the tuple branch, when total_num is not 0, build ranking_array as the element-wise reciprocal of (range(len(sub_list)) + 1), yielding weights [1/1, 1/2, 1/3, ...] of the same length as sub_list. RESULT ranking_array]
+            [COMMAND Within the tuple branch, initialize right_ranking_list as an empty list and count as 1, then iterate over each element t in sub_list: if t equals 0, append 0; otherwise append the current value of count and increment count by 1. RESULT right_ranking_list]
+            [COMMAND Within the tuple branch, compute ap as the dot product of right_ranking_list and ranking_array divided by total_num, then return (ap, [ap]). RESULT tuple_return]
+            [COMMAND Check whether type(data) is exactly list (strict check, not isinstance); if so, initialize separate_result as an empty list. RESULT list_branch_init]
+            [COMMAND Within the list branch, iterate over each (sub_list, total_num) pair in data; convert sub_list to a NumPy array for each iteration. RESULT list_outer_loop]
+            [COMMAND Within the list outer loop, check whether total_num equals 0; if so, set ap to 0.0 directly without any further computation for this pair. RESULT list_zero_guard]
+            [COMMAND Within the list outer loop, when total_num is not 0, build ranking_array as the element-wise reciprocal of (range(len(sub_list)) + 1), yielding weights [1/1, 1/2, 1/3, ...] of the same length as sub_list. RESULT list_ranking_array]
+            [COMMAND Within the list outer loop, initialize right_ranking_list as an empty list and count as 1, then iterate over each element t in sub_list: if t equals 0, append 0; otherwise append the current value of count and increment count by 1. RESULT list_right_ranking_list]
+            [COMMAND Within the list outer loop, compute ap as the dot product of right_ranking_list and ranking_array divided by total_num. RESULT list_ap]
+            [COMMAND Within the list outer loop, append ap to separate_result after each pair regardless of which branch (zero or non-zero) produced it. RESULT list_accumulate]
+            [COMMAND After the list outer loop completes all pairs, return (np.mean(separate_result), separate_result). RESULT list_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: type(data) is not list and type(data) is not tuple]
+        [LOG "Input data is neither a list nor a tuple; cannot compute AP or MAP."]
+        [THROW Exception "Raised with the message 'the input must be a tuple([0,...,1,...],int) or a iteration of list of tuple' when the input is any type other than exactly list or tuple."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

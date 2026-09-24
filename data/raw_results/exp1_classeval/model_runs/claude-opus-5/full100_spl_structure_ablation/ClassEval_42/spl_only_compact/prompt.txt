@@ -1,0 +1,98 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: Hotel
+# Fields: available_rooms, name, booked_rooms
+
+## __init__(name: str, rooms: dict)
+Summary: Initializes a hotel instance by storing its name, binding the caller-supplied room availability dictionary directly, and creating a fresh empty bookings ledger.
+#   name: str — The name of the hotel; stored as-is with no transformation
+#   rooms: dict — A dictionary mapping room type strings to integer availability counts (e.g. {'single': 5, 'double': 3}); passed by reference with no defensive copy
+1. Assign the parameter name directly to self.name with no transformation → self.name
+2. Assign the parameter rooms directly to self.available_rooms, binding the instance attribute to the same dict object the caller passed in; no copy is made, so mutations to self.available_rooms will be visible to the caller → self.available_rooms
+3. Initialize self.booked_rooms to a new empty dict literal {}; this value is independent of all parameters and every instance receives its own distinct dict with no aliasing risk → self.booked_rooms
+
+## book_room(room_type: string, room_number: integer, name: string)
+Summary: Attempts to book a specified number of rooms of a given type for a named guest, returning a success confirmation, the remaining available count as a partial-availability hint, or false if the room type is unavailable or fully booked.
+#   room_type: string — The category of room to book; must exist as a key in available_rooms
+#   room_number: integer — The number of rooms of the specified type the caller wants to book
+#   name: string — The guest name under which the booking is recorded
+1. Check whether room_type exists as a key in self.available_rooms; if it does not, return False immediately (early exit — room type is not recognised) → room_type_exists_check
+2. Compare room_number against self.available_rooms[room_type] using an inclusive less-than-or-equal boundary; if room_number is within the available count, proceed to the booking sub-steps below → availability_check
+3. Within the successful-booking branch: check whether room_type is already a key in self.booked_rooms; if it is not present, initialise self.booked_rooms[room_type] as an empty dict (one-time guard that runs on the first booking of this room type) → booked_rooms_init_check
+4. Within the successful-booking branch: store the booking by assigning room_number to self.booked_rooms[room_type][name] → booking_recorded
+5. Within the successful-booking branch: deduct room_number from self.available_rooms[room_type] using in-place subtraction → availability_decremented
+6. Within the successful-booking branch: return the string 'Success!' (early exit) → success_return
+   ? Return the integer value of self.available_rooms[room_type] as a partial-availability hint to the caller
+   ? Return False to signal that no rooms of the requested type are available
+
+## check_in(room_type: string, room_number: integer, name: string) → boolean or None
+Summary: Validates and processes a check-in request by verifying the room type exists, then either rejecting an over-request, fully removing the booking on an exact match, or partially decrementing the booking count for a partial check-in.
+#   room_type: string — The category of room being checked in, used as the top-level key in booked_rooms
+#   room_number: integer — The number of rooms the guest wants to check in
+#   name: string — The guest name whose booking record is being looked up
+#   → result: boolean or None — Returns False if room_type does not exist or if room_number exceeds the booked count; returns None implicitly on a successful full or partial check-in
+1. Check whether room_type exists as a key in self.booked_rooms; if it does not, return False immediately → room_type_exists
+2. Check whether name exists as a key in self.booked_rooms[room_type]; if it does not, skip all inner logic and fall through (implicit None return) → name_exists
+3. Within the name-exists block, compare room_number against self.booked_rooms[room_type][name]: if room_number is strictly greater than the booked count, return False immediately with no state change → over_request_check
+4. Within the name-exists block, if room_number equals self.booked_rooms[room_type][name] exactly, remove the name entry entirely from self.booked_rooms[room_type] via pop, completing a full check-in → full_checkin_result
+5. Within the name-exists block, if room_number is strictly less than self.booked_rooms[room_type][name], subtract room_number from self.booked_rooms[room_type][name] in place, completing a partial check-in and leaving the residual booking → partial_checkin_result
+   ? Return False immediately; no further processing occurs
+   ? Skip the entire inner if/elif/else block; method returns None implicitly, which the caller may misinterpret as success
+   ? Return False immediately; booked_rooms state is not modified
+
+## check_out(room_type: string, room_number: integer)
+Summary: Adds the specified number of rooms back to the available inventory for a given room type, either incrementing an existing count or creating a new entry if the room type is not yet tracked.
+#   room_type: string — The category or type of room being checked out and returned to availability
+#   room_number: integer — The number of rooms of the specified type to add back to available inventory
+1. Check whether room_type exists as a key in the available_rooms dictionary → room_type_exists
+2. If room_type_exists is true, increment the existing available_rooms[room_type] value by room_number using in-place addition → updated_count
+   ? Create a new entry in available_rooms with room_type as the key and room_number as the initial value
+
+## get_available_rooms(room_type: hashable) → any
+Summary: Retrieves the available rooms of the specified type from the instance's room availability dictionary using the provided room type as a key.
+#   room_type: hashable — The key identifying the room type to look up in the available rooms dictionary; must be present as a key or a KeyError will be raised
+#   → result: any — The value mapped to room_type in self.available_rooms, which may be a count, list, or room object depending on how the dictionary was populated
+1. Look up room_type as a key in self.available_rooms using direct subscript access and return the associated value to the caller → result
+   ! log: "KeyError raised because room_type does not exist in self.available_rooms; no fallback or default value is provided at this site"
+   ! raise: KeyError "Raised by the dictionary subscript operation when room_type is not a current key in self.available_rooms"
+   ! log: "AttributeError raised because self.available_rooms does not exist on the object"
+   ! raise: AttributeError "Raised when the available_rooms attribute was never set on the instance, typically meaning __init__ was not called or did not initialize it"
+   ! log: "TypeError raised because the subscript key must be hashable for dictionary lookup"
+   ! raise: TypeError "Raised by the dictionary when room_type cannot be hashed and therefore cannot be used as a lookup key"
+

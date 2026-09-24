@@ -1,0 +1,153 @@
+# CLASS Hotel
+
+[DEFINE_WORKER: "Initializes a hotel instance by storing its name, binding the caller-supplied room availability dictionary directly, and creating a fresh empty bookings ledger." __init__]
+    [INPUTS]
+        <REF> name </REF>: str "The name of the hotel; stored as-is with no transformation"
+        <REF> rooms </REF>: dict "A dictionary mapping room type strings to integer availability counts (e.g. {'single': 5, 'double': 3}); passed by reference with no defensive copy"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the parameter name directly to self.name with no transformation RESULT self.name]
+            [COMMAND Assign the parameter rooms directly to self.available_rooms, binding the instance attribute to the same dict object the caller passed in; no copy is made, so mutations to self.available_rooms will be visible to the caller RESULT self.available_rooms]
+            [COMMAND Initialize self.booked_rooms to a new empty dict literal {}; this value is independent of all parameters and every instance receives its own distinct dict with no aliasing risk RESULT self.booked_rooms]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Attempts to book a specified number of rooms of a given type for a named guest, returning a success confirmation, the remaining available count as a partial-availability hint, or false if the room type is unavailable or fully booked." book_room]
+    [INPUTS]
+        <REF> room_type </REF>: string "The category of room to book; must exist as a key in available_rooms"
+        <REF> room_number </REF>: integer "The number of rooms of the specified type the caller wants to book"
+        <REF> name </REF>: string "The guest name under which the booking is recorded"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string | integer | boolean "Returns the string 'Success!' on a successful booking, an integer representing remaining available rooms when the request exceeds availability but rooms remain, or False when the room type does not exist or is fully exhausted"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether room_type exists as a key in self.available_rooms; if it does not, return False immediately (early exit — room type is not recognised) RESULT room_type_exists_check]
+            [COMMAND Compare room_number against self.available_rooms[room_type] using an inclusive less-than-or-equal boundary; if room_number is within the available count, proceed to the booking sub-steps below RESULT availability_check]
+            [COMMAND Within the successful-booking branch: check whether room_type is already a key in self.booked_rooms; if it is not present, initialise self.booked_rooms[room_type] as an empty dict (one-time guard that runs on the first booking of this room type) RESULT booked_rooms_init_check]
+            [COMMAND Within the successful-booking branch: store the booking by assigning room_number to self.booked_rooms[room_type][name] RESULT booking_recorded]
+            [COMMAND Within the successful-booking branch: deduct room_number from self.available_rooms[room_type] using in-place subtraction RESULT availability_decremented]
+            [COMMAND Within the successful-booking branch: return the string 'Success!' (early exit) RESULT success_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: room_number exceeds self.available_rooms[room_type] but self.available_rooms[room_type] is not equal to 0 (some rooms remain, just fewer than requested)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the integer value of self.available_rooms[room_type] as a partial-availability hint to the caller RESULT partial_availability_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: room_number exceeds self.available_rooms[room_type] and self.available_rooms[room_type] equals 0 (room type is fully booked)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False to signal that no rooms of the requested type are available RESULT fully_booked_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates and processes a check-in request by verifying the room type exists, then either rejecting an over-request, fully removing the booking on an exact match, or partially decrementing the booking count for a partial check-in." check_in]
+    [INPUTS]
+        <REF> room_type </REF>: string "The category of room being checked in, used as the top-level key in booked_rooms"
+        <REF> room_number </REF>: integer "The number of rooms the guest wants to check in"
+        <REF> name </REF>: string "The guest name whose booking record is being looked up"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean or None "Returns False if room_type does not exist or if room_number exceeds the booked count; returns None implicitly on a successful full or partial check-in"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether room_type exists as a key in self.booked_rooms; if it does not, return False immediately RESULT room_type_exists]
+            [COMMAND Check whether name exists as a key in self.booked_rooms[room_type]; if it does not, skip all inner logic and fall through (implicit None return) RESULT name_exists]
+            [COMMAND Within the name-exists block, compare room_number against self.booked_rooms[room_type][name]: if room_number is strictly greater than the booked count, return False immediately with no state change RESULT over_request_check]
+            [COMMAND Within the name-exists block, if room_number equals self.booked_rooms[room_type][name] exactly, remove the name entry entirely from self.booked_rooms[room_type] via pop, completing a full check-in RESULT full_checkin_result]
+            [COMMAND Within the name-exists block, if room_number is strictly less than self.booked_rooms[room_type][name], subtract room_number from self.booked_rooms[room_type][name] in place, completing a partial check-in and leaving the residual booking RESULT partial_checkin_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: room_type is not present in self.booked_rooms]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately; no further processing occurs RESULT early_return_false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: name is not present in self.booked_rooms[room_type]]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the entire inner if/elif/else block; method returns None implicitly, which the caller may misinterpret as success RESULT implicit_none_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: room_number is strictly greater than the booked count for the given name and room_type]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately; booked_rooms state is not modified RESULT over_request_false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds the specified number of rooms back to the available inventory for a given room type, either incrementing an existing count or creating a new entry if the room type is not yet tracked." check_out]
+    [INPUTS]
+        <REF> room_type </REF>: string "The category or type of room being checked out and returned to availability"
+        <REF> room_number </REF>: integer "The number of rooms of the specified type to add back to available inventory"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether room_type exists as a key in the available_rooms dictionary RESULT room_type_exists]
+            [COMMAND If room_type_exists is true, increment the existing available_rooms[room_type] value by room_number using in-place addition RESULT updated_count]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: room_type is not present as a key in available_rooms]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new entry in available_rooms with room_type as the key and room_number as the initial value RESULT new_entry]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves the available rooms of the specified type from the instance's room availability dictionary using the provided room type as a key." get_available_rooms]
+    [INPUTS]
+        <REF> room_type </REF>: hashable "The key identifying the room type to look up in the available rooms dictionary; must be present as a key or a KeyError will be raised"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "The value mapped to room_type in self.available_rooms, which may be a count, list, or room object depending on how the dictionary was populated"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up room_type as a key in self.available_rooms using direct subscript access and return the associated value to the caller RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: room_type is not present as a key in self.available_rooms]
+        [LOG "KeyError raised because room_type does not exist in self.available_rooms; no fallback or default value is provided at this site"]
+        [THROW KeyError "Raised by the dictionary subscript operation when room_type is not a current key in self.available_rooms"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.available_rooms has not been initialized on the instance]
+        [LOG "AttributeError raised because self.available_rooms does not exist on the object"]
+        [THROW AttributeError "Raised when the available_rooms attribute was never set on the instance, typically meaning __init__ was not called or did not initialize it"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: room_type is an unhashable type such as a list or dict]
+        [LOG "TypeError raised because the subscript key must be hashable for dictionary lookup"]
+        [THROW TypeError "Raised by the dictionary when room_type cannot be hashed and therefore cannot be used as a lookup key"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

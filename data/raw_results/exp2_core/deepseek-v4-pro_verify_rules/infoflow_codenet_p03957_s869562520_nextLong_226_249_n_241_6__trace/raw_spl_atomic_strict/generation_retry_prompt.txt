@@ -1,0 +1,815 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Is there information flow from `(varA,lineA)` to `(varB,lineB)`? If so, provide one feasible trace.", respond with a JSON object:
+
+- If information flow exists:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["varOrExpr", lineNumber            /*, "use" optional */],
+      "to":   ["varOrExpr", lineNumber            /*, "use" optional */],
+      "type": "data" | "control"
+    },
+    // … additional edges
+  ]
+}
+```
+- If no information flow exists, omit the Trace field:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+- Every trace edge must specify "from", "to" (each may include a third "use" element when the line is a conditional statement that only reads without redefining/updating the value), and "type".
+- **We do not consider loop in the trace**.
+
+
+A **trace** represents a **transitive chain of direct flows** arise from compositions of **direct** implicit or explicit flows, where each edge represents a **direct implicit flow** (through control dependence) or a **direct explicit flow** edge (through data dependence).
+
+
+You only need to provide **one** valid trace if you conclude a information flow exists, even if multiple possible chains exist. 
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Is there information flow from `(balance,4)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. Here we focus on `(status,7)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+Hence, A transitive of flow of direct implicit or explicit flows forms a information flow trace.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["balance", 4],
+      "to":   ["balance", 5],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 5],
+      "to":   ["balance", 6, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 6, "use"],
+      "to":   ["status", 7],
+      "type": "control"
+    },
+    {
+      "from": ["status", 7],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+ 
+- The edge from line 6 to `(status,7)` is through control dependence and therefore with a type of "control". 
+- Line 6 only reads the value of `balance` without defining/updating it. So it is marked with `"use"`. 
+- You only need to provide **one** valid chain if you conclude a the information flow exists. 
+
+
+#### Example Question 1.2
+
+Is there information flow from  `(flag,3)` to `(limit,9)`? If so, provide a trace.
+
+**Analysis**
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from either `(status,7)` (if line 6’s condiation evaluates to `true`) or on the original `(status,2)` (if not) to `(limit,9)`. 
+- Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 6 is treated as being evaluated to both possibly true and possibly false.
+  - If line 6 is true, `(limit,9)` depends on `(status,7)`. 
+    - Line 7: `(status,7)` doesn't have any data dependence as it is assigned with a constant number. The execution of line 7 is control-dependent on the condition in line 6.
+    - Line 6: the condition at line 6 directly reads from `(balance,5)`. 
+    - Line 5: `(balance,5)` is updated based on the previous value of `balance` in line 4.
+    - Line 4: `(balance,4)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+  - If line 6 is not true, `(limit,9)` depends on `(status,2)`. 
+    - Line 2: `(status,2)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+- Therefore, among all the possible paths, there is no transitive (indirect) chain of implicit or explicit flow from `(flag,3)` to `(limit,9)`. The information flow doesn't exist.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+#### Example Question 1.3
+
+Is there information flow from  `(status,2)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`.
+- Line 9: `(limit,9)` reads `status`, o there is a direct explicit flow from either `(status,7)`, or the original `(status,2)`, to `(limit,9)`.
+- Similar to the above example, line 6 is possibly evaluated to true or false.
+- If line 6 evaluates to `true`, there is a direct explicit flow from `(status,7)` to `(limit,9)`, which directly data-dependent on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (status,7) -> (limit,9) -> (transaction,10)`.
+- If line 6 evaluates to `false`, `(limit,9)` has a direct data dependence on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (limit,9) -> (transaction,10)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["status", 2],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Is there information flow from  `(size,2)` to `(summary,17)`? If so, provide a trace.
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. We focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`.
+- Line 2: `size` is initialized with a constant number. It is not guarded with any conditions. 
+- Therefore, there is an transitive trace of direct implicit/excplit flows from `(size,2)` to `(summary,17)`.
+
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["size", 2],
+      "to":   ["size", 9, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["size", 9, "use"],
+      "to":   ["j", 14],
+      "type": "control"
+    },
+    {
+      "from": ["j", 14],
+      "to":   ["summary", 17],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Is there information flow from  `(j,5)` to `(score,11)`? If so, provide a trace. 
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`.
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop).
+- If line 11 reads `j` from line 5, it forms a tansitive explicit flow trace: `(j,5) -> (score,11)`.
+- If line 11 reads `j` from line 14, it forms a tansitive explicit flow trace: `(j,5) -> (j,14) -> (score,11)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["j", 5],
+      "to":   ["score", 11],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+
+#### Example Question 2.3:
+Is there information flow from  `(j,1)` to `(i,15)`? If so, provide a trace.
+
+**Analysis**: 
+- Line 15: `(i,15)` updates `i` based on its previous value. So there is a direct explicit flow from either `(i,4)` (initialization) or itself (loop-carried) to `(i,15)`. But we do not consider loop-carried dependencies across iterations in this analysis. So we focus on `(i,4)`.
+- The execution of line 15 is conditional on the while loop at line 9.
+- Line 9: `while i < size` depends on `i` and `size`. It directly reads from `(i,4)` (or possibly `(i,15)`) and `(size,2)`.
+- Both `(i,4)` and `(size,2)` are initialized with constants and are not themselves control-dependent on any earlier values or branches.
+- There is no use of `(j,1)` in the computation of `(i,15)`, nor does `(j,1)` influence whether line 15 executes.
+- Therefore, there is no transitive flow, explicit or implicit, from `(j,1)` to `(i,15)`.
+
+
+**Output**: 
+```json
+{
+  "InformationFlow": false
+}
+```
+
+
+#### Example Question 2.4:
+Is there information flow from  `(val,1)` to `(last,16)`? If so, provide a trace.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8 (or by the loop updates in line 10). Under static analysis, multiple update sites may contribute. We conservatively pick one valid trace (line 8).
+- Line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7.
+- Therefore, there exists a trace from `(val,1)` to `(last,16)`, and the edge from line 7 to `(arr,8)` is through implicit and explicit flows. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["val", 1],
+      "to":   ["val", 7, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["val", 7, "use"],
+      "to":   ["arr", 8],
+      "type": "control"
+    },
+    {
+      "from": ["arr", 8],
+      "to":   ["last", 16],
+      "type": "data"
+    }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.IOException;
+2   import java.io.InputStream;
+3   import java.util.Arrays;
+4   import java.util.NoSuchElementException;
+5   import java.util.Random;
+6   import java.util.Scanner;
+7   class UnionFind{
+8   	int Parent[];
+9   	UnionFind(int n){
+10  		Parent=new int[n];
+11  		Arrays.fill(Parent, -1);
+12  	}
+13  	int root(int A) {
+14  		if(Parent[A]<0)return A;
+15  		return Parent[A]=root(Parent[A]);
+16  	}
+17  	int size(int A) {
+18  		return -Parent[root(A)];
+19  	}
+20  	boolean connect(int A,int B) {
+21  		A=root(A);
+22  		B=root(B);
+23  		if(A==B) return false;
+24  		if(size(A)<size(B)) {int C=0;C=B;B=A;A=C;}
+25  		Parent[A]+=Parent[B];
+26  		Parent[B]=A;
+27  		return true;
+28  	}
+29  }
+30  public class Main {
+31  	static FastScanner scan=new FastScanner();
+32  	static Scanner scanner=new Scanner(System.in);
+33  	static Random rand=new Random();
+34  	static long mod=1000000007;
+35  	static double eps=0.0000000001;
+36  	static int big=Integer.MAX_VALUE;
+37  	static long modlcm(long a,long b) {return a*b*modint(gcd(a,b),mod);}
+38  	static long gcd (long a, long b) {return b>0?gcd(b,a%b):a;}
+39  	static long lcm (long a, long b) {return a*b/gcd(a,b);}
+40  	static int max(int a,int b) {return a>b?a:b;}
+41  	static int min(int a,int b) {return a<b?a:b;}
+42  	static long lmax(long a,long b) {return Math.max(a, b);}
+43  	static long lmin(long a,long b) {return Math.min(a, b);}
+44  	static long factorial(int i) {return i==1?1:i*factorial(i-1);}
+45  	public static void main(String[] args) throws IOException {
+46  		String str=scan.next();
+47  		boolean b=false;
+48  		for(int i=0;i<str.length();i++) {
+49  			if(str.charAt(i)=='C')b=true;
+50  			if(b&&str.charAt(i)=='F') {
+51  				System.out.println("Yes");
+52  				return;
+53  			}
+54  		}
+55  		System.out.println("No");
+56  	}
+57  	static int lower_bound(int a[],int key) {
+58  		int right=a.length;
+59  		int left=0;
+60  		while(right-left>1) {
+61  			int mid=(right+left)/2;
+62  			if(a[mid]<key) {
+63  				left=mid;
+64  			}
+65  			else {
+66  				right=mid;
+67  			}
+68  		}
+69  		return left;
+70  	}
+71  	static int upper_bound(int a[],int key) {
+72  		int right=a.length;
+73  		int left=0;
+74  		while(right-left>1) {
+75  			int mid=(right+left)/2;
+76  			if(a[mid]<=key) {
+77  				left=mid;
+78  			}
+79  			else {
+80  				right=mid;
+81  			}
+82  		}
+83  		return left;
+84  	}
+85  	static boolean isPrime (long n) {
+86  		if (n==2) return true;
+87  		if (n<2 || n%2==0) return false;
+88  		double d = Math.sqrt(n);
+89  		for (int i=3; i<=d; i+=2)if(n%i==0){return false;}
+90  		return true;
+91  	}
+92  	static int upper_division(int a,int b) {
+93  		if(a%b==0) {
+94  			return a/b;
+95  		}
+96  		else {
+97  			return a/b+1;
+98  		}
+99  	}
+100  	static long lupper_division(long a,long b) {
+101  		if(a%b==0) {
+102  			return a/b;
+103  		}
+104  		else {
+105  			return a/b+1;
+106  		}
+107  	}
+108  	static int[] setArray(int a) {
+109  		int b[]=new int[a];
+110  		for(int i=0;i<a;i++) {
+111  			b[i]=scan.nextInt();
+112  		}
+113  		return b;
+114  	}
+115  	static long[] lsetArray(int a) {
+116  		long b[]=new long[a];
+117  		for(int i=0;i<a;i++) {
+118  			b[i]=scan.nextLong();
+119  		}
+120  		return b;
+121  	}
+122  	static String reverce(String str) {
+123  		String strr="";
+124  		for(int i=str.length()-1;i>=0;i--) {
+125  			strr+=str.charAt(i);
+126  		}
+127  		return strr;
+128  	}
+129  	public static void printArray(int[] que) {
+130  		for(int i=0;i<que.length-1;i++) {
+131  			System.out.print(que[i]+" ");
+132  		}
+133  		System.out.println(que[que.length-1]);
+134  	}
+135  	public static int[][] doublesort(int[][]a) {
+136  		Arrays.sort(a,(x,y)->Integer.compare(x[0],y[0]));
+137  		return a;
+138  	}
+139  	public static long[][] ldoublesort(long[][]a) {
+140  		Arrays.sort(a,(x,y)->Long.compare(x[0],y[0]));
+141  		return a;
+142  	}
+143  	static long modpow(long x,long n,long mo) {
+144  		long sum=1;
+145  		while(n>0) {
+146  			if((n&1)==1) {
+147  				sum=sum*x%mo;
+148  			}
+149  			x=x*x%mo;
+150  			n>>=1;
+151  		}
+152  		return sum;
+153  	}
+154  	public static char[] revch(char ch[]) {
+155  		char ret[]=new char[ch.length];
+156  		for(int i=ch.length-1,j=0;i>=0;i--,j++) {
+157  			ret[j]=ch[i];
+158  		}
+159  		return ret;
+160  	}
+161  	public static int[] revint(int ch[]) {
+162  		int ret[]=new int[ch.length];
+163  		for(int i=ch.length-1,j=0;i>=0;i--,j++) {
+164  			ret[j]=ch[i];
+165  		}
+166  		return ret;
+167  	}
+168  	public static void warshall_floyd(int v[][],int n) {
+169  		for(int k=0;k<n;k++)
+170  			for(int i=0;i<n;i++)
+171  				for(int j=0;j<n;j++)
+172  					v[i][j]=min(v[i][j],v[i][k]+v[k][j]);
+173  	}
+174  	public static long modint(long a,long m) {
+175  		long b=m,u=1,v=0;
+176  		while(b!=0) {
+177  			long t=a/b;
+178  			a-=t*b;
+179  			long x=a;
+180  			a=b;
+181  			b=x;
+182  			u-=t*v;
+183  			x=u;
+184  			u=v;
+185  			v=x;
+186  		}
+187  		u%=m;
+188  		if(u<0)u+=m;
+189  		return u;
+190  	}
+191  }
+192  class FastScanner {
+193  	private final InputStream in = System.in;
+194  	private final byte[] buffer = new byte[1024];
+195  	private int ptr = 0;
+196  	private int buflen = 0;
+197  	private boolean hasNextByte() {
+198  		if (ptr < buflen) {
+199  			return true;
+200  		}else{
+201  			ptr = 0;
+202  			try {
+203  				buflen = in.read(buffer);
+204  			} catch (IOException e) {
+205  				e.printStackTrace();
+206  			}
+207  			if (buflen <= 0) {
+208  				return false;
+209  			}
+210  		}
+211  		return true;
+212  	}
+213  	private int readByte() { if (hasNextByte()) return buffer[ptr++]; else return -1;}
+214  	private static boolean isPrintableChar(int c) { return 33 <= c && c <= 126;}
+215  	public boolean hasNext() { while(hasNextByte() && !isPrintableChar(buffer[ptr])) ptr++; return hasNextByte();}
+216  	public String next() {
+217  		if (!hasNext()) throw new NoSuchElementException();
+218  		StringBuilder sb = new StringBuilder();
+219  		int b = readByte();
+220  		while(isPrintableChar(b)) {
+221  			sb.appendCodePoint(b);
+222  			b = readByte();
+223  		}
+224  		return sb.toString();
+225  	}
+226  	public long nextLong() {
+227  		if (!hasNext()) throw new NoSuchElementException();
+228  		long n = 0;
+229  		boolean minus = false;
+230  		int b = readByte();
+231  		if (b == '-') {
+232  			minus = true;
+233  			b = readByte();
+234  		}
+235  		if (b < '0' || '9' < b) {
+236  			throw new NumberFormatException();
+237  		}
+238  		while(true){
+239  			if ('0' <= b && b <= '9') {
+240  				n *= 10;
+241  				n += b - '0';
+242  			}else if(b == -1 || !isPrintableChar(b)){
+243  				return minus ? -n : n;
+244  			}else{
+245  				throw new NumberFormatException();
+246  			}
+247  			b = readByte();
+248  		}
+249  	}
+250  	public int nextInt() {
+251  		long nl = nextLong();
+252  		if (nl < Integer.MIN_VALUE || nl > Integer.MAX_VALUE) throw new NumberFormatException();
+253  		return (int) nl;
+254  	}
+255  	public double nextDouble() { return Double.parseDouble(next());}
+256  	public char nextchar() {
+257  		try { return (char)System.in.read(); } catch(Exception e) {
+258  			throw new RuntimeException(e);
+259  		}
+260  	}
+261  }
+```
+
+
+**Question**: Is there information flow from `(minus,229)` to `(n,241)` in function `nextLong`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: nextLong
+Target source anchor: variable=n, line=241
+Trace source anchor: variable=minus, line=229
+Attached SPL owners: nextLong
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a read-modify-write update that reads its prior value: {'kind': 'variable_instance', 'variable': 'n', 'line': 241, 'reason': 'the target is a read-modify-write update that reads its prior value'}
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Set the long accumulator n to 0. RESULT n]
+- [COMMAND Enter an infinite loop. At the top of the loop, if b is in the inclusive ASCII digit range '0'..'9', update n = n * 10 + (b - '0'). RESULT n]
+- [COMMAND Read the first input byte b by calling readByte(). RESULT b]
+- [COMMAND If b equals the minus sign '-', set minus to true. RESULT minus]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 227: if (!hasNext()) throw new NoSuchElementException();
+- line 228: long n = 0;
+- line 229: boolean minus = false;
+- line 230: int b = readByte();
+- line 231: if (b == '-') {
+- line 232: minus = true;
+- line 233: b = readByte();
+- line 235: if (b < '0' || '9' < b) {
+- line 238: while(true){
+- line 239: if ('0' <= b && b <= '9') {
+- line 240: n *= 10;
+- line 241: n += b - '0';
+- line 247: b = readByte();
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 227, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control", "exit"], "source_identifiers": ["NoSuchElementException", "hasNext", "if", "new", "throw"]}
+- {"definitions": ["n"], "disposition": "inspect_against_official_dependence_definition", "line": 228, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["n"], "roles": ["definition"], "source_identifiers": ["long", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 229, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["boolean", "false", "minus"]}
+- {"definitions": ["b"], "disposition": "inspect_against_official_dependence_definition", "line": 230, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["b"], "roles": ["definition"], "source_identifiers": ["b", "int", "readByte"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 231, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["b"], "roles": ["use", "control"], "source_identifiers": ["b", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 232, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["minus", "true"]}
+- {"definitions": ["b"], "disposition": "inspect_against_official_dependence_definition", "line": 233, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["b"], "roles": ["definition"], "source_identifiers": ["b", "readByte"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 235, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["b"], "roles": ["use", "control"], "source_identifiers": ["b", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 238, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["true", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 239, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["b"], "roles": ["use", "control"], "source_identifiers": ["b", "if"]}
+- {"definitions": ["n"], "disposition": "inspect_against_official_dependence_definition", "line": 240, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["n"], "roles": ["definition"], "source_identifiers": ["n"]}
+- {"definitions": ["n"], "disposition": "inspect_against_official_dependence_definition", "line": 241, "position": "target", "reason": "target-chain seed", "relevant_identifiers": ["n", "b"], "roles": ["definition", "use"], "source_identifiers": ["b", "n"]}
+- {"definitions": ["b"], "disposition": "inspect_against_official_dependence_definition", "line": 247, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["b"], "roles": ["definition"], "source_identifiers": ["b", "readByte"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `nextLong`
+- source lines: 226-249
+- source signature: `public long nextLong() {`
+- source content hash: `299c6164d14e24bbd4ef260bd31164f205b8ec293cef0fac68b1cbdc3631c07d`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```java
+ 226   public long nextLong() {
+ 227    if (!hasNext()) throw new NoSuchElementException();
+ 228    long n = 0;
+ 229    boolean minus = false;
+ 230    int b = readByte();
+ 231    if (b == '-') {
+ 232     minus = true;
+ 233     b = readByte();
+ 234    }
+ 235    if (b < '0' || '9' < b) {
+ 236     throw new NumberFormatException();
+ 237    }
+ 238    while(true){
+ 239     if ('0' <= b && b <= '9') {
+ 240      n *= 10;
+ 241      n += b - '0';
+ 242     }else if(b == -1 || !isPrintableChar(b)){
+ 243      return minus ? -n : n;
+ 244     }else{
+ 245      throw new NumberFormatException();
+ 246     }
+ 247     b = readByte();
+ 248    }
+ 249   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Parses and returns the next long integer from the underlying input stream, applying an optional leading minus sign and terminating at end-of-input or a non-printable character." nextLong]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: long "The signed long value parsed from the input, returned when end-of-input or a non-printable delimiter is reached."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that an input element is available by calling hasNext(); if it returns false, throw NoSuchElementException. RESULT has_next]
+            [COMMAND Set the long accumulator n to 0. RESULT n]
+            [COMMAND Set the boolean sign flag minus to false. RESULT minus]
+            [COMMAND Read the first input byte b by calling readByte(). RESULT b]
+            [COMMAND If b equals the minus sign '-', set minus to true. RESULT minus]
+            [COMMAND If b equals the minus sign '-', read the next byte into b by calling readByte() after setting the sign. RESULT b]
+            [COMMAND If b is less than '0' or greater than '9', throw NumberFormatException. RESULT b]
+            [COMMAND Enter an infinite loop. At the top of the loop, if b is in the inclusive ASCII digit range '0'..'9', update n = n * 10 + (b - '0'). RESULT n]
+            [COMMAND Inside the infinite loop, if b is -1 or !isPrintableChar(b), return minus ? -n : n as the parsed long value. RESULT return_value]
+            [COMMAND Inside the infinite loop, after a digit branch, read the next byte into b by calling readByte() and continue the loop. RESULT b]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: hasNext() returns false]
+        [LOG "Attempted to read the next long when no input element is available."]
+        [THROW NoSuchElementException "Indicates that the input has no next element to read."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: After the optional leading minus sign, b is less than '0' or greater than '9'.]
+        [LOG "The first character of the token is not a decimal digit."]
+        [THROW NumberFormatException "Indicates that the input is not a valid long number."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Inside the infinite loop, b is a printable character that is not an ASCII digit and is not the end/terminator condition.]
+        [LOG "Encountered an invalid printable character while parsing the long number."]
+        [THROW NumberFormatException "Indicates that the numeric token contains an invalid character."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.
+
+
+SOURCE-CONTRACT RETRY. The previous answer omitted source-derived structural obligations. Recheck the numbered source and source-bound SPL card, then revise the complete answer. Do not blindly append an item if source verification contradicts it.
+
+Contract violations: [{"kind": "missing_required_variable_instance", "anchor": {"kind": "variable_instance", "variable": "n", "line": 241, "reason": "the target is a read-modify-write update that reads its prior value"}}]
+
+Previous answer:
+{"InformationFlow":false}
+
+Return only the exact JSON object required by the official task, with no prose or markdown.

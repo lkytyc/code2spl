@@ -1,0 +1,409 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include <stdio.h>
+2   #include <stdlib.h>
+3   int int_sort( const void * a , const void * b ) {
+4     if( *(int*)a < *(int*)b ) {
+5       return -1;
+6     } else if( *(int*)a == *(int*)b ) {
+7       return 0;
+8     }
+9     return 1;
+10  }
+11  int main(void) {
+12    int N;
+13    scanf("%d", &N);
+14    int A[100000];
+15    for(int i = 0; i < N; i++) {
+16      scanf("%d", &A[i]);
+17    }
+18    if(N == 2) {
+19      printf("%d\n", abs(A[0] - A[1]));
+20      return 0;
+21    }
+22    qsort((void*)A, N, sizeof(A[0]), int_sort);
+23    int B[100000];
+24    int pos = N / 2;
+25    int beg, end;
+26    int flag;
+27    int offset;
+28    B[pos] = A[0];
+29    beg = 1;
+30    end = N - 1;
+31    flag = 1;
+32    offset = 1;
+33    while(1) {
+34      if(flag == 1) {
+35        B[pos-offset] = A[end--];
+36        if(end < beg) break;
+37        B[pos+offset] = A[end--];
+38        if(end < beg) break;
+39        flag = 0;
+40      } else {
+41        B[pos-offset] = A[beg++];
+42        if(end < beg) break;
+43        B[pos+offset] = A[beg++];
+44        if(end < beg) break;
+45        flag = 1;
+46      }
+47      offset++;
+48    }
+49    int C[100000];
+50    C[pos] = A[N-1];
+51    beg = 0;
+52    end = N - 2;
+53    flag = 0;
+54    offset = 1;
+55    while(1) {
+56      if(flag == 1) {
+57        C[pos-offset] = A[end--];
+58        if(end < beg) break;
+59        C[pos+offset] = A[end--];
+60        if(end < beg) break;
+61        flag = 0;
+62      } else {
+63        C[pos-offset] = A[beg++];
+64        if(end < beg) break;
+65        C[pos+offset] = A[beg++];
+66        if(end < beg) break;
+67        flag = 1;
+68      }
+69      offset++;
+70    }
+71    long long int sumB = 0;
+72    for(int i = 1; i < N; i++) {
+73      sumB += abs(B[i-1] - B[i]);
+74    }
+75    long long int sumC = 0;
+76    for(int i = 1; i < N; i++) {
+77      sumC += abs(C[i-1] - C[i]);
+78    }
+79  #if 0
+80    printf("B[]=");
+81    for(int i = 0; i < N; i++) {
+82      printf("%d ", B[i]);
+83    }
+84    printf(": sum=%lld\n", sumB);
+85    printf("C[]=");
+86    for(int i = 0; i < N; i++) {
+87      printf("%d ", C[i]);
+88    }
+89    printf(": sum=%lld\n", sumC);
+90  #endif
+91    if(sumB < sumC)
+92      printf("%lld\n", sumC);
+93    else
+94      printf("%lld\n", sumB);
+95    return 0;
+96  }
+```
+
+
+**Question**: Which variable instances have information flow over `(A,16)` in function `main`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function main: Reads N and an array A, sorts A, constructs two symmetric zigzag arrangements B and C around the middle, computes their total adjacent absolute differences, and prints the larger sum (with N == 2 handled as a direct absolute-difference special case).
+It takes stdin (standard input stream) — Whitespace-separated integers: first N, then N integers to store in A. The code does not validate N; the general path is only well-defined for N at least 3 and at most 100000.
+It returns stdout (standard output stream) — For N == 2, prints abs(A[0] - A[1]) followed by a newline. Otherwise prints the larger of sumB and sumC followed by a newline.; exit_status (int) — Returns 0 after the selected path completes.
+The behaviour proceeds in this order:
+1. Declare integer N and integer array A of size 100000. Read one integer from standard input into N; if the read fails, N remains uninitialized. This produces N.
+2. For i from 0 to N-1 inclusive, read one integer from standard input into A[i]. No size validation is performed, so N must not exceed 100000 for safe access. This produces A.
+3. Test whether N equals 2. If true, follow the special-case alternative flow; if false, continue with the general path below. For N less than 2, the general path would access invalid array indices. This produces branch_condition.
+4. Sort the first N elements of A in place in ascending order using qsort with element size sizeof(A[0]) and comparator int_sort. This produces A.
+5. Declare integer array B of size 100000. Compute pos = N / 2. Store the sorted minimum A[0] into B[pos]. Initialize beg = 1, end = N - 1, flag = 1, offset = 1. This produces B.
+6. Run the first while loop, filling B symmetrically around pos. While true, if flag equals 1, consume from the end of the remaining sorted range: assign A[end--] to B[pos-offset], break if end < beg, then assign A[end--] to B[pos+offset], break if end < beg, and set flag to 0; otherwise consume from the beginning: assign A[beg++] to B[pos-offset], break if end < beg, then assign A[beg++] to B[pos+offset], break if end < beg, and set flag to 1. After each completed iteration, increment offset. Continue until a break occurs. This produces B.
+7. Declare integer array C of size 100000. Store the sorted maximum A[N-1] into C[pos]. Initialize beg = 0, end = N - 2, flag = 0, offset = 1. This produces C.
+8. Run the second while loop, filling C symmetrically around pos. While true, if flag equals 1, consume from the end of the remaining sorted range: assign A[end--] to C[pos-offset], break if end < beg, then assign A[end--] to C[pos+offset], break if end < beg, and set flag to 0; otherwise consume from the beginning: assign A[beg++] to C[pos-offset], break if end < beg, then assign A[beg++] to C[pos+offset], break if end < beg, and set flag to 1. After each completed iteration, increment offset. Continue until a break occurs. This produces C.
+9. Initialize sumB to 0. For i from 1 to N-1 inclusive, add abs(B[i-1] - B[i]) to sumB. This produces sumB.
+10. Initialize sumC to 0. For i from 1 to N-1 inclusive, add abs(C[i-1] - C[i]) to sumC. This produces sumC.
+11. Skip the preprocessor-disabled #if 0 debug printing block. Compare sumB and sumC; if sumB < sumC, print sumC followed by a newline, otherwise print sumB followed by a newline. This produces final_output.
+12. Return 0 from main. This produces exit_status.
+If N equals 2:
+  - Compute the absolute difference between A[0] and A[1]. This produces special_difference.
+  - Print special_difference as an integer followed by a newline. This produces special_output.
+  - Return 0 from main, skipping all remaining code. This produces exit_status.

@@ -1,0 +1,111 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `KappaCalculator.kappa`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Compute Cohen's kappa coefficient from an input matrix-like dataset by summing diagonal agreement, deriving marginal totals, and normalizing observed versus expected agreement." kappa]
+    [INPUTS]
+        <REF> testData </REF>: matrix_like_numeric_data "Numeric input data that can be converted into a NumPy matrix and whose entries are used to compute agreement statistics."
+        <REF> k </REF>: integer "Number of leading diagonal positions to include when summing observed agreement, iterating from 0 up to but not including k."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cohens_coefficient </REF>: float "The computed Cohen's kappa coefficient derived from observed agreement and expected agreement."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert testData into a NumPy matrix and store it as dataMat. RESULT dataMat]
+            [COMMAND Initialize P0 to the floating-point constant 0.0 as the accumulator for diagonal agreement. RESULT P0]
+            [COMMAND For each integer i from 0 up to but not including k, add dataMat[i, i] multiplied by 1.0 to P0. RESULT P0]
+            [COMMAND Compute xsum as the sum of dataMat along axis 1 to obtain row-wise totals. RESULT xsum]
+            [COMMAND Compute ysum as the sum of dataMat along axis 0 to obtain column-wise totals. RESULT ysum]
+            [COMMAND Compute sum as the total sum of all elements in dataMat. RESULT sum]
+            [COMMAND Compute Pe as float(ysum * xsum) divided by sum and then divided by sum again. RESULT Pe]
+            [COMMAND Normalize P0 by reassigning it to float(P0 divided by sum multiplied by 1.0). RESULT P0]
+            [COMMAND Compute cohens_coefficient as float((P0 - Pe) divided by (1 - Pe)). RESULT cohens_coefficient]
+            [COMMAND Return cohens_coefficient. RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If k is 0, the diagonal accumulation loop executes zero times.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave P0 at its initialized value 0.0 before the later normalization step. RESULT P0]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `KappaCalculator.fleiss_kappa`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Compute Fleiss' kappa from rating count data by converting the input to a float matrix, aggregating observed agreement across rows, estimating chance agreement from column totals, and returning the final scalar kappa value." fleiss_kappa]
+    [INPUTS]
+        <REF> testData </REF>: matrix_like "Input rating count data that is converted into a NumPy float matrix for computation."
+        <REF> N </REF>: integer "Number of rows to iterate over when computing observed agreement."
+        <REF> k </REF>: integer "Number of categories or columns used for inner-loop iteration and one-vector allocation."
+        <REF> n </REF>: numeric "Per-row rating count used to normalize each row agreement contribution."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ans[0, 0] </REF>: numeric "The scalar Fleiss' kappa value extracted from the 1x1 matrix result."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert testData into a NumPy matrix of float values and store it as dataMat. RESULT dataMat]
+            [COMMAND Create oneMat as a k by 1 matrix of ones. RESULT oneMat]
+            [COMMAND Initialize the total element accumulator sum to 0.0 and initialize the observed agreement accumulator P0 to 0.0. RESULT sum, P0]
+            [COMMAND For each row index i from 0 to N - 1, initialize temp to 0.0, then within that outer loop for each column index j from 0 to k - 1 add dataMat[i, j] to sum and add 1.0 multiplied by dataMat[i, j] squared to temp, then after the inner loop subtract n from temp, divide temp by (n - 1) * n, and add the normalized temp to P0. RESULT sum, P0]
+            [COMMAND Normalize P0 by reassigning it to 1.0 multiplied by P0 divided by N. RESULT P0]
+            [COMMAND Compute ysum as the column-wise sum of dataMat along axis 0. RESULT ysum]
+            [COMMAND For each column index i from 0 to k - 1, replace ysum[0, i] with the square of ysum[0, i] divided by sum. RESULT ysum]
+            [COMMAND Compute Pe as ysum multiplied by oneMat and then multiplied by 1.0. RESULT Pe]
+            [COMMAND Compute ans as (P0 - Pe) divided by (1 - Pe). RESULT ans]
+            [COMMAND Return the scalar value at ans[0, 0]. RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+

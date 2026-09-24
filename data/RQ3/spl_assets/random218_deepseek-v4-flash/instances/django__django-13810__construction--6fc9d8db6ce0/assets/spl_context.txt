@@ -1,0 +1,285 @@
+# FILE: django/core/handlers/base.py
+# CLASS BaseHandler
+
+[DEFINE_WORKER: "Loads middleware from settings.MIDDLEWARE in reverse order, adapts sync/async handlers, registers available hooks, and assigns the finalized middleware chain." load_middleware]
+    [INPUTS]
+        <REF> is_async </REF>: boolean "Whether the top-level handler should be asynchronous; selects the initial get_response and the final handler adaptation mode."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Reset middleware hook storage by assigning self._view_middleware, self._template_response_middleware, and self._exception_middleware to empty lists. RESULT middleware_lists_initialized]
+            [COMMAND Select get_response as self._get_response_async if is_async is truthy, otherwise as self._get_response. RESULT get_response]
+            [COMMAND Initialize handler as convert_exception_to_response(get_response) and set handler_is_async to the original is_async value. RESULT handler_initialized]
+            [COMMAND Loop over each middleware_path in reversed(settings.MIDDLEWARE); import the middleware with import_string(middleware_path), then read middleware_can_sync with default True and middleware_can_async with default False. RESULT middleware_flags]
+            [COMMAND Within the reversed middleware loop, validate that the middleware has at least one capability; if not, this is a RuntimeError failure. Otherwise, choose middleware_is_async as False when handler_is_async is False and middleware_can_sync is True, and as middleware_can_async in all remaining cases. RESULT middleware_is_async]
+            [COMMAND Within the reversed middleware loop, in the normal path, adapt the current handler by calling self.adapt_method_mode(middleware_is_async, handler, handler_is_async, debug=settings.DEBUG, name='middleware ' + middleware_path), then instantiate the middleware with mw_instance = middleware(handler). RESULT mw_instance]
+            [COMMAND Within the reversed middleware loop, after instantiation, check that mw_instance is not None; a None value is an ImproperlyConfigured failure. RESULT mw_instance_checked]
+            [COMMAND Within the reversed middleware loop, if mw_instance has a process_view attribute, insert self.adapt_method_mode(is_async, mw_instance.process_view) at index 0 of self._view_middleware. RESULT self._view_middleware]
+            [COMMAND Within the reversed middleware loop, if mw_instance has a process_template_response attribute, append self.adapt_method_mode(is_async, mw_instance.process_template_response) to self._template_response_middleware. RESULT self._template_response_middleware]
+            [COMMAND Within the reversed middleware loop, if mw_instance has a process_exception attribute, append self.adapt_method_mode(False, mw_instance.process_exception) to self._exception_middleware. RESULT self._exception_middleware]
+            [COMMAND Within the reversed middleware loop, replace handler with convert_exception_to_response(mw_instance) and set handler_is_async to middleware_is_async. RESULT handler_updated]
+            [COMMAND After the loop finishes, adapt the top of the stack by setting handler = self.adapt_method_mode(is_async, handler, handler_is_async). RESULT adapted_handler]
+            [COMMAND Assign the final handler to self._middleware_chain to mark initialization complete. RESULT self._middleware_chain]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the reversed middleware loop, self.adapt_method_mode(...) or middleware(handler) raises MiddlewareNotUsed.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If settings.DEBUG is true, log the skipped middleware via logger.debug, including the exception string when str(exc) is nonempty and otherwise logging only the middleware path. RESULT debug_log_written]
+            [COMMAND Continue to the next middleware_path without registering hooks or updating handler_is_async; any adapted handler value produced before the exception remains in place. RESULT continue_to_next_middleware]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within the reversed middleware loop, middleware_can_sync is False and middleware_can_async is False.]
+        [LOG "Middleware {middleware_path} must have at least one of sync_capable/async_capable set to True."]
+        [THROW RuntimeError "Raised when a middleware declares neither synchronous nor asynchronous capability."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the reversed middleware loop, mw_instance is None after middleware(handler) returns.]
+        [LOG "Middleware factory {middleware_path} returned None."]
+        [THROW ImproperlyConfigured "Raised when a middleware factory returns None instead of a middleware instance."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adapts a method to the calling context by wrapping sync methods with sync_to_async in async contexts, wrapping async methods with async_to_sync in sync contexts, and returning the original method when the modes match." adapt_method_mode]
+    [INPUTS]
+        <REF> is_async </REF>: bool "Whether the calling context is asynchronous; controls whether a sync method should be wrapped with sync_to_async."
+        <REF> method </REF>: Callable "The method or callable to adapt."
+        <REF> method_is_async </REF>: Optional[bool] "Optional flag indicating whether method is a coroutine function; if None, it is computed with asyncio.iscoroutinefunction(method)."
+        <REF> debug </REF>: bool "When truthy, enables debug logging of the adaptation decision."
+        <REF> name </REF>: Optional[str] "Optional display name used in debug logs; if falsy while debug is truthy, it is generated from method.__qualname__."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Callable "The adapted method: sync_to_async(method, thread_sensitive=True) for sync methods in async contexts, async_to_sync(method) for async methods in sync contexts, or the original method when the modes match."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If method_is_async is None, set method_is_async to the result of asyncio.iscoroutinefunction(method). RESULT method_is_async]
+            [COMMAND If debug is truthy and name is falsy, set name to the string 'method %s()' formatted with method.__qualname__. RESULT name]
+            [COMMAND When the calling context and method type match, return the original method unchanged. RESULT method]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_async is truthy and method_is_async is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If debug is truthy, log 'Synchronous %s adapted.' with the resolved name. RESULT log_message]
+            [COMMAND Return sync_to_async(method, thread_sensitive=True). RESULT adapted_method]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: is_async is falsy and method_is_async is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If debug is truthy, log 'Asynchronous %s adapted.' with the resolved name. RESULT log_message]
+            [COMMAND Return async_to_sync(method). RESULT adapted_method]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Configures the default URL resolver, processes the request through the middleware chain, registers request.close as a resource closer, logs responses with status codes 400 or greater, and returns the resulting HTTP response." get_response]
+    [INPUTS]
+        <REF> self </REF>: object "Object instance providing access to _middleware_chain and settings."
+        <REF> request </REF>: HttpRequest "Incoming HTTP request to process."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponse "HTTP response returned by the middleware chain after close callback registration and optional error logging."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set the default URL resolver for this thread using settings.ROOT_URLCONF via set_urlconf. RESULT urlconf_configured]
+            [COMMAND Call self._middleware_chain(request) and assign the returned HttpResponse object to response. RESULT response]
+            [COMMAND Append request.close to response._resource_closers so the request is closed when the response resources are closed. RESULT response]
+            [COMMAND If response.status_code is greater than or equal to 400 (inclusive), call log_response('%s: %s', response.reason_phrase, request.path, response=response, request=request). RESULT logging_completed]
+            [COMMAND Return response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the request callback, applies view middleware, invokes the view with exception-middleware fallback, validates the response, applies template-response middleware, and renders deferred responses." _get_response]
+    [INPUTS]
+        <REF> request </REF>: object "Incoming HTTP request object used throughout middleware and view invocation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: object "Final HTTP response, either generated by middleware, the view, exception middleware, or rendered template response."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize response to None. RESULT response]
+            [COMMAND Resolve callback, callback_args, and callback_kwargs by calling self.resolve_request(request). RESULT callback, callback_args, callback_kwargs]
+            [COMMAND For each middleware_method in self._view_middleware, call middleware_method(request, callback, callback_args, callback_kwargs), assign the result to response, and if response is truthy break out of the loop. RESULT response]
+            [COMMAND If response is None, wrap callback using self.make_view_atomic(callback); if asyncio.iscoroutinefunction(wrapped_callback) is true, replace wrapped_callback with async_to_sync(wrapped_callback). RESULT wrapped_callback]
+            [COMMAND Within the same if response is None branch, call wrapped_callback(request, *callback_args, **callback_kwargs) inside a try block and assign the returned value to response. RESULT response]
+            [COMMAND After the view invocation branch, call self.check_response(response, callback) to reject a None response from the view. RESULT response]
+            [COMMAND If hasattr(response, 'render') and callable(response.render), iterate over self._template_response_middleware; for each middleware_method call middleware_method(request, response), assign the result to response, and validate it with self.check_response(response, middleware_method, name=middleware_method.__self__.__class__.__name__ + '.process_template_response'). RESULT response]
+            [COMMAND Within the same renderable-response branch, call response.render() inside a try block and assign the rendered value to response. RESULT response]
+            [COMMAND Return the final response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: A view middleware returns a truthy response before the list is exhausted.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Break out of the view middleware loop and retain the truthy response as the current response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After the view middleware loop, response is not None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the view invocation branch and proceed directly to self.check_response(response, callback). RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The view callback raises an Exception, and process_exception_by_middleware(e, request) returns a non-None response.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the exception, set response to the value returned by self.process_exception_by_middleware(e, request), and continue with template-response processing if applicable. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: response.render() raises an Exception, and process_exception_by_middleware(e, request) returns a non-None response.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the exception, set response to the value returned by self.process_exception_by_middleware(e, request), and continue after the render try block. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The view callback raises an Exception, and process_exception_by_middleware(e, request) returns None.]
+        [LOG "View callback raised an exception and exception middleware did not return a fallback response; re-raising the original exception."]
+        [THROW Exception "Re-raises the original exception caught from the view callback because no exception middleware produced a response."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: response.render() raises an Exception, and process_exception_by_middleware(e, request) returns None.]
+        [LOG "Response rendering raised an exception and exception middleware did not return a fallback response; re-raising the original exception."]
+        [THROW Exception "Re-raises the original exception caught from response.render() because no exception middleware produced a response."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves or sets the URLconf for the request, resolves the request path against it, stores the resulting ResolverMatch on the request, and returns it." resolve_request]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The request object carrying an optional urlconf attribute and the path_info to be resolved."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> resolver_match </REF>: ResolverMatch "The object returned by resolver.resolve(request.path_info), containing the resolved view, args, and kwargs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the resolver to use: if request has a 'urlconf' attribute, set urlconf to request.urlconf, call set_urlconf(urlconf), and assign get_resolver(urlconf) to resolver; otherwise assign get_resolver() to resolver. RESULT resolver]
+            [COMMAND Resolve request.path_info by calling resolver.resolve(request.path_info) and assign the returned value to resolver_match. RESULT resolver_match]
+            [COMMAND Assign resolver_match to request.resolver_match. RESULT request.resolver_match]
+            [COMMAND Return resolver_match. RESULT resolver_match]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a view response and raises a descriptive ValueError if the response is None or an unawaited coroutine, while returning silently for any other response." check_response]
+    [INPUTS]
+        <REF> self </REF>: object "The bound method receiver; not used directly by the validation logic."
+        <REF> response </REF>: Any "The view response value to validate; may be None, an asyncio coroutine, or an HttpResponse-like object."
+        <REF> callback </REF>: Callable "The view callable used to construct a display name when name is not supplied."
+        <REF> name </REF>: Optional[str] "The display name for the view. If falsy, a name is derived from callback."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: NoneType "Returns None when response is neither None nor an asyncio coroutine."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the early-return guard: if response is not None and asyncio.iscoroutine(response) is False, branch to the early-return alternative flow. RESULT guard_result]
+            [COMMAND If name is falsy, derive a display name from callback; if isinstance(callback, types.FunctionType), set name to 'The view {callback.__module__}.{callback.__name__}', otherwise set name to 'The view {callback.__module__}.{callback.__class__.__name__}.__call__'. RESULT view_name]
+            [COMMAND Select the exception path based on response: use the None-response exception flow if response is None; otherwise use the unawaited-coroutine exception flow. RESULT error_branch]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: response is not None and asyncio.iscoroutine(response) is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return from check_response immediately without naming the view or raising an error. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: response is None]
+        [LOG "Raise ValueError: '<view_name> didn't return an HttpResponse object. It returned None instead.'"]
+        [THROW ValueError "The view returned None instead of an HttpResponse object."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: response is not None and asyncio.iscoroutine(response) is True]
+        [LOG "Raise ValueError: '<view_name> didn't return an HttpResponse object. It returned an unawaited coroutine instead. You may need to add an 'await' into your view.'"]
+        [THROW ValueError "The view returned an unawaited coroutine instead of an HttpResponse object."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Wraps a synchronous view function with transaction.atomic decorators for every database connection that has atomic requests enabled and is not excluded, while raising RuntimeError if the view is an async coroutine function." make_view_atomic]
+    [INPUTS]
+        <REF> self </REF>: object "The bound method receiver; not directly used in the method body."
+        <REF> view </REF>: callable "The view function to inspect and wrap with atomic transaction support."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: callable "The original view or a view wrapped once for each eligible database connection."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the attribute '_non_atomic_requests' from the view object, or use a new empty set if the attribute does not exist, and assign the result to non_atomic_requests. RESULT non_atomic_requests]
+            [COMMAND For each database connection db in connections.all(), when db.settings_dict['ATOMIC_REQUESTS'] is truthy and db.alias is not in non_atomic_requests, if view is an async coroutine function, raise RuntimeError; otherwise replace view with transaction.atomic(using=db.alias)(view) so the view is wrapped for that database. RESULT view]
+            [COMMAND Return the final view after all eligible database connections have been processed. RESULT view]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During the loop, view is an async coroutine function and the current database has ATOMIC_REQUESTS enabled and is not excluded via non_atomic_requests.]
+        [LOG "You cannot use ATOMIC_REQUESTS with async views."]
+        [THROW RuntimeError "Raised to reject asynchronous views because ATOMIC_REQUESTS is not supported with async views."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates through exception middleware methods and returns the first truthy response produced for the exception and request, otherwise returns None." process_exception_by_middleware]
+    [INPUTS]
+        <REF> exception </REF>: Exception "The exception being processed."
+        <REF> request </REF>: HttpRequest "The request associated with the exception."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: object or null "The first truthy response returned by an exception middleware method, or None if no middleware returns a truthy response."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each middleware_method in self._exception_middleware, call middleware_method(request, exception) and assign the result to response. RESULT response]
+            [COMMAND Within the loop over exception middleware, if response is truthy, return response immediately. RESULT response]
+            [COMMAND After the loop finishes without returning, return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resets the URLconf after each request is finished by calling set_urlconf with None, clearing the active URLconf so the system falls back to settings.ROOT_URLCONF." reset_urlconf]
+    [INPUTS]
+        <REF> sender </REF>: object "Django signal sender; unused by this method."
+        <REF> kwargs </REF>: dict "Django signal keyword arguments; unused by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND After each request is finished, reset the active URLconf by calling set_urlconf with None, storing the sentinel value in the current thread's URLconf so the default settings.ROOT_URLCONF is used later. RESULT current_thread_urlconf]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

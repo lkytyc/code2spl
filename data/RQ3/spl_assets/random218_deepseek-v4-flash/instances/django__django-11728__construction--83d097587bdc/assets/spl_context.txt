@@ -1,0 +1,244 @@
+# FILE: django/contrib/admindocs/utils.py
+[DEFINE_WORKER: "Builds a dotted view name by combining a callable's module name with its qualified name, using its class name as the name component when __qualname__ is unavailable." get_view_name]
+    [INPUTS]
+        <REF> view_func </REF>: callable "The function, method, or callable object to inspect. It must provide __module__ and may or may not provide __qualname__."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "A dotted view name in the form '<module>.<qualname>', or '<module>.<class_name>' when __qualname__ is absent."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read view_func.__module__ and store the resulting module name in mod_name. RESULT mod_name]
+            [COMMAND Read view_func.__qualname__ and store it in view_name. RESULT view_name]
+            [COMMAND Concatenate mod_name, '.', and view_name, and return the resulting string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: view_func does not expose the __qualname__ attribute]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read view_func.__class__.__name__ and store it in view_name as the fallback name. RESULT view_name]
+            [COMMAND Concatenate mod_name, '.', and view_name, and return the resulting string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Trim a docstring by normalizing whitespace, removing common indentation, and stripping surrounding blank space." trim_docstring]
+    [INPUTS]
+        <REF> docstring </REF>: str | None "The docstring to trim; may be None, empty, or whitespace-only."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "The trimmed docstring, or an empty string if the input is absent, empty, or whitespace-only."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert tabs in docstring to spaces and split the result into a list of individual lines. RESULT lines]
+            [COMMAND Compute the minimum number of leading spaces among all non-whitespace-only lines, ignoring lines whose stripped content is empty. RESULT indent]
+            [COMMAND Build a cleaned line list: fully left-strip the first line, then for each remaining line remove the common indentation from the front and rstrip trailing whitespace. RESULT trimmed]
+            [COMMAND Join the cleaned lines with newline characters and strip leading/trailing whitespace from the complete joined string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The short-circuit guard is true: docstring is falsy, or docstring.strip() returns an empty string.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty string immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a docstring, splits it into paragraphs on blank lines, treats the first paragraph as the title, and optionally parses the last paragraph as email headers to separate body text from metadata." parse_docstring]
+    [INPUTS]
+        <REF> docstring </REF>: string "The raw docstring text to parse."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (title, body, metadata) containing the parsed docstring title, body text, and metadata dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the input docstring by passing it to trim_docstring. RESULT docstring]
+            [COMMAND Split the normalized docstring on runs of two or more newline characters (blank lines). RESULT parts]
+            [COMMAND Set title to the first element of the parts list. RESULT title]
+            [COMMAND Determine the number of elements in the parts list. RESULT part_count]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: part_count == 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set body to an empty string. RESULT body]
+            [COMMAND Set metadata to an empty dictionary. RESULT metadata]
+            [COMMAND Return title, body, and metadata. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: part_count > 1 and parsing parts[-1] with HeaderParser().parsestr raises HeaderParseError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a HeaderParser instance and assign it to parser. RESULT parser]
+            [COMMAND Because parser.parsestr(parts[-1]) raised HeaderParseError, set metadata to an empty dictionary. RESULT metadata]
+            [COMMAND Set body to the remaining parts after the title joined by two newline characters (parts[1:]). RESULT body]
+            [COMMAND Return title, body, and metadata. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: part_count > 1 and parsing parts[-1] with HeaderParser().parsestr succeeds and produces non-empty metadata]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a HeaderParser instance and assign it to parser. RESULT parser]
+            [COMMAND Parse parts[-1] with parser.parsestr and assign the parsed headers to metadata. RESULT metadata]
+            [COMMAND Convert metadata to a plain dictionary using dict(metadata.items()). RESULT metadata]
+            [COMMAND Set body to the middle parts between the title and the parsed metadata section, joined by two newline characters (parts[1:-1]). RESULT body]
+            [COMMAND Return title, body, and metadata. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: part_count > 1 and parsing parts[-1] with HeaderParser().parsestr succeeds and produces empty metadata]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a HeaderParser instance and assign it to parser. RESULT parser]
+            [COMMAND Parse parts[-1] with parser.parsestr and assign the parsed headers to metadata. RESULT metadata]
+            [COMMAND Convert metadata to a plain dictionary using dict(metadata.items()), yielding an empty metadata dictionary. RESULT metadata]
+            [COMMAND Set body to the remaining parts after the title joined by two newline characters (parts[1:]). RESULT body]
+            [COMMAND Return title, body, and metadata. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a reST string into an XHTML fragment using Docutils with custom settings, a cmsreference default role, and an optional wrapped source path." parse_rst]
+    [INPUTS]
+        <REF> text </REF>: string "The reST source string to convert to an XHTML fragment."
+        <REF> default_reference_context </REF>: string "The reST reference context used as the Docutils default_reference_context setting."
+        <REF> thing_being_parsed </REF>: optional string "Optional source path label; if truthy, it is wrapped in angle brackets and passed as source_path to Docutils."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The XHTML fragment produced by Docutils, marked safe for Django template rendering."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create overrides with doctitle_xform set to True, initial_header_level set to 3, default_reference_context set to the default_reference_context argument, link_base set to reverse('django-admindocs-docroot').rstrip('/'), raw_enabled set to False, and file_insertion_enabled set to False. RESULT overrides]
+            [COMMAND Apply the short-circuit expression thing_being_parsed and '<%s>' % thing_being_parsed so that if thing_being_parsed is truthy it becomes the original value wrapped in angle brackets, and if it is falsy it remains unchanged. RESULT thing_being_parsed]
+            [COMMAND Define source as the reST template that sets the default role to cmsreference, contains a %s placeholder for text, and resets the default role afterwards. RESULT source]
+            [COMMAND Call docutils.core.publish_parts with source % text as the reST source, thing_being_parsed as source_path, None as destination_path, 'html' as writer_name, and overrides as settings_overrides. RESULT parts]
+            [COMMAND Return mark_safe(parts['fragment']). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and registers a Docutils canonical role that transforms inline text into a hyperlink whose URL is built from a configurable base URL, the document link base, and the lowercase text." create_reference_role]
+    [INPUTS]
+        <REF> rolename </REF>: str "The name of the custom Docutils role to register."
+        <REF> urlbase </REF>: str "A format string used to construct the reference URL; it is formatted with (inliner.document.settings.link_base, text.lower())."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "The function returns None; it registers the role handler with docutils.parsers.rst.roles as a side effect."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested role handler function _role with parameters name, rawtext, text, lineno, inliner, options=None, and content=None, closing over urlbase from the enclosing scope. RESULT _role]
+            [COMMAND Inside _role, if options is None, set options to an empty dictionary. RESULT options]
+            [COMMAND Inside _role, compute refuri by formatting urlbase with inliner.document.settings.link_base as the first substitution value and text.lower() as the second substitution value. RESULT refuri]
+            [COMMAND Inside _role, create a docutils.nodes.reference node with rawtext and text as positional arguments, refuri as the refuri keyword argument, and the entries of options expanded as additional keyword attributes. RESULT node]
+            [COMMAND Inside _role, return the standard Docutils role result tuple ([node], []), where the first element is the node list and the second is an empty system message list. RESULT role_result]
+            [COMMAND Register _role as the canonical role named rolename by calling docutils.parsers.rst.roles.register_canonical_role(rolename, _role). RESULT registration]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a docutils reference node for a default reference role by deriving a refuri from a context-specific format string and returns the node with an empty message list." default_reference_role]
+    [INPUTS]
+        <REF> name </REF>: str "The local role name for which this role function is invoked."
+        <REF> rawtext </REF>: str "The raw text of the role markup as it appears in the source."
+        <REF> text </REF>: str "The processed role text; used as the link text and, lowercased, in the refuri."
+        <REF> lineno </REF>: int "The source line number of the role; accepted but not used."
+        <REF> inliner </REF>: docutils.parsers.rst.states.Inliner "The inliner whose document settings supply default_reference_context and link_base."
+        <REF> options </REF>: dict "Optional keyword arguments for the reference node; defaults to None and is replaced with an empty dictionary."
+        <REF> content </REF>: list "Additional content for the role; accepted but not used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple containing a one-element list with the constructed docutils reference node and an empty message list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If options is None, set options to an empty dictionary; otherwise keep the supplied options. RESULT options]
+            [COMMAND Read inliner.document.settings.default_reference_context and assign the value to context. RESULT context]
+            [COMMAND Look up ROLES[context], treat it as a format string, and format it with inliner.document.settings.link_base and text.lower() as the two substitution values, storing the result as refuri. RESULT refuri]
+            [COMMAND Construct a docutils.nodes.reference node using rawtext, text, refuri, and the keyword arguments unpacked from options, and assign it to node. RESULT node]
+            [COMMAND Return the tuple ([node], []). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Finds named capture groups in a regex pattern and replaces each full named-group expression with its group name, leaving all other regex content unchanged." replace_named_groups]
+    [INPUTS]
+        <REF> pattern </REF>: string "The regular expression pattern whose named capture groups are to be replaced."
+        <REF> named_group_matcher </REF>: compiled regular expression "External compiled regex dependency used to locate named group declarations; it is not a formal parameter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The transformed regular expression pattern after named capture group subpatterns have been replaced by their group names."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Use the external named_group_matcher.finditer(pattern) to find every named capture group declaration in order, collecting (m.start(0), m.end(0), m.group(1)) tuples into named_group_indices. RESULT named_group_indices]
+            [COMMAND Initialize group_pattern_and_name as an empty list to accumulate (full named group pattern, group name) pairs. RESULT group_pattern_and_name]
+            [COMMAND For each (start, end, group_name) in named_group_indices, initialize unmatched_open_brackets to 1 and prev_char to None before scanning pattern[end:]. RESULT bracket_scan_state]
+            [COMMAND Within that named-group loop, scan pattern[end:] using enumerate to get idx and val for each character, and at the beginning of each scan iteration check whether unmatched_open_brackets equals 0. RESULT scan_state]
+            [COMMAND Within that scan, if unmatched_open_brackets is 0, append (pattern[start:end + idx], group_name) to group_pattern_and_name and break out of the scan loop. RESULT group_pattern_and_name]
+            [COMMAND Within that scan, before updating prev_char, increment unmatched_open_brackets when val is '(' and prev_char is not a backslash, decrement it when val is ')' and prev_char is not a backslash, and otherwise leave the counter unchanged; then set prev_char to val. RESULT bracket_scan_state]
+            [COMMAND After the outer loop finishes, sequentially iterate over each (group_pattern, group_name) pair in group_pattern_and_name, replace every occurrence of group_pattern in pattern with group_name using literal string replacement, and update pattern immediately after each replacement. RESULT pattern]
+            [COMMAND Return the final pattern. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The inner scan loop over pattern[end:] reaches the end of the string without ever observing unmatched_open_brackets == 0 at the top of an iteration, for example when the named group's closing ')' is the final character of pattern.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not append a tuple for that named group; continue with the next triple in named_group_indices. RESULT group_pattern_and_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Finds unnamed capture groups in a regex pattern and attempts to replace the recorded outermost groups with '<var>', returning the original pattern when no such groups are recorded." replace_unnamed_groups]
+    [INPUTS]
+        <REF> pattern </REF>: string "The regex pattern string to inspect and transform."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The transformed regex pattern, or the original pattern if no unnamed groups were recorded."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Use the precompiled unnamed_group_matcher to iterate over all matches in pattern and collect m.start(0) for each match into unnamed_group_indices. RESULT unnamed_group_indices]
+            [COMMAND Initialize group_indices as an empty list. RESULT group_indices]
+            [COMMAND For each start in unnamed_group_indices, scan pattern[start + 1:] with unmatched_open_brackets initialized to 1 and prev_char initialized to None. At the beginning of each iteration, if unmatched_open_brackets equals 0, append (start, start + 1 + idx) to group_indices and break. Otherwise, increment unmatched_open_brackets on an unescaped '(', decrement it on an unescaped ')', then set prev_char to the current character. This records a group span only when there is a character after the matching closing parenthesis. RESULT group_indices]
+            [COMMAND Initialize group_start_end_indices as an empty list and prev_end as None. RESULT group_start_end_indices]
+            [COMMAND For each (start, end) in group_indices, evaluate the condition (prev_end and start > prev_end) or not prev_end. If it is true, append (start, end) to group_start_end_indices. Then assign prev_end = end unconditionally. RESULT group_start_end_indices]
+            [COMMAND When group_start_end_indices is non-empty, initialize final_pattern as an empty list and prev_end as None. RESULT final_pattern]
+            [COMMAND Within the loop over each (start, end) in group_start_end_indices, if prev_end is truthy append pattern[prev_end:start] to final_pattern. Then append pattern[:start] + '<var>' to final_pattern, and set prev_end = end. RESULT final_pattern]
+            [COMMAND After the loop, append pattern[prev_end:] to final_pattern. RESULT final_pattern]
+            [COMMAND Return the result of joining final_pattern into a single string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: group_start_end_indices is empty.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the original pattern unchanged. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

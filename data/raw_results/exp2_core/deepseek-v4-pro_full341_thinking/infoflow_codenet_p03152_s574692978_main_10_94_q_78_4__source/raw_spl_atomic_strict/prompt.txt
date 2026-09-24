@@ -1,0 +1,628 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include<stdio.h>
+2   #include<math.h>
+3   int min(int a, int b)
+4   {
+5       if (a < b)
+6           return a;
+7       else
+8           return b;
+9   }
+10  int main()
+11  {
+12      int n, m;
+13      scanf("%d %d", &n, &m);
+14      int a[1003], b[1003];
+15      int i;
+16      for (i = 0; i < n; i++)
+17          scanf("%d", &a[i]);
+18      for (i = 0; i < m; i++)
+19          scanf("%d", &b[i]);
+20      int x;
+21      for(i=0;i<n-1;i++)
+22          if (a[i] <= a[i + 1])
+23          {
+24              if (a[i] == a[i + 1])
+25              {
+26                  printf("0\n");
+27                  return 0;
+28              }
+29              x = a[i];
+30              a[i] = a[i + 1];
+31              a[i + 1] = x;
+32              if (i > 0)
+33                  i -= 2;
+34          }
+35      for(i=0;i<m-1;i++)
+36          if (b[i] <= b[i + 1])
+37          {
+38              if (b[i] == b[i + 1])
+39              {
+40                  printf("0\n");
+41                  return 0;
+42              }
+43              x = b[i];
+44              b[i] = b[i + 1];
+45              b[i + 1] = x;
+46              if (i > 0)
+47                  i -= 2;
+48          }
+49      int p = 1000000007;
+50      double ans = 1;
+51      int k = 0;
+52      int y;
+53      int j;
+54      int q;
+55      for (i = n * m; i >= min(a[n - 1], b[m - 1]); i--)
+56      {
+57          x = y = q = 0;
+58          j = 0;
+59          while (a[j] > i)
+60          {
+61              j++;
+62              x++;
+63          }
+64          if (a[j] == i)
+65          {
+66              x = 1;
+67              q++;
+68          }
+69          j = 0;
+70          while (b[j] > i)
+71          {
+72              y++;
+73              j++;
+74          }
+75          if (b[j] == i)
+76          {
+77              y = 1;
+78              q++;
+79          }
+80          if (q==0)
+81              ans *= x * y - k;
+82          else
+83              ans *= x * y;
+84          ans = round(fmod(ans, p));
+85          k++;
+86      }
+87      for (j = 0; j < i; j++)
+88      {
+89          ans *= j + 1;
+90          ans = round(fmod(ans, p));
+91      }
+92      printf("%.0lf\n", round(ans));
+93      return 0;
+94  }
+```
+
+
+**Question**: Which variable instances have information flow over `(q,78)` in function `main`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: main
+Target source anchor: variable=q, line=78
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a read-modify-write update that reads its prior value: {'kind': 'variable_instance', 'variable': 'q', 'line': 78, 'reason': 'the target is a read-modify-write update that reads its prior value'}
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Set p = 1000000007, ans = 1.0, k = 0, and declare integer variables y, j, and q. RESULT p,ans,k,y,j,q]
+- [COMMAND Within the descending loop, set x, y, and q to 0 and set j to 0. RESULT x,y,q,j]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 16: for (i = 0; i < n; i++)
+- line 18: for (i = 0; i < m; i++)
+- line 21: for(i=0;i<n-1;i++)
+- line 22: if (a[i] <= a[i + 1])
+- line 24: if (a[i] == a[i + 1])
+- line 29: x = a[i];
+- line 30: a[i] = a[i + 1];
+- line 31: a[i + 1] = x;
+- line 32: if (i > 0)
+- line 33: i -= 2;
+- line 35: for(i=0;i<m-1;i++)
+- line 36: if (b[i] <= b[i + 1])
+- line 38: if (b[i] == b[i + 1])
+- line 43: x = b[i];
+- line 44: b[i] = b[i + 1];
+- line 45: b[i + 1] = x;
+- line 46: if (i > 0)
+- line 47: i -= 2;
+- line 49: int p = 1000000007;
+- line 50: double ans = 1;
+- line 51: int k = 0;
+- line 55: for (i = n * m; i >= min(a[n - 1], b[m - 1]); i--)
+- line 57: x = y = q = 0;
+- line 58: j = 0;
+- line 59: while (a[j] > i)
+- line 61: j++;
+- line 62: x++;
+- line 64: if (a[j] == i)
+- line 66: x = 1;
+- line 67: q++;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "m"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["a", "i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["a", "i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "i", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "i", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 32, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 33, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 35, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "m"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["b", "i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["b", "i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 43, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["b", "i", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 44, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["b", "i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 45, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["b", "i", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 46, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 49, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "p"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ans", "double"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 51, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "k"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["a", "b", "for", "i", "m", "min", "n"]}
+- {"definitions": ["q"], "disposition": "inspect_against_official_dependence_definition", "line": 57, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["q"], "roles": ["definition"], "source_identifiers": ["q", "x", "y"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 58, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 59, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["a", "i", "j", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 61, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 62, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 64, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["a", "i", "if", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 66, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["x"]}
+- {"definitions": ["q"], "disposition": "inspect_against_official_dependence_definition", "line": 67, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["q"], "roles": ["definition"], "source_identifiers": ["q"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 10-94
+- source signature: `int main()`
+- source content hash: `dd0c10d817a69fc763f0a393f7ceb03efd09cbec79935832f40b199dfbc4b583`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```cpp
+  10  int main()
+  11  {
+  12      int n, m;
+  13      scanf("%d %d", &n, &m);
+  14      int a[1003], b[1003];
+  15      int i;
+  16      for (i = 0; i < n; i++)
+  17          scanf("%d", &a[i]);
+  18      for (i = 0; i < m; i++)
+  19          scanf("%d", &b[i]);
+  20      int x;
+  21      for(i=0;i<n-1;i++)
+  22          if (a[i] <= a[i + 1])
+  23          {
+  24              if (a[i] == a[i + 1])
+  25              {
+  26                  printf("0\n");
+  27                  return 0;
+  28              }
+  29              x = a[i];
+  30              a[i] = a[i + 1];
+  31              a[i + 1] = x;
+  32              if (i > 0)
+  33                  i -= 2;
+  34          }
+  35      for(i=0;i<m-1;i++)
+  36          if (b[i] <= b[i + 1])
+  37          {
+  38              if (b[i] == b[i + 1])
+  39              {
+  40                  printf("0\n");
+  41                  return 0;
+  42              }
+  43              x = b[i];
+  44              b[i] = b[i + 1];
+  45              b[i + 1] = x;
+  46              if (i > 0)
+  47                  i -= 2;
+  48          }
+  49      int p = 1000000007;
+  50      double ans = 1;
+  51      int k = 0;
+  52      int y;
+  53      int j;
+  54      int q;
+  55      for (i = n * m; i >= min(a[n - 1], b[m - 1]); i--)
+  56      {
+  57          x = y = q = 0;
+  58          j = 0;
+  59          while (a[j] > i)
+  60          {
+  61              j++;
+  62              x++;
+  63          }
+  64          if (a[j] == i)
+  65          {
+  66              x = 1;
+  67              q++;
+  68          }
+  69          j = 0;
+  70          while (b[j] > i)
+  71          {
+  72              y++;
+  73              j++;
+  74          }
+  75          if (b[j] == i)
+  76          {
+  77              y = 1;
+  78              q++;
+  79          }
+  80          if (q==0)
+  81              ans *= x * y - k;
+  82          else
+  83              ans *= x * y;
+  84          ans = round(fmod(ans, p));
+  85          k++;
+  86      }
+  87      for (j = 0; j < i; j++)
+  88      {
+  89          ans *= j + 1;
+  90          ans = round(fmod(ans, p));
+  91      }
+  92      printf("%.0lf\n", round(ans));
+  93      return 0;
+  94  }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads two sequences, transforms each into a strictly decreasing sequence while rejecting duplicate elements, then computes and prints a modular combinatorial result rounded to an integer." main]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read two integers from standard input into variables n and m. RESULT n,m]
+            [COMMAND Declare integer arrays a and b of size 1003 and declare integer variables i and x. RESULT a,b,i,x]
+            [COMMAND For i from 0 through n-1 inclusive, read one integer from standard input into a[i]. RESULT a]
+            [COMMAND For i from 0 through m-1 inclusive, read one integer from standard input into b[i]. RESULT b]
+            [COMMAND Sort array a into strictly decreasing order by an insertion-like pass: for i from 0 through n-2 inclusive, whenever a[i] <= a[i+1], first test whether a[i] equals a[i+1] and if so take the duplicate-in-a alternative; otherwise swap a[i] and a[i+1], and if i > 0 decrement i by 2 before the loop increment so the next effective index backs up one position. RESULT a]
+            [COMMAND Sort array b into strictly decreasing order by the same insertion-like pass: for i from 0 through m-2 inclusive, whenever b[i] <= b[i+1], first test whether b[i] equals b[i+1] and if so take the duplicate-in-b alternative; otherwise swap b[i] and b[i+1], and if i > 0 decrement i by 2 before the loop increment so the next effective index backs up one position. RESULT b]
+            [COMMAND Set p = 1000000007, ans = 1.0, k = 0, and declare integer variables y, j, and q. RESULT p,ans,k,y,j,q]
+            [COMMAND Begin a descending loop with i from n*m down to the minimum of a[n-1] and b[m-1], inclusive, decrementing i by 1 after each iteration. RESULT i]
+            [COMMAND Within the descending loop, set x, y, and q to 0 and set j to 0. RESULT x,y,q,j]
+            [COMMAND Within the descending loop, scan array a starting at j = 0 while a[j] > i, incrementing j and x on each scan step; after the scan, if a[j] == i, set x = 1 and increment q. RESULT j,x,q]
+            [COMMAND Within the descending loop, reset j to 0 and scan array b starting at j = 0 while b[j] > i, incrementing j and y on each scan step; after the scan, if b[j] == i, set y = 1 and increment q. RESULT j,y,q]
+            [COMMAND Within the descending loop, if q == 0 multiply ans by (x * y - k); otherwise multiply ans by (x * y). RESULT ans]
+            [COMMAND Within the descending loop, set ans = round(fmod(ans, p)) and increment k by 1. RESULT ans,k]
+            [COMMAND After the descending loop exits, use its final value of i as the upper limit: for j from 0 through i-1 inclusive, multiply ans by j+1 and then set ans = round(fmod(ans, p)). RESULT ans]
+            [COMMAND Print round(ans) to standard output as an integer with no decimal places, followed by a newline. RESULT stdout]
+            [COMMAND Return 0 from main. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: During the insertion-like sorting of array a, some adjacent pair satisfies a[i] == a[i+1].]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Print the string 0 followed by a newline to standard output. RESULT stdout]
+            [COMMAND Return 0 from main immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: During the insertion-like sorting of array b, some adjacent pair satisfies b[i] == b[i+1].]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Print the string 0 followed by a newline to standard output. RESULT stdout]
+            [COMMAND Return 0 from main immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

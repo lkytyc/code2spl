@@ -1,0 +1,541 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.*;
+2   import java.lang.*;
+3   import java.util.*;
+4   public class Solution{
+5       static class Pair implements Comparable<Pair>{
+6           long value;
+7           int count;
+8           public Pair(long value,int count){
+9               this.value = value;
+10              this.count = count;
+11          }
+12          @Override
+13          public int compareTo(Pair o){
+14              return o.count - this.count;
+15          }
+16      }
+17      public static void main(String[] args)throws IOException{
+18          BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+19          int t = new Integer(br.readLine());
+20          StringBuffer sb = new StringBuffer();
+21          for(int z=1;z<=t;z++){
+22              sb.append("Case #"+z+": ");
+23              StringTokenizer st = new StringTokenizer(br.readLine());
+24              StringTokenizer st1 = new StringTokenizer(br.readLine());
+25              int n = new Integer(st.nextToken());
+26              int d = new Integer(st.nextToken());
+27              if(n==1&&d==3){
+28                  sb.append("2\n");
+29                  continue;
+30              }
+31              else if(n==1&&d==2){
+32                  sb.append("1\n");
+33                  continue;
+34              }
+35              long[] array = new long[n];
+36              for(int i=0;i<n;i++){
+37                  array[i]=new Long(st1.nextToken());
+38              }
+39              Arrays.sort(array);
+40              Pair[] ps = new Pair[n];
+41              int w=0;
+42              int count = 1;
+43              for(int i=1;i<n;i++){
+44                  if(array[i]==array[i-1]){
+45                      count++;
+46                  }
+47                  else{
+48                      ps[w++]=new Pair(array[i-1],count);
+49                      count=1;
+50                  }
+51              }
+52              ps[w++]=new Pair(array[n-1],count);
+53              Arrays.sort(ps,0,w);
+54              if(ps[0].count>=d){
+55                  sb.append("0\n");
+56                  continue;
+57              }
+58              else{
+59                  if(d==2&&ps[0].count==1){
+60                      sb.append("1\n");
+61                      continue;
+62                  }
+63                  else if(d==3&&ps[0].count==2&&ps[0].value!=array[n-1]){
+64                      sb.append("1\n");
+65                      continue;
+66                  }
+67                  else if(d==3&&ps[0].count==2&&ps[0].value==array[n-1]){
+68                      if(ps[1].count==2){
+69                          sb.append("1\n");
+70                          continue;
+71                      }
+72                      boolean flag = false;
+73                      outer:for(int i=0;i<n;i++){
+74                          for(int j=0;j<n;j++){
+75                              if(array[j]==2*array[i]||array[i]==2*array[j]){
+76                                  sb.append("1\n");
+77                                  flag = true;
+78                                  break outer;
+79                              }
+80                          }
+81                      }
+82                      if(!flag){
+83                          sb.append("2\n");
+84                          continue;
+85                      }
+86                  }
+87                  else if(d==3&&ps[0].count==1){
+88                      boolean flag = false;
+89                      outer:for(int i=0;i<n;i++){
+90                          for(int j=0;j<n;j++){
+91                              if(array[j]==2*array[i]||array[i]==2*array[j]){
+92                                  sb.append("1\n");
+93                                  flag = true;
+94                                  break outer;
+95                              }
+96                          }
+97                      }
+98                      if(!flag){
+99                          sb.append("2\n");
+100                          continue;
+101                      }
+102                  }
+103              }
+104          }
+105          br.close();
+106          System.out.println(sb);
+107      }
+108  }
+```
+
+
+**Question**: Does `(sb,20)` have data dependence over `(z,21)` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: main
+Target source anchor: variable=z, line=21
+Trace source anchor: variable=sb, line=20
+Attached SPL owners: main
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Start an outer for loop with integer z initialized to 1, continuing while z is less than or equal to t, incrementing z by 1 after each iteration. RESULT loop_z]
+- [COMMAND Within the outer for loop over z, append the string "Case #" concatenated with the value of z and ": " to the StringBuffer sb. RESULT sb]
+- [COMMAND Read the first line from the buffered reader, parse it as an integer, and store it in variable t representing the number of test cases. RESULT t]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 18: BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+- line 19: int t = new Integer(br.readLine());
+- line 21: for(int z=1;z<=t;z++){
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "br", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["BufferedReader", "InputStreamReader", "System", "br", "in", "new"]}
+- {"definitions": ["t"], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "before_target", "reason": "t", "relevant_identifiers": ["t"], "roles": ["definition"], "source_identifiers": ["Integer", "br", "int", "new", "readLine", "t"]}
+- {"definitions": ["z"], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "target", "reason": "z", "relevant_identifiers": ["z", "t"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "int", "t", "z"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 17-107
+- source signature: `public static void main(String[] args)throws IOException{`
+- source content hash: `aeffb7b5491d04a33db741a4740aaf8ee33c8e09069f2cc8b9651784544ae9fc`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```java
+  17      public static void main(String[] args)throws IOException{
+  18          BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+  19          int t = new Integer(br.readLine());
+  20          StringBuffer sb = new StringBuffer();
+  21          for(int z=1;z<=t;z++){
+  22              sb.append("Case #"+z+": ");
+  23              StringTokenizer st = new StringTokenizer(br.readLine());
+  24              StringTokenizer st1 = new StringTokenizer(br.readLine());
+  25              int n = new Integer(st.nextToken());
+  26              int d = new Integer(st.nextToken());
+  27              if(n==1&&d==3){
+  28                  sb.append("2\n");
+  29                  continue;
+  30              }
+  31              else if(n==1&&d==2){
+  32                  sb.append("1\n");
+  33                  continue;
+  34              }
+  35              long[] array = new long[n];
+  36              for(int i=0;i<n;i++){
+  37                  array[i]=new Long(st1.nextToken());
+  38              }
+  39              Arrays.sort(array);
+  40              Pair[] ps = new Pair[n];
+  41              int w=0;
+  42              int count = 1;
+  43              for(int i=1;i<n;i++){
+  44                  if(array[i]==array[i-1]){
+  45                      count++;
+  46                  }
+  47                  else{
+  48                      ps[w++]=new Pair(array[i-1],count);
+  49                      count=1;
+  50                  }
+  51              }
+  52              ps[w++]=new Pair(array[n-1],count);
+  53              Arrays.sort(ps,0,w);
+  54              if(ps[0].count>=d){
+  55                  sb.append("0\n");
+  56                  continue;
+  57              }
+  58              else{
+  59                  if(d==2&&ps[0].count==1){
+  60                      sb.append("1\n");
+  61                      continue;
+  62                  }
+  63                  else if(d==3&&ps[0].count==2&&ps[0].value!=array[n-1]){
+  64                      sb.append("1\n");
+  65                      continue;
+  66                  }
+  67                  else if(d==3&&ps[0].count==2&&ps[0].value==array[n-1]){
+  68                      if(ps[1].count==2){
+  69                          sb.append("1\n");
+  70                          continue;
+  71                      }
+  72                      boolean flag = false;
+  73                      outer:for(int i=0;i<n;i++){
+  74                          for(int j=0;j<n;j++){
+  75                              if(array[j]==2*array[i]||array[i]==2*array[j]){
+  76                                  sb.append("1\n");
+  77                                  flag = true;
+  78                                  break outer;
+  79                              }
+  80                          }
+  81                      }
+  82                      if(!flag){
+  83                          sb.append("2\n");
+  84                          continue;
+  85                      }
+  86                  }
+  87                  else if(d==3&&ps[0].count==1){
+  88                      boolean flag = false;
+  89                      outer:for(int i=0;i<n;i++){
+  90                          for(int j=0;j<n;j++){
+  91                              if(array[j]==2*array[i]||array[i]==2*array[j]){
+  92                                  sb.append("1\n");
+  93                                  flag = true;
+  94                                  break outer;
+  95                              }
+  96                          }
+  97                      }
+  98                      if(!flag){
+  99                          sb.append("2\n");
+ 100                          continue;
+ 101                      }
+ 102                  }
+ 103              }
+ 104          }
+ 105          br.close();
+ 106          System.out.println(sb);
+ 107      }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads multiple test cases, each containing a list of pancake diameters and a target number of equal slices, and determines the minimum number of cuts required to obtain at least that many equal-sized slices." main]
+    [INPUTS]
+        <REF> args </REF>: String[] "Command-line arguments (unused)"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a BufferedReader wrapping System.in to read input. RESULT br]
+            [COMMAND Read the first line from the buffered reader, parse it as an integer, and store it in variable t representing the number of test cases. RESULT t]
+            [COMMAND Create a StringBuffer named sb to accumulate the output for all test cases. RESULT sb]
+            [COMMAND Start an outer for loop with integer z initialized to 1, continuing while z is less than or equal to t, incrementing z by 1 after each iteration. RESULT loop_z]
+            [COMMAND Within the outer for loop over z, append the string "Case #" concatenated with the value of z and ": " to the StringBuffer sb. RESULT sb]
+            [COMMAND Within the outer for loop over z, read the next line from the buffered reader and create a StringTokenizer named st from it. RESULT st]
+            [COMMAND Within the outer for loop over z, read the next line from the buffered reader and create a StringTokenizer named st1 from it. RESULT st1]
+            [COMMAND Within the outer for loop over z, parse the next token from st as an integer and store it in variable n. RESULT n]
+            [COMMAND Within the outer for loop over z, parse the next token from st as an integer and store it in variable d. RESULT d]
+            [COMMAND Within the outer for loop over z, check if n equals 1 and d equals 3. If true, append "2\n" to sb and continue to the next iteration of the outer for loop. RESULT sb]
+            [COMMAND Within the outer for loop over z, check if n equals 1 and d equals 2. If true, append "1\n" to sb and continue to the next iteration of the outer for loop. RESULT sb]
+            [COMMAND Within the outer for loop over z, create a long array named array of size n. RESULT array]
+            [COMMAND Within the outer for loop over z, start an inner for loop with integer i initialized to 0, continuing while i is less than n, incrementing i by 1. Inside this loop, parse the next token from st1 as a long and assign it to array[i]. RESULT array]
+            [COMMAND Within the outer for loop over z, sort the array in ascending order using Arrays.sort. RESULT array]
+            [COMMAND Within the outer for loop over z, create a Pair array named ps of size n. RESULT ps]
+            [COMMAND Within the outer for loop over z, initialize integer w to 0. RESULT w]
+            [COMMAND Within the outer for loop over z, initialize integer count to 1. RESULT count]
+            [COMMAND Within the outer for loop over z, start an inner for loop with integer i initialized to 1, continuing while i is less than n, incrementing i by 1. Inside this loop, if array[i] equals array[i-1], increment count; otherwise, create a new Pair with value array[i-1] and count, assign it to ps[w], increment w, and reset count to 1. RESULT ps]
+            [COMMAND Within the outer for loop over z, after the inner loop completes, create a new Pair with value array[n-1] and count, assign it to ps[w], and increment w. RESULT ps]
+            [COMMAND Within the outer for loop over z, sort the ps array from index 0 (inclusive) to index w (exclusive) using Arrays.sort. RESULT ps]
+            [COMMAND Within the outer for loop over z, check if ps[0].count is greater than or equal to d. If true, append "0\n" to sb and continue to the next iteration of the outer for loop. RESULT sb]
+            [COMMAND Within the outer for loop over z, if the previous condition is false, check if d equals 2 and ps[0].count equals 1. If true, append "1\n" to sb and continue to the next iteration of the outer for loop. RESULT sb]
+            [COMMAND Within the outer for loop over z, check if d equals 3, ps[0].count equals 2, and ps[0].value is not equal to array[n-1]. If true, append "1\n" to sb and continue to the next iteration of the outer for loop. RESULT sb]
+            [COMMAND Within the outer for loop over z, check if d equals 3, ps[0].count equals 2, and ps[0].value equals array[n-1]. If true, check if ps[1].count equals 2. If true, append "1\n" to sb and continue to the next iteration of the outer for loop. RESULT sb]
+            [COMMAND Within the outer for loop over z, if the previous condition is true but ps[1].count is not 2, initialize boolean flag to false. Then, start a labeled outer for loop with integer i from 0 to n-1. Inside it, start an inner for loop with integer j from 0 to n-1. If array[j] equals 2*array[i] or array[i] equals 2*array[j], append "1\n" to sb, set flag to true, and break out of the labeled outer loop. RESULT flag]
+            [COMMAND Within the outer for loop over z, if flag is false after the nested loops, append "2\n" to sb and continue to the next iteration of the outer for loop. RESULT sb]
+            [COMMAND Within the outer for loop over z, check if d equals 3 and ps[0].count equals 1. If true, initialize boolean flag to false. Then, start a labeled outer for loop with integer i from 0 to n-1. Inside it, start an inner for loop with integer j from 0 to n-1. If array[j] equals 2*array[i] or array[i] equals 2*array[j], append "1\n" to sb, set flag to true, and break out of the labeled outer loop. RESULT flag]
+            [COMMAND Within the outer for loop over z, if flag is false after the nested loops, append "2\n" to sb and continue to the next iteration of the outer for loop. RESULT sb]
+            [COMMAND After the outer for loop over z completes, close the BufferedReader br. RESULT br]
+            [COMMAND Print the contents of the StringBuffer sb to the standard output. RESULT sb]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

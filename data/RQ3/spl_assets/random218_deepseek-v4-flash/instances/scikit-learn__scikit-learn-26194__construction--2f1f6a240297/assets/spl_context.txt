@@ -1,0 +1,835 @@
+# FILE: sklearn/metrics/_ranking.py
+[DEFINE_WORKER: "Computes the area under a curve using the trapezoidal rule after validating consistent lengths, normalizing inputs to 1-D, enforcing a minimum of two points, and handling monotonic decreasing x by negating the trapezoidal integral." auc]
+    [INPUTS]
+        <REF> x </REF>: array-like of shape (n,) "X coordinates; must be monotonic increasing or monotonic decreasing."
+        <REF> y </REF>: array-like of shape (n,) "Y coordinates corresponding to x."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> auc </REF>: float "Area under the curve computed by the trapezoidal rule."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that x and y have consistent lengths using check_consistent_length(x, y). RESULT length_check]
+            [COMMAND Normalize x to a 1-D array using column_or_1d(x). RESULT x]
+            [COMMAND Normalize y to a 1-D array using column_or_1d(y). RESULT y]
+            [COMMAND Check that x contains at least 2 points; if not, trigger the insufficient points exception. RESULT min_points_check]
+            [COMMAND Initialize direction to 1. RESULT direction]
+            [COMMAND Compute the consecutive differences dx = np.diff(x). RESULT dx]
+            [COMMAND Inspect dx to determine monotonicity; if x is non-increasing with a strict decrease, use the alternative flow to set direction to -1; if x has both negative and positive differences, trigger the non-monotonic x exception. RESULT monotonicity_check]
+            [COMMAND Compute area = direction * np.trapz(y, x). RESULT area]
+            [COMMAND If area is an instance of np.memmap, convert it to a scalar using area = area.dtype.type(area). RESULT area]
+            [COMMAND Return area. RESULT auc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: np.any(dx < 0) is true and np.all(dx <= 0) is true, so x is non-increasing with at least one strict decrease.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set direction to -1. RESULT direction]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: x.shape[0] < 2]
+        [LOG "At least 2 points are needed to compute area under curve, but x.shape = {x.shape}"]
+        [THROW ValueError "Raised when x has fewer than two points."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: np.any(dx < 0) is true and np.all(dx <= 0) is false, so x is neither monotonically increasing nor monotonically decreasing.]
+        [LOG "x is neither increasing nor decreasing : {x}."]
+        [THROW ValueError "Raised when x contains both negative and positive consecutive differences."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the average precision score for binary or multilabel classification by averaging binary uninterpolated average precision over labels or samples according to the specified averaging method." average_precision_score]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples,) or (n_samples, n_classes) "True binary labels or binary label indicators."
+        <REF> y_score </REF>: array-like of shape (n_samples,) or (n_samples, n_classes) "Target scores, such as probability estimates, confidence values, or decision function values."
+        <REF> average </REF>: str or None "Averaging method: 'micro', 'macro', 'weighted', 'samples', or None. Keyword-only with default 'macro'."
+        <REF> pos_label </REF>: int, float, bool, or str "Label of the positive class for binary y_true. Keyword-only with default 1."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,) or None "Optional sample weights. Keyword-only with default None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> average_precision </REF>: float or ndarray "Average precision score, or per-class scores when average is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested helper function _binary_uninterpolated_average_precision(y_true, y_score, pos_label=1, sample_weight=None), which calls precision_recall_curve y_true, y_score, pos_label=pos_label, sample_weight=sample_weight and returns -np.sum(np.diff(recall) * np.array(precision)[:-1]) as the step-function integral of the precision-recall curve. RESULT _binary_uninterpolated_average_precision]
+            [COMMAND Determine the target type by calling type_of_target(y_true, input_name='y_true') and assign the result to y_type. RESULT y_type]
+            [COMMAND Check whether y_type is 'multilabel-indicator' and pos_label is not 1; if the condition is true, trigger a ValueError rather than continuing. RESULT multilabel_pos_label_validation]
+            [COMMAND If y_type is 'binary', convert the unique values of y_true to a Python list via np.unique(y_true).tolist() and assign the result to present_labels. RESULT present_labels]
+            [COMMAND Within the binary branch, check whether present_labels has exactly two elements and pos_label is not one of those labels; if the condition is true, trigger a ValueError rather than continuing. RESULT binary_pos_label_validation]
+            [COMMAND Create a partial function average_precision by calling partial(_binary_uninterpolated_average_precision, pos_label=pos_label), binding pos_label for later use. RESULT average_precision]
+            [COMMAND Return the result of _average_binary_score(average_precision, y_true, y_score, average, sample_weight=sample_weight), passing the selected averaging mode through unchanged so that the helper handles micro, macro, weighted, samples, or None. RESULT returned_average_precision]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: y_type is 'multilabel-indicator' and pos_label is not equal to 1.]
+        [LOG "Parameter pos_label is fixed to 1 for multilabel-indicator y_true. Do not set pos_label or set pos_label to 1."]
+        [THROW ValueError "Raises because pos_label must be 1 when y_true is a multilabel indicator matrix."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the binary branch, y_type is 'binary' and present_labels contains exactly two labels and pos_label is not in present_labels.]
+        [LOG "pos_label={pos_label} is not a valid label. It should be one of {present_labels}"]
+        [THROW ValueError "Raises because the positive label must be one of the two actual labels in binary y_true."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the detection error tradeoff curve by deriving false positive and false negative rates at decreasing score thresholds from binary labels and classifier scores." det_curve]
+    [INPUTS]
+        <REF> y_true </REF>: ndarray of shape (n_samples,) "True binary labels. If labels are not either {-1, 1} or {0, 1}, pos_label should be provided explicitly."
+        <REF> y_score </REF>: ndarray of shape (n_samples,) "Target scores, probability estimates of the positive class, confidence values, or non-thresholded decision measures."
+        <REF> pos_label </REF>: int, float, bool, or str, default=None "The label of the positive class. When None, y_true must be in {-1, 1} or {0, 1} so pos_label is set to 1."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,), default=None "Optional sample weights used when computing cumulative true and false positive counts."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> fpr </REF>: ndarray of shape (n_thresholds,) "False positive rate at each threshold; element i corresponds to predictions with score greater than or equal to thresholds[i]."
+        <REF> fnr </REF>: ndarray of shape (n_thresholds,) "False negative rate at each threshold; element i corresponds to predictions with score greater than or equal to thresholds[i]."
+        <REF> thresholds </REF>: ndarray of shape (n_thresholds,) "Decreasing score values used as decision thresholds."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _binary_clf_curve with y_true, y_score, pos_label, and sample_weight, and unpack the resulting cumulative false positives, cumulative true positives, and score thresholds into fps, tps, and thresholds. RESULT fps, tps, thresholds]
+            [COMMAND For the valid binary-label case, compute fns as the element-wise difference tps[-1] - tps, p_count as tps[-1], and n_count as fps[-1]. RESULT fns, p_count, n_count]
+            [COMMAND Compute first_ind using the right-side searchsorted insertion point for fps[0] in fps; if it is greater than 0, use that insertion point minus 1, otherwise use None. RESULT first_ind]
+            [COMMAND Compute last_ind as the left-side searchsorted insertion point for tps[-1] in tps plus 1. RESULT last_ind]
+            [COMMAND Build sl as the slice from first_ind to last_ind. RESULT sl]
+            [COMMAND Return the tuple formed by fps[sl][::-1] divided by n_count, fns[sl][::-1] divided by p_count, and thresholds[sl][::-1], so the returned rates and thresholds are in decreasing order. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: After the call to _binary_clf_curve, when the number of unique values in y_true is not exactly 2.]
+        [LOG "Only one class present in y_true. Detection error tradeoff curve is not defined in that case."]
+        [THROW ValueError "Raised to indicate that the detection error tradeoff curve is undefined because y_true does not contain exactly two distinct classes."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the binary ROC AUC score, returning the full AUC when max_fpr is None or 1, otherwise returning a McClish-corrected standardized partial AUC over [0, max_fpr]." _binary_roc_auc_score]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples,) "Binary true labels; must contain exactly two unique classes."
+        <REF> y_score </REF>: array-like of shape (n_samples,) "Predicted scores or probabilities used to construct the ROC curve."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,), optional, default=None "Per-sample weights passed to roc_curve for weighted ROC computation."
+        <REF> max_fpr </REF>: float, optional, default=None "Upper bound of the FPR range for partial AUC; if provided, it must be in (0, 1]. None or 1 selects the full ROC AUC."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: float "Binary ROC AUC score: full AUC when max_fpr is None or 1; otherwise the McClish-standardized partial AUC over [0, max_fpr]."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that y_true contains exactly two unique classes by evaluating len(np.unique(y_true)); if the count is not 2, route to the first exception_flow. RESULT binary_class_validation]
+            [COMMAND Compute fpr, tpr, and thresholds from y_true, y_score, and sample_weight using roc_curve; discard the thresholds. RESULT fpr_tpr]
+            [COMMAND If max_fpr is None or max_fpr == 1, route to the alternative full-AUC flow; otherwise continue with partial-AUC processing. RESULT max_fpr_full_auc_check]
+            [COMMAND Check that max_fpr is greater than 0 and less than or equal to 1; if max_fpr <= 0 or max_fpr > 1, route to the second exception_flow. RESULT max_fpr_range_validation]
+            [COMMAND Use np.searchsorted(fpr, max_fpr, 'right') to find the insertion index stop where max_fpr would be inserted in the ascending fpr array. RESULT stop]
+            [COMMAND Build x_interp = [fpr[stop - 1], fpr[stop]] as the FPR interpolation bracket around max_fpr. RESULT x_interp]
+            [COMMAND Build y_interp = [tpr[stop - 1], tpr[stop]] as the corresponding TPR interpolation bracket. RESULT y_interp]
+            [COMMAND Truncate tpr to tpr[:stop] and append np.interp(max_fpr, x_interp, y_interp) to add the interpolated true positive rate at max_fpr; overwrite tpr. RESULT tpr]
+            [COMMAND Truncate fpr to fpr[:stop] and append max_fpr to cap the false positive rate range; overwrite fpr. RESULT fpr]
+            [COMMAND Compute partial_auc = auc(fpr, tpr) over the truncated ROC curve up to max_fpr. RESULT partial_auc]
+            [COMMAND Compute min_area = 0.5 * max_fpr**2, the expected area under the random classifier diagonal over [0, max_fpr]. RESULT min_area]
+            [COMMAND Compute max_area = max_fpr, the area under a perfect classifier over [0, max_fpr]. RESULT max_area]
+            [COMMAND Return the McClish-standardized partial AUC using the formula 0.5 * (1 + (partial_auc - min_area) / (max_area - min_area)). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: max_fpr is None or max_fpr == 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute full_auc = auc(fpr, tpr) using the ROC arrays produced in main_flow. RESULT full_auc]
+            [COMMAND Return full_auc as the final result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: len(np.unique(y_true)) != 2, meaning y_true does not contain exactly two unique classes.]
+        [LOG "Only one class present in y_true. ROC AUC score is not defined in that case."]
+        [THROW ValueError "Raised when y_true does not contain exactly two unique classes, because ROC AUC is undefined."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: max_fpr is not None, max_fpr != 1, and (max_fpr <= 0 or max_fpr > 1), so max_fpr is outside the valid range (0, 1].]
+        [LOG "Expected max_fpr in range (0, 1], got: <max_fpr>"]
+        [THROW ValueError "Raised when max_fpr is not in the allowed open-closed interval (0, 1]."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compute the Area Under the Receiver Operating Characteristic Curve (ROC AUC) from prediction scores, validating inputs and dispatching binary, multiclass, or multilabel targets to the appropriate averaging implementation." roc_auc_score]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples,) or (n_samples, n_classes) "True labels or binary label indicators."
+        <REF> y_score </REF>: array-like of shape (n_samples,) or (n_samples, n_classes) "Target scores: probability estimates or decision values."
+        <REF> average </REF>: string or None "Averaging method: 'micro', 'macro', 'samples', 'weighted', or None. Ignored for binary y_true."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,) or None "Per-sample weights."
+        <REF> max_fpr </REF>: float or None "Upper bound for partial AUC computation; only supported in binary and multilabel cases."
+        <REF> multi_class </REF>: string "Multiclass configuration: 'raise', 'ovr', or 'ovo'."
+        <REF> labels </REF>: array-like of shape (n_classes,) or None "Labels ordering the classes in y_score for multiclass targets."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> auc </REF>: float or numpy.ndarray "ROC AUC score, or per-class scores when average is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Classify the original y_true target type using type_of_target with input_name 'y_true' and store it in y_type. RESULT y_type]
+            [COMMAND Validate y_true with check_array using ensure_2d=False and dtype=None, and overwrite y_true with the validated array. RESULT y_true]
+            [COMMAND Validate y_score with check_array using ensure_2d=False and overwrite y_score with the validated numeric array. RESULT y_score]
+            [COMMAND Evaluate the target type dispatch: enter the multiclass-like path if y_type is 'multiclass' or (y_type is 'binary' and y_score has 2 dimensions and more than 2 columns); otherwise enter the binary path if y_type is 'binary'; otherwise enter the multilabel-indicator path. RESULT branch_selection]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: y_type is 'multiclass', or y_type is 'binary' with y_score.ndim == 2 and y_score.shape[1] > 2]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the multiclass-like path, validate max_fpr and multi_class constraints before proceeding to the multiclass scorer. RESULT validated_config]
+            [COMMAND Return the result of _multiclass_roc_auc_score(y_true, y_score, labels, multi_class, average, sample_weight). RESULT auc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: y_type is 'binary' and the multiclass-like condition is false (y_score is 1-dimensional or has at most 2 columns)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the unique class labels from y_true and store them in labels. RESULT labels]
+            [COMMAND Binarize y_true using label_binarize with these labels and take the first column, overwriting y_true. RESULT y_true]
+            [COMMAND Return the result of _average_binary_score with partial(_binary_roc_auc_score, max_fpr=max_fpr), y_true, y_score, average, and sample_weight. RESULT auc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: y_type is multilabel-indicator]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of _average_binary_score with partial(_binary_roc_auc_score, max_fpr=max_fpr), y_true, y_score, average, and sample_weight. RESULT auc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: In the multiclass-like path, max_fpr is not None and max_fpr != 1.0]
+        [LOG "Partial AUC computation not available in multiclass setting, 'max_fpr' must be set to None, received max_fpr={0} instead"]
+        [THROW ValueError "Rejects partial AUC computation for multiclass or multiclass-like inputs."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the multiclass-like path, multi_class equals 'raise']
+        [LOG "multi_class must be in ('ovo', 'ovr')"]
+        [THROW ValueError "Requires an explicit multiclass configuration of 'ovr' or 'ovo'."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates probability scores, labels, and averaging options, then computes the multiclass ROC AUC score using one-vs-one or one-vs-rest/multi-label averaging." _multiclass_roc_auc_score]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples,) "True multiclass labels."
+        <REF> y_score </REF>: array-like of shape (n_samples, n_classes) "Target scores, interpreted as per-class probability estimates that must sum to 1.0 over classes."
+        <REF> labels </REF>: array-like of shape (n_classes,) or None "Explicit labels used to index y_score; must be unique, ordered, and match the number of y_score columns if provided."
+        <REF> multi_class </REF>: str "Multiclass strategy: 'ovr' for one-vs-rest or 'ovo' for one-vs-one."
+        <REF> average </REF>: str or None "Averaging method: 'micro', 'macro', 'weighted', or None."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,) or None "Sample weights; supported only in the one-vs-rest path, not in the one-vs-one path."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> score </REF>: float or numpy.ndarray "Computed multiclass ROC AUC score; when average is None in the ovr path, the score is per-class."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that y_score contains proper probabilities: compute y_score.sum(axis=1) and verify np.allclose(1, row_sums); if this check fails, raise ValueError. RESULT probability_validation]
+            [COMMAND Define average_options as the tuple ('macro', 'weighted', None). RESULT average_options]
+            [COMMAND If multi_class is 'ovr', prepend 'micro' to average_options so average_options becomes ('micro', 'macro', 'weighted', None). RESULT average_options]
+            [COMMAND Validate that average is in average_options; if not, raise ValueError. RESULT average_validation]
+            [COMMAND Define multiclass_options as the tuple ('ovo', 'ovr'). RESULT multiclass_options]
+            [COMMAND Validate that multi_class is in multiclass_options; if not, raise ValueError. RESULT multiclass_validation]
+            [COMMAND Validate the average and multi_class combination: if average is None and multi_class is 'ovo', raise NotImplementedError. RESULT average_ovo_combination_validation]
+            [COMMAND Resolve classes for the multiclass score columns: if labels is not None, follow the explicit-labels branch; otherwise follow the infer-from-y_true branch. RESULT classes]
+            [COMMAND Dispatch score computation by multi_class: if multi_class is 'ovo', follow the one-vs-one branch; otherwise follow the one-vs-rest/multi-label branch. RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: labels is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert labels to a one-dimensional array using column_or_1d. RESULT labels]
+            [COMMAND Set classes to the sorted unique values of labels using _unique(labels). RESULT classes]
+            [COMMAND Within the explicit-labels branch, check that len(classes) equals len(labels); if not, raise ValueError. RESULT labels_unique_validation]
+            [COMMAND Within the explicit-labels branch, check that classes equals labels using np.array_equal; if not, raise ValueError. RESULT labels_ordered_validation]
+            [COMMAND Within the explicit-labels branch, check that len(classes) equals y_score.shape[1]; if not, raise ValueError. RESULT labels_score_columns_validation]
+            [COMMAND Within the explicit-labels branch, check that np.setdiff1d(y_true, classes) is empty; if it is not empty, raise ValueError. RESULT y_true_labels_validation]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: labels is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set classes to the sorted unique values of y_true using _unique(y_true). RESULT classes]
+            [COMMAND Within the infer-from-y_true branch, check that len(classes) equals y_score.shape[1]; if not, raise ValueError. RESULT y_true_score_columns_validation]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: multi_class == 'ovo']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the one-vs-one branch, check that sample_weight is None; if it is not None, raise ValueError. RESULT ovo_sample_weight_validation]
+            [COMMAND Within the one-vs-one branch, encode y_true using _encode(y_true, uniques=classes) to create y_true_encoded. RESULT y_true_encoded]
+            [COMMAND Within the one-vs-one branch, return _average_multiclass_ovo_score(_binary_roc_auc_score, y_true_encoded, y_score, average=average), applying the Hand & Till (2001) ovo implementation. RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: multi_class != 'ovo']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the one-vs-rest/multi-label branch, binarize y_true using label_binarize(y_true, classes=classes) to create y_true_multilabel. RESULT y_true_multilabel]
+            [COMMAND Within the one-vs-rest/multi-label branch, return _average_binary_score(_binary_roc_auc_score, y_true_multilabel, y_score, average, sample_weight=sample_weight), treating ovr as multi-label. RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: y_score row sums are not all approximately 1.0 (not np.allclose(1, y_score.sum(axis=1)))]
+        [LOG "Target scores need to be probabilities for multiclass roc_auc, i.e. they should sum up to 1.0 over classes."]
+        [THROW ValueError "Raised when y_score does not contain per-class probabilities summing to 1.0 for every sample."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: average is not in the current average_options tuple]
+        [LOG "average must be one of the current average_options tuple for multiclass problems."]
+        [THROW ValueError "Raised when the requested average method is not supported for the given multiclass settings."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: multi_class is not in the multiclass_options tuple ('ovo', 'ovr')]
+        [LOG "multi_class is not supported for multiclass ROC AUC; multi_class must be in ('ovo', 'ovr')."]
+        [THROW ValueError "Raised when multi_class is not 'ovo' or 'ovr'."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: average is None and multi_class == 'ovo']
+        [LOG "average=None is not implemented for multi_class='ovo'."]
+        [THROW NotImplementedError "Raised for the unsupported combination of average=None with one-vs-one multiclass ROC AUC."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is not None and len(classes) != len(labels)]
+        [LOG "Parameter 'labels' must be unique."]
+        [THROW ValueError "Raised when explicit labels contain duplicate values."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is not None and not np.array_equal(classes, labels)]
+        [LOG "Parameter 'labels' must be ordered."]
+        [THROW ValueError "Raised when explicit labels are not in the same sorted and unique order as the classes derived from labels."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is not None and len(classes) != y_score.shape[1]]
+        [LOG "Number of given labels, {len(classes)}, not equal to the number of columns in 'y_score', {y_score.shape[1]}."]
+        [THROW ValueError "Raised when the number of explicit labels does not match the number of y_score columns."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is not None and len(np.setdiff1d(y_true, classes)) != 0]
+        [LOG "'y_true' contains labels not in parameter 'labels'."]
+        [THROW ValueError "Raised when y_true contains labels that are not present in the explicit labels parameter."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is None and len(classes) != y_score.shape[1]]
+        [LOG "Number of classes in y_true not equal to the number of columns in 'y_score'."]
+        [THROW ValueError "Raised when classes inferred from y_true do not match the number of y_score columns."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: multi_class == 'ovo' and sample_weight is not None]
+        [LOG "sample_weight is not supported for multiclass one-vs-one ROC AUC, 'sample_weight' must be None in this case."]
+        [THROW ValueError "Raised when sample_weight is supplied for the one-vs-one multiclass ROC AUC path."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes false-positive counts, true-positive counts, and decreasing score thresholds for a binary classification score vector, optionally using sample weights and filtering out zero-weight samples." _binary_clf_curve]
+    [INPUTS]
+        <REF> y_true </REF>: ndarray of shape (n_samples,) "True binary target labels."
+        <REF> y_score </REF>: ndarray of shape (n_samples,) "Estimated probabilities or output of a decision function."
+        <REF> pos_label </REF>: int, float, bool, or str, default=None "The label of the positive class; validated or inferred when None."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,), default=None "Per-sample weights; None means equal weighting."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> fps </REF>: ndarray of shape (n_thresholds,) "False-positive counts at each threshold, increasing with index."
+        <REF> tps </REF>: ndarray of shape (n_thresholds,) "True-positive counts at each threshold, increasing with index."
+        <REF> thresholds </REF>: ndarray of shape (n_thresholds,) "Decreasing score values corresponding to the computed thresholds."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Classify the target type of y_true using type_of_target with input_name 'y_true' and store the result in y_type. RESULT y_type]
+            [COMMAND If y_type is 'binary', or y_type is 'multiclass' and pos_label is not None, continue; otherwise trigger the exception flow for unsupported y_type. RESULT type_check_passed]
+            [COMMAND Verify that y_true, y_score, and sample_weight have consistent lengths using check_consistent_length. RESULT length_check_passed]
+            [COMMAND Convert y_true to a 1-dimensional array with column_or_1d and reassign it to y_true. RESULT y_true]
+            [COMMAND Convert y_score to a 1-dimensional array with column_or_1d and reassign it to y_score. RESULT y_score]
+            [COMMAND Assert that all values in y_true are finite using assert_all_finite. RESULT y_true_finite]
+            [COMMAND Assert that all values in y_score are finite using assert_all_finite. RESULT y_score_finite]
+            [COMMAND If sample_weight is not None, convert sample_weight to a 1-dimensional array with column_or_1d, validate it with _check_sample_weight, create a boolean mask of weights not equal to 0, and use that mask to filter y_true, y_score, and sample_weight to the nonzero-weight samples. RESULT filtered_arrays]
+            [COMMAND Validate or infer the positive-class label by calling _check_pos_label_consistency with pos_label and y_true, and reassign the result to pos_label. RESULT pos_label]
+            [COMMAND Convert y_true into a boolean vector whose entries are True where the original label equals pos_label and False otherwise. RESULT y_true_bool]
+            [COMMAND Compute the indices that would sort y_score in descending order using a stable mergesort, reversed, and store them in desc_score_indices. RESULT desc_score_indices]
+            [COMMAND Reorder y_score according to desc_score_indices so y_score is sorted in descending order. RESULT y_score_sorted]
+            [COMMAND Reorder the boolean y_true array according to desc_score_indices so truth values stay aligned with the sorted scores. RESULT y_true_sorted]
+            [COMMAND If sample_weight is not None, select weight as sample_weight[desc_score_indices]; otherwise set weight to the scalar 1.0. RESULT weight]
+            [COMMAND Find distinct-value change indices by applying np.diff to y_score and taking np.where(...)[0], storing the result in distinct_value_indices. RESULT distinct_value_indices]
+            [COMMAND Build threshold_idxs by concatenating distinct_value_indices with y_true.size - 1 using np.r_, so the final threshold is included. RESULT threshold_idxs]
+            [COMMAND Compute tps as stable_cumsum(y_true * weight) indexed at threshold_idxs to accumulate true positives at the selected thresholds. RESULT tps]
+            [COMMAND If sample_weight is not None, compute fps as stable_cumsum((1 - y_true) * weight) indexed at threshold_idxs; otherwise compute fps as 1 + threshold_idxs - tps. RESULT fps]
+            [COMMAND Return the tuple (fps, tps, y_score[threshold_idxs]) as the final result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: y_type is not 'binary' and not ('multiclass' with pos_label provided)]
+        [LOG "A ValueError is logged with the message '{y_type} format is not supported'."]
+        [THROW ValueError "Raised when y_true's target type is neither 'binary' nor 'multiclass' with an explicit pos_label."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes binary-classification precision-recall pairs at unique score thresholds, optionally drops intermediate thresholds, and returns precision/recall arrays in decreasing-recall order with a synthetic final point and increasing thresholds." precision_recall_curve]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples,) "True binary labels. If labels are not in {-1, 1} or {0, 1}, pos_label must be explicitly provided."
+        <REF> probas_pred </REF>: array-like of shape (n_samples,) "Target scores, either probability estimates of the positive class or non-thresholded decision scores."
+        <REF> pos_label </REF>: int, float, bool or str, default=None "The label of the positive class. When None, the positive class is inferred as 1 if y_true is in {-1, 1} or {0, 1}; otherwise an error is expected."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,), default=None "Sample weights."
+        <REF> drop_intermediate </REF>: bool, default=False "Whether to drop suboptimal thresholds that would not appear on a plotted precision-recall curve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> precision </REF>: ndarray of shape (n_thresholds + 1,) "Precision values for predictions with score >= each threshold, with the last element set to 1."
+        <REF> recall </REF>: ndarray of shape (n_thresholds + 1,) "Decreasing recall values for predictions with score >= each threshold, with the last element set to 0."
+        <REF> thresholds </REF>: ndarray of shape (n_thresholds,) "Increasing decision thresholds used to compute precision and recall; with drop_intermediate=False, n_thresholds is len(np.unique(probas_pred)), and with drop_intermediate=True some suboptimal thresholds may be dropped."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _binary_clf_curve with y_true, probas_pred, pos_label, and sample_weight, and unpack the returned false-positive counts, true-positive counts, and thresholds into fps, tps, and thresholds. RESULT fps, tps, thresholds]
+            [COMMAND Evaluate the guard `drop_intermediate and len(fps) > 2` using short-circuit evaluation; if the guard is true, apply the drop-intermediate filtering described in the corresponding alternative flow, otherwise keep fps, tps, and thresholds unchanged. RESULT fps, tps, thresholds]
+            [COMMAND Compute ps as the element-wise sum tps + fps. RESULT ps]
+            [COMMAND Initialize precision as a zero-filled array with the same shape and dtype as tps, then call np.divide(tps, ps, out=precision, where=(ps != 0)) so precision is 0 wherever ps is 0. RESULT precision]
+            [COMMAND Compute recall: if tps[-1] equals 0, follow the no-positive-class alternative flow to warn and set recall to ones; otherwise set recall to tps / tps[-1]. RESULT recall]
+            [COMMAND Create sl = slice(None, None, -1), then return np.hstack((precision[sl], 1)), np.hstack((recall[sl], 0)), and thresholds[sl]. RESULT precision, recall, thresholds]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: drop_intermediate is true and len(fps) > 2]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build optimal_idxs using np.where(np.concatenate([[True], np.logical_or(np.diff(tps[:-1]), np.diff(tps[1:])), [True]]))[0], forcing the first and last mask entries to be kept. RESULT optimal_idxs]
+            [COMMAND Filter fps, tps, and thresholds by optimal_idxs, dropping intermediate points where the true-positive count does not change from either neighbor. RESULT filtered fps, tps, thresholds]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: tps[-1] == 0, meaning no positive class was found in y_true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit the warning 'No positive class found in y_true, recall is set to one for all thresholds.' RESULT warning_emitted]
+            [COMMAND Set recall to np.ones_like(tps). RESULT recall]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: tps[-1] != 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set recall to tps / tps[-1]. RESULT recall]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes a binary ROC curve by converting score thresholds into cumulative false-positive and true-positive counts, optionally dropping collinear intermediate points, and returning normalized false-positive and true-positive rates along with thresholds." roc_curve]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples,) "True binary labels. If labels are not either {-1, 1} or {0, 1}, pos_label should be explicitly given."
+        <REF> y_score </REF>: array-like of shape (n_samples,) "Target scores, either probability estimates of the positive class, confidence values, or non-thresholded measures of decisions."
+        <REF> pos_label </REF>: int, float, bool or str, default=None "The label of the positive class. When None, pos_label is set to 1 if y_true is in {-1, 1} or {0, 1}, otherwise an error is raised."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,), default=None "Sample weights used when computing cumulative false positive and true positive counts."
+        <REF> drop_intermediate </REF>: bool, default=True "Whether to drop suboptimal thresholds that do not appear on a plotted ROC curve because they are collinear with neighboring points."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> fpr </REF>: ndarray of shape (>2,) "Increasing false positive rates such that element i is the false positive rate of predictions with score >= thresholds[i]."
+        <REF> tpr </REF>: ndarray of shape (>2,) "Increasing true positive rates such that element i is the true positive rate of predictions with score >= thresholds[i]."
+        <REF> thresholds </REF>: ndarray of shape (n_thresholds,) "Decreasing thresholds on the decision function used to compute fpr and tpr. thresholds[0] represents no instances being predicted and is arbitrarily set to max(y_score) + 1."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _binary_clf_curve with y_true, y_score, pos_label=pos_label, and sample_weight=sample_weight; unpack its three returned values into fps, tps, and thresholds. RESULT fps, tps, thresholds]
+            [COMMAND If drop_intermediate is True and len(fps) > 2, compute optimal indices by keeping the first and last points and any interior point where the second difference of fps or the second difference of tps is nonzero; then reassign fps, tps, and thresholds to those optimal indices. RESULT fps, tps, thresholds]
+            [COMMAND Prepend 0 to tps, prepend 0 to fps, and prepend thresholds[0] + 1 to thresholds to ensure the curve starts at (0, 0). RESULT fps, tps, thresholds]
+            [COMMAND If fps[-1] <= 0, issue a warning that the false positive value is meaningless because there are no negative samples, and set fpr to an array of NaN with the same shape as fps; otherwise set fpr to fps divided by fps[-1]. RESULT fpr]
+            [COMMAND If tps[-1] <= 0, issue a warning that the true positive value is meaningless because there are no positive samples, and set tpr to an array of NaN with the same shape as tps; otherwise set tpr to tps divided by tps[-1]. RESULT tpr]
+            [COMMAND Return the tuple (fpr, tpr, thresholds). RESULT fpr, tpr, thresholds]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compute the coverage error as the sample-weighted average, per sample, of the number of target scores at or above the minimum score among true labels, treating samples with no true labels as zero coverage." coverage_error]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples, n_labels) "True binary labels in binary indicator format."
+        <REF> y_score </REF>: array-like of shape (n_samples, n_labels) "Target scores; probability estimates, confidence values, or decision function outputs."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,) or None "Sample weights used in the final average; default is None for unweighted average."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> coverage_error </REF>: float "The coverage error, equal to the weighted average number of labels that must be traversed per sample to cover all true labels."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate y_true with check_array using ensure_2d=True and assign the validated result to y_true. RESULT y_true]
+            [COMMAND Validate y_score with check_array using ensure_2d=True and assign the validated result to y_score. RESULT y_score]
+            [COMMAND Check that y_true, y_score, and sample_weight have consistent lengths. RESULT None]
+            [COMMAND Determine y_type by calling type_of_target on y_true with input_name='y_true'. RESULT y_type]
+            [COMMAND Check that y_true and y_score have the same shape. RESULT None]
+            [COMMAND Construct y_score_mask as a masked array from y_score, masking every entry where y_true is False. RESULT y_score_mask]
+            [COMMAND Compute y_min_relevant as the row-wise minimum of y_score_mask along axis 1, then reshape it to a column vector. RESULT y_min_relevant]
+            [COMMAND Compute coverage for each row as the count of columns where y_score is greater than or equal to y_min_relevant, summing along axis 1. RESULT coverage]
+            [COMMAND Replace masked entries in coverage with 0 using filled(0), which handles rows with no true labels. RESULT coverage]
+            [COMMAND Return the weighted average of coverage using sample_weight as the weights. RESULT coverage_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: y_type is not 'multilabel-indicator']
+        [LOG "ValueError: the target type format is not supported."]
+        [THROW ValueError "The target type of y_true must be multilabel-indicator; any other target type is rejected."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: y_true.shape != y_score.shape]
+        [LOG "ValueError: y_true and y_score have different shape."]
+        [THROW ValueError "The number of samples and labels in y_true and y_score must match exactly."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compute the average number of incorrectly ordered label pairs in multi-label ranking, weighted by sample_weight and normalized by the per-sample number of positive and negative labels." label_ranking_loss]
+    [INPUTS]
+        <REF> y_true </REF>: array-like or sparse matrix of shape (n_samples, n_labels) "True binary labels in binary indicator format."
+        <REF> y_score </REF>: array-like of shape (n_samples, n_labels) "Target scores, either probability estimates of the positive class, confidence values, or non-thresholded decision measures as returned by decision_function on some classifiers."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,) or None "Optional sample weights; default is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> loss </REF>: float "Average number of label pairs that are incorrectly ordered given y_score, weighted by sample_weight and normalized by label set sizes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate y_true with check_array, using ensure_2d=False and accept_sparse='csr', and assign the result back to y_true. RESULT y_true]
+            [COMMAND Validate y_score with check_array, using ensure_2d=False, and assign the result back to y_score. RESULT y_score]
+            [COMMAND Call check_consistent_length on y_true, y_score, and sample_weight to ensure compatible sample counts. RESULT None]
+            [COMMAND Determine y_type by calling type_of_target(y_true, input_name='y_true'). RESULT y_type]
+            [COMMAND Verify that y_type is 'multilabel-indicator'; if it is not, raise ValueError as described in exception_flows. RESULT None]
+            [COMMAND Verify that y_true.shape equals y_score.shape; if it does not, raise ValueError as described in exception_flows. RESULT None]
+            [COMMAND Unpack n_samples and n_labels from y_true.shape. RESULT n_samples, n_labels]
+            [COMMAND Convert y_true to a CSR sparse matrix with csr_matrix(y_true) and assign the result back to y_true. RESULT y_true]
+            [COMMAND Initialize loss as a zero NumPy array of length n_samples. RESULT loss]
+            [COMMAND For each row i, using start and stop from consecutive pairs in y_true.indptr with start inclusive and stop exclusive, sort and bin the scores: compute unique_scores and unique_inverse from y_score[i], compute true_at_reversed_rank via bincount of unique_inverse[y_true.indices[start:stop]] with minlength len(unique_scores), compute all_at_reversed_rank via bincount of unique_inverse with minlength len(unique_scores), set false_at_reversed_rank to all_at_reversed_rank minus true_at_reversed_rank, and set loss[i] to the dot product of cumsum(true_at_reversed_rank) and false_at_reversed_rank. RESULT loss]
+            [COMMAND Compute n_positives by calling count_nonzero(y_true, axis=1). RESULT n_positives]
+            [COMMAND Within an np.errstate context that ignores divide and invalid warnings, perform in-place division loss /= (n_labels - n_positives) * n_positives. RESULT loss]
+            [COMMAND Set loss entries to 0.0 where the boolean mask n_positives == 0 or n_positives == n_labels is true. RESULT loss]
+            [COMMAND Return the weighted average of loss using sample_weight via np.average; if sample_weight is None, use equal weights. RESULT loss]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: y_type is not 'multilabel-indicator']
+        [LOG "y_type format is not supported"]
+        [THROW ValueError "Raises ValueError because the target type is not multilabel-indicator."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: y_true.shape != y_score.shape]
+        [LOG "y_true and y_score have different shape"]
+        [THROW ValueError "Raises ValueError because the inputs have different shapes."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Discounted Cumulative Gain for each sample by ranking true labels according to predicted scores and applying a logarithmic discount, with optional top-k truncation and tie-aware averaging." _dcg_sample_scores]
+    [INPUTS]
+        <REF> y_true </REF>: ndarray of shape (n_samples, n_labels) "True targets of multilabel classification, or true scores of entities to be ranked."
+        <REF> y_score </REF>: ndarray of shape (n_samples, n_labels) "Target scores, can be probability estimates, confidence values, or non-thresholded measure of decisions."
+        <REF> k </REF>: int or None "Only consider the highest k scores in the ranking. If None, use all outputs."
+        <REF> log_base </REF>: float "Base of the logarithm used for the discount. A low value means a sharper discount (top results are more important)."
+        <REF> ignore_ties </REF>: bool "Assume that there are no ties in y_score for efficiency gains."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> discounted_cumulative_gain </REF>: ndarray of shape (n_samples,) "The DCG score for each sample."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the discount array of length equal to y_true.shape[1] where each element i is 1 divided by the base-log_base logarithm of (i + 2), using the natural logarithm identity log_base(x) = ln(x) / ln(log_base). RESULT discount]
+            [COMMAND If k is not None, set discount[k:] to 0 to restrict the ranking to the highest k scores; otherwise, keep the full discount array unchanged. RESULT discount]
+            [COMMAND Evaluate ignore_ties and compute cumulative_gains by following the corresponding branch: if ignore_ties is True, use the direct-ranking branch; if ignore_ties is False, use the tie-averaged branch. RESULT cumulative_gains]
+            [COMMAND Return cumulative_gains as the discounted cumulative gain array for all samples. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: ignore_ties is True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute ranking as the indices that would sort y_score in ascending order along the last axis, then reverse the order along that axis to obtain a descending-order ranking. RESULT ranking]
+            [COMMAND Reorder y_true according to ranking by indexing each sample row with its corresponding ranking row, producing ranked. RESULT ranked]
+            [COMMAND Compute cumulative_gains as the dot product of discount and ranked transposed. RESULT cumulative_gains]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: ignore_ties is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute discount_cumsum as the cumulative sum of discount. RESULT discount_cumsum]
+            [COMMAND For each pair (y_t, y_s) in zip(y_true, y_score), call _tie_averaged_dcg(y_t, y_s, discount_cumsum) and collect the results into a list. RESULT cumulative_gains_list]
+            [COMMAND Convert cumulative_gains_list to a NumPy array using np.asarray and assign the result to cumulative_gains. RESULT cumulative_gains]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes discounted cumulative gain by averaging relevance gains within tied score groups using cumulative discount sums." _tie_averaged_dcg]
+    [INPUTS]
+        <REF> y_true </REF>: ndarray "True relevance scores."
+        <REF> y_score </REF>: ndarray "Predicted scores."
+        <REF> discount_cumsum </REF>: ndarray "Precomputed cumulative sum of the discounts."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> discounted_cumulative_gain </REF>: float "The discounted cumulative gain averaged over ties."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute np.unique of -y_score with return_inverse and return_counts. Discard the sorted unique values, keep inverse indices in inv and group frequencies in counts. Because -y_score is sorted ascending, the groups correspond to descending y_score order. RESULT inv, counts]
+            [COMMAND Initialize ranked as a zero array of length len(counts), one entry per unique score group. RESULT ranked]
+            [COMMAND For each position i, add y_true[i] into ranked at index inv[i] using repeated-index accumulation with np.add.at so tied positions accumulate their gains into the same group. RESULT ranked]
+            [COMMAND Divide ranked elementwise by counts to replace each group total gain with the average gain within that tied group. RESULT ranked]
+            [COMMAND Compute groups = np.cumsum(counts) - 1, the final index of each tied group in the descending-score ordering. RESULT groups]
+            [COMMAND Allocate discount_sums as an empty array of length len(counts). RESULT discount_sums]
+            [COMMAND Set discount_sums[0] to discount_cumsum[groups[0]] to store the cumulative discount at the end of the first tied group. RESULT discount_sums]
+            [COMMAND Compute np.diff(discount_cumsum[groups]) and assign it to discount_sums[1:] so each later group receives the sum of discounts between consecutive group boundaries. RESULT discount_sums]
+            [COMMAND Return the dot product of ranked and discount_sums, i.e. sum(ranked * discount_sums), as the final discounted cumulative gain. RESULT discounted_cumulative_gain]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that y_true has one of the supported multi-output target formats, raising a ValueError for unsupported formats." _check_dcg_target_type]
+    [INPUTS]
+        <REF> y_true </REF>: array-like or sparse matrix "Target values whose target format is checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: None "Returns None when y_true has a supported target format; otherwise raises ValueError."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call type_of_target with y_true and input_name='y_true' to determine the target type. RESULT y_type]
+            [COMMAND Define supported_fmt as the tuple ('multilabel-indicator', 'continuous-multioutput', 'multiclass-multioutput'). RESULT supported_fmt]
+            [COMMAND Check whether y_type is contained in supported_fmt and store the boolean result. RESULT y_type_is_supported]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: y_type_is_supported is false (y_type is not in supported_fmt)]
+        [LOG "Only {supported_fmt} formats are supported. Got {y_type} instead."]
+        [THROW ValueError "Raised when y_true has an unsupported target format."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the averaged Discounted Cumulative Gain by ranking true relevance scores according to predicted scores and applying a logarithmic discount." dcg_score]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples, n_labels) "True targets of multilabel classification, or true scores of entities to be ranked."
+        <REF> y_score </REF>: array-like of shape (n_samples, n_labels) "Target scores, which can be probability estimates, confidence values, or non-thresholded decision measures."
+        <REF> k </REF>: int or None, default=None "Only consider the highest k scores in the ranking. If None, use all outputs."
+        <REF> log_base </REF>: float, default=2 "Base of the logarithm used for the discount. A low value means a sharper discount."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,), default=None "Sample weights. If None, all samples are given the same weight."
+        <REF> ignore_ties </REF>: bool, default=False "Assume that there are no ties in y_score for efficiency gains."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> discounted_cumulative_gain </REF>: float "The averaged sample DCG scores."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate and convert y_true with check_array using ensure_2d=False, allowing 1-D inputs, and assign the returned array back to y_true. RESULT y_true]
+            [COMMAND Validate and convert y_score with check_array using ensure_2d=False, allowing 1-D inputs, and assign the returned array back to y_score. RESULT y_score]
+            [COMMAND Check that y_true, y_score, and sample_weight have consistent lengths. RESULT length_ok]
+            [COMMAND Check that y_true contains valid DCG target values using _check_dcg_target_type. RESULT target_type_ok]
+            [COMMAND Compute per-sample DCG scores by calling _dcg_sample_scores with y_true, y_score, k=k, log_base=log_base, and ignore_ties=ignore_ties. RESULT dcg_samples]
+            [COMMAND Return the weighted average of the per-sample DCG scores using np.average with weights=sample_weight. RESULT discounted_cumulative_gain]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the normalized discounted cumulative gain for each sample by dividing the DCG scores by ideal DCG scores, setting samples with no relevant items to zero." _ndcg_sample_scores]
+    [INPUTS]
+        <REF> y_true </REF>: ndarray of shape (n_samples, n_labels) "True targets of multilabel classification, or true scores of entities to be ranked."
+        <REF> y_score </REF>: ndarray of shape (n_samples, n_labels) "Target scores, such as probability estimates, confidence values, or non-thresholded decision measures."
+        <REF> k </REF>: int or None "Only consider the highest k scores in the ranking. If None, use all outputs."
+        <REF> ignore_ties </REF>: bool "Assume that there are no ties in y_score for efficiency gains. If False, ties are handled during DCG computation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> normalized_discounted_cumulative_gain </REF>: ndarray of shape (n_samples,) "The NDCG score for each sample, with values in [0., 1.]."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the discounted cumulative gain for each sample from y_true and y_score, using the cutoff k and the caller-provided ignore_ties flag; store the result as gain. RESULT gain]
+            [COMMAND Compute the ideal discounted cumulative gain for each sample by ranking y_true according to y_true itself, using the same cutoff k and ignore_ties=True; store the result as normalizing_gain. RESULT normalizing_gain]
+            [COMMAND Create a boolean mask that is True wherever normalizing_gain equals 0; store it as all_irrelevant. RESULT all_irrelevant]
+            [COMMAND For each sample where all_irrelevant is True, set the corresponding entry of gain to 0. RESULT gain]
+            [COMMAND For each sample where all_irrelevant is False, divide the corresponding entry of gain by the corresponding entry of normalizing_gain. RESULT gain]
+            [COMMAND Return the resulting normalized gain array. RESULT gain]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes Normalized Discounted Cumulative Gain by ranking true relevance according to predicted scores, applying logarithmic discounting, normalizing by the ideal DCG, and averaging per-sample NDCG scores." ndcg_score]
+    [INPUTS]
+        <REF> y_true </REF>: array-like of shape (n_samples, n_labels) "True targets or true relevance scores of entities to be ranked. Negative values are deprecated and may cause the result to fall outside [0, 1]."
+        <REF> y_score </REF>: array-like of shape (n_samples, n_labels) "Target scores used to induce the ranking; can be probability estimates, confidence values, or decision function outputs."
+        <REF> k </REF>: int or None, default None "Keyword-only argument. Only consider the highest k scores in the ranking; if None, use all outputs."
+        <REF> sample_weight </REF>: array-like of shape (n_samples,) or None, default None "Keyword-only argument. Per-sample weights used in the final average; if None, all samples are weighted equally."
+        <REF> ignore_ties </REF>: bool, default False "Keyword-only argument. If True, assume there are no ties in y_score for efficiency; if False, ties in y_score are averaged."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> normalized_discounted_cumulative_gain </REF>: float "The averaged NDCG score over all samples, normally in [0., 1.] unless y_true contains negative values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate and convert y_true with check_array(y_true, ensure_2d=False), allowing the input to remain 1D or 2D, and assign the validated array back to y_true. RESULT y_true]
+            [COMMAND Validate and convert y_score with check_array(y_score, ensure_2d=False), allowing the input to remain 1D or 2D, and assign the validated array back to y_score. RESULT y_score]
+            [COMMAND Check that y_true, y_score, and sample_weight have consistent lengths using check_consistent_length(y_true, y_score, sample_weight); if sample_weight is None, it is ignored. RESULT None]
+            [COMMAND If y_true.min() < 0, issue a FutureWarning stating that ndcg_score should not be used with negative y_true values and that this will become a ValueError starting from version 1.4. RESULT None]
+            [COMMAND Check that y_true has more than one document when it is 2D; if y_true.ndim > 1 and y_true.shape[1] <= 1, the ValueError exception flow is triggered. RESULT None]
+            [COMMAND Validate the target type of y_true by calling _check_dcg_target_type(y_true). RESULT None]
+            [COMMAND Compute per-sample NDCG gains by calling _ndcg_sample_scores(y_true, y_score, k=k, ignore_ties=ignore_ties); this ranks y_true by y_score descending, applies logarithmic discounting, uses all outputs when k is None and otherwise requires k to be an integer >= 1, averages tied scores when ignore_ties is False, assumes no ties when ignore_ties is True, and assigns 0 when the ideal DCG is 0. RESULT gain]
+            [COMMAND Compute the final averaged NDCG score with np.average(gain, weights=sample_weight), using an unweighted mean when sample_weight is None, and return it. RESULT normalized_discounted_cumulative_gain]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: y_true.ndim > 1 and y_true.shape[1] <= 1, with short-circuit evaluation so y_true.shape[1] is only checked when y_true.ndim > 1]
+        [LOG "Computing NDCG is only meaningful when there is more than 1 document. Got {y_true.shape[1]} instead."]
+        [THROW ValueError "Raised when y_true is 2D and has zero or one column, because NDCG requires more than one document."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes top-k classification accuracy by checking whether the true label is among the k highest-scored predicted labels, with optional normalization and sample weighting." top_k_accuracy_score]
+    [INPUTS]
+        <REF> y_true </REF>: array-like "True labels of shape (n_samples,)."
+        <REF> y_score </REF>: array-like "Target scores; binary case expects shape (n_samples,) and multiclass case expects shape (n_samples, n_classes)."
+        <REF> k </REF>: int "Number of most likely outcomes considered to find the correct label; defaults to 2."
+        <REF> normalize </REF>: bool "If True, return the fraction of correctly classified samples; otherwise return the count or weighted sum."
+        <REF> sample_weight </REF>: array-like "Optional sample weights of shape (n_samples,); defaults to None."
+        <REF> labels </REF>: array-like "Optional ordered list of all class labels; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> score </REF>: float "The top-k accuracy score; a fraction when normalize=True, otherwise a count or weighted sum."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate y_true with check_array(ensure_2d=False, dtype=None), flatten it to one dimension with column_or_1d, and set y_type from type_of_target(y_true, input_name='y_true'). RESULT y_true, y_type]
+            [COMMAND If y_type is 'binary' and labels is not None and len(labels) > 2, reclassify y_type as 'multiclass'. RESULT y_type]
+            [COMMAND Ensure y_type is one of 'binary' or 'multiclass'; if not, raise ValueError as described in exception_flows. RESULT validated_y_type]
+            [COMMAND Validate y_score with check_array(ensure_2d=False), allowing either 1D scores or 2D score matrices. RESULT y_score]
+            [COMMAND When y_type is 'binary', if y_score is 2D it must have exactly one column; otherwise raise ValueError. Then flatten y_score with column_or_1d. RESULT y_score]
+            [COMMAND Check that y_true, y_score, and sample_weight have consistent lengths. RESULT none]
+            [COMMAND Set y_score_n_classes to y_score.shape[1] when y_score.ndim == 2, otherwise set it to 2. RESULT y_score_n_classes]
+            [COMMAND Resolve classes and n_classes, choosing the label-inference path if labels is None or the explicit-label validation path if labels is provided; see alternative_flows. RESULT classes, n_classes]
+            [COMMAND If k >= n_classes, issue an UndefinedMetricWarning stating that k greater than or equal to n_classes will result in a perfect score and is therefore meaningless. RESULT none]
+            [COMMAND Encode y_true into y_true_encoded using classes as the unique vocabulary. RESULT y_true_encoded]
+            [COMMAND Compute the hits array by following the binary k == 1, binary k != 1, or multiclass path described in alternative_flows. RESULT hits]
+            [COMMAND Return the final score by following the normalize/sample_weight path described in alternative_flows. RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: labels is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Derive classes as the sorted unique values of y_true. RESULT classes]
+            [COMMAND Set n_classes to the number of inferred classes. RESULT n_classes]
+            [COMMAND Verify that n_classes equals y_score_n_classes; otherwise raise ValueError via exception_flows. RESULT validated_class_count]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: labels is provided]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Flatten labels to one dimension with column_or_1d. RESULT labels]
+            [COMMAND Derive classes as the sorted unique values of labels. RESULT classes]
+            [COMMAND Set n_labels to the length of labels and n_classes to the number of unique labels. RESULT n_labels, n_classes]
+            [COMMAND Verify that n_classes equals n_labels; otherwise raise ValueError for duplicate labels. RESULT validated_unique_labels]
+            [COMMAND Verify that classes is exactly equal to labels using np.array_equal; otherwise raise ValueError for unordered labels. RESULT validated_ordered_labels]
+            [COMMAND Verify that n_classes equals y_score_n_classes; otherwise raise ValueError. RESULT validated_class_count]
+            [COMMAND Verify that y_true contains no values outside classes using np.setdiff1d; otherwise raise ValueError. RESULT validated_label_coverage]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: y_type == 'binary' and k == 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set threshold to 0.5 if all y_score values are between 0 and 1 inclusive, otherwise set threshold to 0. RESULT threshold]
+            [COMMAND Convert y_score > threshold to integer predictions y_pred. RESULT y_pred]
+            [COMMAND Set hits to y_pred == y_true_encoded. RESULT hits]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: y_type == 'binary' and k != 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set hits to an all-True boolean array with the same shape as y_score. RESULT hits]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: y_type == 'multiclass']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Stably sort y_score columns in descending order using np.argsort with kind='mergesort', reverse the column order, and store as sorted_pred. RESULT sorted_pred]
+            [COMMAND Set hits to True where the encoded true label appears among the first k columns of sorted_pred. RESULT hits]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: normalize is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return np.average(hits, weights=sample_weight). RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: normalize is false and sample_weight is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return np.sum(hits). RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: normalize is false and sample_weight is provided]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return np.dot(hits, sample_weight). RESULT score]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: y_type is not 'binary' or 'multiclass']
+        [LOG "y type must be 'binary' or 'multiclass', got '{y_type}' instead."]
+        [THROW ValueError "Indicates that the inferred target type is not supported."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: y_type == 'binary' and y_score is 2D with a column count other than 1]
+        [LOG "`y_true` is binary while y_score is 2d with {y_score.shape[1]} classes. If `y_true` does not contain all the labels, `labels` must be provided."]
+        [THROW ValueError "Indicates a shape mismatch between binary y_true and a multiclass-shaped y_score."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is None and n_classes != y_score_n_classes]
+        [LOG "Number of classes in 'y_true' ({n_classes}) not equal to the number of classes in 'y_score' ({y_score_n_classes}). You can provide a list of all known classes by assigning it to the `labels` parameter."]
+        [THROW ValueError "Indicates inconsistent class counts between y_true and y_score."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is provided and n_classes != n_labels]
+        [LOG "Parameter 'labels' must be unique."]
+        [THROW ValueError "Indicates that the provided labels contain duplicate values."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is provided and classes is not equal to labels]
+        [LOG "Parameter 'labels' must be ordered."]
+        [THROW ValueError "Indicates that the provided labels are not in sorted order."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is provided and n_classes != y_score_n_classes]
+        [LOG "Number of given labels ({n_classes}) not equal to the number of classes in 'y_score' ({y_score_n_classes})."]
+        [THROW ValueError "Indicates inconsistent class counts between the provided labels and y_score."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: labels is provided and y_true contains a label not present in classes]
+        [LOG "'y_true' contains labels not in parameter 'labels'."]
+        [THROW ValueError "Indicates that y_true contains labels outside the explicitly provided label set."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

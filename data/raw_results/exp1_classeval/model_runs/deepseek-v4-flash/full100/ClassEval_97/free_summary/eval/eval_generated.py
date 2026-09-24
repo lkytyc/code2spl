@@ -1,0 +1,170 @@
+import re
+
+class Words2Numbers:
+    def __init__(self):
+        self.units = {
+            'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4,
+            'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
+            'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13,
+            'fourteen': 14, 'fifteen': 15, 'sixteen': 16, 'seventeen': 17,
+            'eighteen': 18, 'nineteen': 19
+        }
+        self.tens = {
+            'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50,
+            'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90
+        }
+        self.scales = {
+            'hundred': 100, 'thousand': 1000, 'million': 1000000,
+            'billion': 1000000000, 'trillion': 1000000000000
+        }
+        self.ordinals = {
+            'first': 1, 'second': 2, 'third': 3, 'fourth': 4,
+            'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8,
+            'ninth': 9, 'tenth': 10, 'eleventh': 11, 'twelfth': 12,
+            'thirteenth': 13, 'fourteenth': 14, 'fifteenth': 15,
+            'sixteenth': 16, 'seventeenth': 17, 'eighteenth': 18,
+            'nineteenth': 19, 'twentieth': 20, 'thirtieth': 30,
+            'fortieth': 40, 'fiftieth': 50, 'sixtieth': 60,
+            'seventieth': 70, 'eightieth': 80, 'ninetieth': 90,
+            'hundredth': 100, 'thousandth': 1000, 'millionth': 1000000,
+            'billionth': 1000000000, 'trillionth': 1000000000000
+        }
+        self.all_words = set(self.units.keys()) | set(self.tens.keys()) | set(self.scales.keys()) | set(self.ordinals.keys())
+
+    def _normalize_ordinal(self, word):
+        if word in self.ordinals:
+            return self.ordinals[word]
+        if word.endswith('ieth'):
+            base = word[:-4] + 'y'
+            if base in self.tens:
+                return self.tens[base]
+        elif word.endswith('th'):
+            base = word[:-2]
+            if base in self.units:
+                return self.units[base]
+            elif base in self.tens:
+                return self.tens[base]
+            elif base in self.scales:
+                return self.scales[base]
+        return None
+
+    def _word_to_number(self, word):
+        if word in self.units:
+            return self.units[word]
+        if word in self.tens:
+            return self.tens[word]
+        if word in self.scales:
+            return self.scales[word]
+        ordinal_val = self._normalize_ordinal(word)
+        if ordinal_val is not None:
+            return ordinal_val
+        return None
+
+    def text2int(self, text):
+        text = text.replace('-', ' ')
+        words = text.split()
+        result = []
+        i = 0
+        while i < len(words):
+            word = words[i].lower()
+            # Check if word is a number word (including ordinals)
+            if self._word_to_number(word) is not None:
+                # Accumulate consecutive number words
+                current = 0
+                temp = 0
+                j = i
+                while j < len(words):
+                    w = words[j].lower()
+                    val = self._word_to_number(w)
+                    if val is None:
+                        break
+                    if w in self.scales:
+                        if w == 'hundred':
+                            if temp == 0:
+                                temp = 1
+                            temp *= 100
+                        else:
+                            temp *= val
+                            current += temp
+                            temp = 0
+                    else:
+                        temp += val
+                    j += 1
+                if temp > 0:
+                    current += temp
+                result.append(str(current))
+                i = j
+            else:
+                result.append(words[i])
+                i += 1
+        return ' '.join(result)
+
+    def is_valid_input(self, input_str):
+        words = input_str.replace('-', ' ').split()
+        for word in words:
+            if self._word_to_number(word.lower()) is None:
+                return False
+        return True
+
+import unittest
+
+
+class Words2NumbersTestText2Int(unittest.TestCase):
+    def test_text2int(self):
+        w2n = Words2Numbers()
+        self.assertEqual(w2n.text2int("thirty-two"), "32")
+
+    def test_text2int2(self):
+        w2n = Words2Numbers()
+        self.assertEqual(w2n.text2int("one hundred and twenty-three"), "123")
+
+    def test_text2int3(self):
+        w2n = Words2Numbers()
+        self.assertEqual(w2n.text2int("two thousand and nineteen"), "2019")
+
+    def test_text2int4(self):
+        w2n = Words2Numbers()
+        self.assertEqual(w2n.text2int("one hundred and one"), "101")
+
+    def test_text2int5(self):
+        w2n = Words2Numbers()
+        self.assertEqual(w2n.text2int("one million and eleven"), "1000011")
+
+    def test_text2int6(self):
+        w2n = Words2Numbers()
+        self.assertEqual(w2n.text2int("one million one hundred sixty-ninth"), "1000169")
+
+class Words2NumbersTestIsValidInput(unittest.TestCase):
+    def test_is_valid_input(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("twenty-five thousand three hundred and forty-two"))
+
+    def test_is_valid_input2(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("second hundred and third"))
+
+    def test_is_valid_input3(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("twenty-fifth thousand three hundred and forty-second"))
+
+    def test_is_valid_input4(self):
+        w2n = Words2Numbers()
+        self.assertFalse(w2n.is_valid_input("eleventy thousand and five"))
+
+    def test_is_valid_input5(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("seventy two thousand and hundred eleven"))
+
+    def test_is_valid_input6(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("fifteenth hundred"))
+
+class  Words2NumbersTestMain(unittest.TestCase):
+    def test_main(self):
+        w2n = Words2Numbers()
+        self.assertEqual(w2n.is_valid_input("seventy two thousand and hundred eleven"), True)
+        self.assertEqual(w2n.text2int("seventy two thousand and hundred eleven"), "72011")
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

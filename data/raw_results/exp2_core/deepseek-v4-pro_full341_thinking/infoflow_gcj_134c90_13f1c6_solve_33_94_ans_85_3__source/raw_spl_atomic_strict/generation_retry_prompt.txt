@@ -1,0 +1,625 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   from math import sqrt, pow, log, ceil, log10
+2   from sys import stdin, setrecursionlimit
+3   from sets import Set
+4   setrecursionlimit(100000)
+5   debug = False
+6   def isCycleCorrect(A, C, L, ans):
+7       la = len(ans)
+8       for i in range(A):
+9           pos = 0
+10          isThereAWinner = False
+11          while (isThereAWinner == False) and (pos < L[i] * la):
+12              if C[i][pos % L[i]] != ans[pos % la]:
+13                  if debug:
+14                      print "->", C[i][pos % L[i]], ans[pos % la], A, i
+15                  if (C[i][pos % L[i]], ans[pos % la]) == ('R', 'S'):
+16                      return False
+17                  if (C[i][pos % L[i]], ans[pos % la]) == ('S', 'R'):
+18                      isThereAWinner = True
+19                      break
+20                  if (C[i][pos % L[i]], ans[pos % la]) == ('R', 'P'):
+21                      isThereAWinner = True
+22                      break
+23                  if (C[i][pos % L[i]], ans[pos % la]) == ('P', 'R'):
+24                      return False
+25                  if (C[i][pos % L[i]], ans[pos % la]) == ('P', 'S'):
+26                      isThereAWinner = True
+27                      break
+28                  if (C[i][pos % L[i]], ans[pos % la]) == ('S', 'P'):
+29                      return False
+30              pos += 1
+31          return False
+32      return True
+33  def solve(A, C, L):
+34      ans = ""
+35      pos = 0
+36      isAlive = [True] * A
+37      while True:
+38          possibilities = {}
+39          possibilities['R'] = 0
+40          possibilities['S'] = 0
+41          possibilities['P'] = 0
+42          predR = []
+43          predS = []
+44          predP = []
+45          if debug:
+46              print "alive ans", isAlive, ans
+47          if not any(isAlive):
+48              print ans
+49              return
+50          for i in range(A):
+51              if isAlive[i]:
+52                  possibilities[C[i][pos % L[i]]] = 1
+53                  if C[i][pos % L[i]] == 'R':
+54                      predR += [i]
+55                  if C[i][pos % L[i]] == 'S':
+56                      predS += [i]
+57                  if C[i][pos % L[i]] == 'P':
+58                      predP += [i]
+59                  if possibilities['R'] + possibilities['S'] + possibilities['P'] == 3:
+60                      print "IMPOSSIBLE"
+61                      return
+62          (r, s, p) = (possibilities['R'], possibilities['S'], possibilities['P'])
+63          if debug:
+64              print "->", (r, s, p)
+65          if (r, s, p) == (1, 0, 0):
+66              ans += "P"
+67              print ans
+68              return
+69          if (r, s, p) == (0, 1, 0):
+70              ans += "R"
+71              print ans
+72              return
+73          if (r, s, p) == (0, 0, 1):
+74              ans += "S"
+75              print ans
+76              return
+77          if len(ans) == 500:
+78              print "IMPOSSIBLE"
+79              if debug:
+80                  print "LEN", ans
+81              return
+82          if (r, s, p) == (1, 1, 0):
+83              for i in predS:
+84                  isAlive[i] = False
+85              ans += "R"
+86          if (r, s, p) == (1, 0, 1):
+87              for i in predR:
+88                  isAlive[i] = False
+89              ans += "P"
+90          if (r, s, p) == (0, 1, 1):
+91              for i in predP:
+92                  isAlive[i] = False
+93              ans += "S"
+94          pos += 1
+95  T = int(stdin.readline())
+96  for i in range(1,T+1):
+97      A = stdin.readline()
+98      A = int(A)
+99      C = [""] * A
+100      L = [0] * A
+101      for j in range(A):
+102          C[j] = stdin.readline().rstrip() 
+103          L[j] = len(C[j])
+104      print "Case #" + str(i) + ":", 
+105      if debug:
+106          print " -> ", A, C, L
+107      solve(A, C, L)
+```
+
+
+**Question**: Which variable instances have information flow over `(ans,85)` in function `solve`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: solve
+Target source anchor: variable=ans, line=85
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: solve
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a read-modify-write update that reads its prior value: {'kind': 'variable_instance', 'variable': 'ans', 'line': 85, 'reason': 'the target is a read-modify-write update that reads its prior value'}
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Initialize ans to an empty string. RESULT ans]
+- [COMMAND If debug is truthy, print the current isAlive list and ans. RESULT _]
+- [COMMAND At the start of each loop iteration, reset possibilities to {'R': 0, 'S': 0, 'P': 0} and reset predR, predS, and predP to empty lists. RESULT possibilities]
+- [COMMAND Within the player scan, if gesture is 'R', append i to predR; if gesture is 'S', append i to predS; if gesture is 'P', append i to predP. RESULT predR]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 34: ans = ""
+- line 35: pos = 0
+- line 36: isAlive = [True] * A
+- line 37: while True:
+- line 38: possibilities = {}
+- line 39: possibilities['R'] = 0
+- line 40: possibilities['S'] = 0
+- line 41: possibilities['P'] = 0
+- line 42: predR = []
+- line 43: predS = []
+- line 44: predP = []
+- line 45: if debug:
+- line 47: if not any(isAlive):
+- line 50: for i in range(A):
+- line 51: if isAlive[i]:
+- line 52: possibilities[C[i][pos % L[i]]] = 1
+- line 53: if C[i][pos % L[i]] == 'R':
+- line 54: predR += [i]
+- line 55: if C[i][pos % L[i]] == 'S':
+- line 56: predS += [i]
+- line 57: if C[i][pos % L[i]] == 'P':
+- line 58: predP += [i]
+- line 59: if possibilities['R'] + possibilities['S'] + possibilities['P'] == 3:
+- line 62: (r, s, p) = (possibilities['R'], possibilities['S'], possibilities['P'])
+- line 63: if debug:
+- line 65: if (r, s, p) == (1, 0, 0):
+- line 66: ans += "P"
+- line 69: if (r, s, p) == (0, 1, 0):
+- line 70: ans += "R"
+- line 73: if (r, s, p) == (0, 0, 1):
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["ans"], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["ans"], "roles": ["definition"], "source_identifiers": ["ans"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 35, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["pos"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["A", "True", "isAlive"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 37, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["True", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["possibilities"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 39, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["R"], "roles": ["use"], "source_identifiers": ["R", "possibilities"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 40, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["S", "possibilities"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 41, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["P", "possibilities"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 42, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["predR"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 43, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["predS"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 44, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["predP"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 45, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["debug", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["any", "if", "isAlive", "not"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["A", "for", "i", "in", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 51, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["i", "if", "isAlive"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 52, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["C", "L", "i", "pos", "possibilities"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 53, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["R"], "roles": ["use", "control"], "source_identifiers": ["C", "L", "R", "i", "if", "pos"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i", "predR"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["C", "L", "S", "i", "if", "pos"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 56, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i", "predS"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 57, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["C", "L", "P", "i", "if", "pos"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 58, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["i", "predP"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 59, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["R"], "roles": ["use", "control"], "source_identifiers": ["P", "R", "S", "if", "possibilities"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 62, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["R"], "roles": ["use"], "source_identifiers": ["P", "R", "S", "p", "possibilities", "r", "s"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 63, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["debug", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 65, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "p", "r", "s"]}
+- {"definitions": ["ans"], "disposition": "inspect_against_official_dependence_definition", "line": 66, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["ans"], "roles": ["definition"], "source_identifiers": ["P", "ans"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 69, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "p", "r", "s"]}
+- {"definitions": ["ans"], "disposition": "inspect_against_official_dependence_definition", "line": 70, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["ans", "R"], "roles": ["definition", "use"], "source_identifiers": ["R", "ans"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 73, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "p", "r", "s"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 33-94
+- source signature: `def solve(A, C, L):`
+- source content hash: `a201af7f0c1600da0534e134b210ec64856e4fe70b181163b025628beaa9563c`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```python
+  33  def solve(A, C, L):
+  34      ans = ""
+  35      pos = 0
+  36      isAlive = [True] * A
+  37      while True:
+  38          possibilities = {}
+  39          possibilities['R'] = 0
+  40          possibilities['S'] = 0
+  41          possibilities['P'] = 0
+  42          predR = []
+  43          predS = []
+  44          predP = []
+  45          if debug:
+  46              print "alive ans", isAlive, ans
+  47          if not any(isAlive):
+  48              print ans
+  49              return
+  50          for i in range(A):
+  51              if isAlive[i]:
+  52                  possibilities[C[i][pos % L[i]]] = 1
+  53                  if C[i][pos % L[i]] == 'R':
+  54                      predR += [i]
+  55                  if C[i][pos % L[i]] == 'S':
+  56                      predS += [i]
+  57                  if C[i][pos % L[i]] == 'P':
+  58                      predP += [i]
+  59                  if possibilities['R'] + possibilities['S'] + possibilities['P'] == 3:
+  60                      print "IMPOSSIBLE"
+  61                      return
+  62          (r, s, p) = (possibilities['R'], possibilities['S'], possibilities['P'])
+  63          if debug:
+  64              print "->", (r, s, p)
+  65          if (r, s, p) == (1, 0, 0):
+  66              ans += "P"
+  67              print ans
+  68              return
+  69          if (r, s, p) == (0, 1, 0):
+  70              ans += "R"
+  71              print ans
+  72              return
+  73          if (r, s, p) == (0, 0, 1):
+  74              ans += "S"
+  75              print ans
+  76              return
+  77          if len(ans) == 500:
+  78              print "IMPOSSIBLE"
+  79              if debug:
+  80                  print "LEN", ans
+  81              return
+  82          if (r, s, p) == (1, 1, 0):
+  83              for i in predS:
+  84                  isAlive[i] = False
+  85              ans += "R"
+  86          if (r, s, p) == (1, 0, 1):
+  87              for i in predR:
+  88                  isAlive[i] = False
+  89              ans += "P"
+  90          if (r, s, p) == (0, 1, 1):
+  91              for i in predP:
+  92                  isAlive[i] = False
+  93              ans += "S"
+  94          pos += 1
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Solves a multi-player rock-paper-scissors elimination puzzle by repeatedly scanning alive players' cyclic gestures, appending a move that either immediately wins or eliminates all players currently showing one beaten gesture, and printing the final move sequence or 'IMPOSSIBLE' when no valid sequence of at most 500 moves exists." solve]
+    [INPUTS]
+        <REF> A </REF>: int "Number of players; used to create the isAlive list of length A."
+        <REF> C </REF>: list[str] "List of gesture strings; C[i] is the cyclic gesture pattern for player i, using characters R, S, and P."
+        <REF> L </REF>: list[int] "List of cycle lengths; L[i] is the modulus used to select C[i][pos % L[i]] at position pos."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> printed_output </REF>: string "The function prints to stdout either the accumulated ans move sequence or the literal string 'IMPOSSIBLE'; it returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize ans to an empty string. RESULT ans]
+            [COMMAND Initialize pos to 0. RESULT pos]
+            [COMMAND Initialize isAlive to a list of length A where every element is True. RESULT isAlive]
+            [COMMAND Enter an infinite while loop that repeats the following steps until a return is executed. RESULT _]
+            [COMMAND At the start of each loop iteration, reset possibilities to {'R': 0, 'S': 0, 'P': 0} and reset predR, predS, and predP to empty lists. RESULT possibilities]
+            [COMMAND If debug is truthy, print the current isAlive list and ans. RESULT _]
+            [COMMAND If no element of isAlive is True, print ans and return from the function. RESULT _]
+            [COMMAND For each player index i from 0 to A-1 inclusive, if isAlive[i] is True, execute the following player scan steps. RESULT _]
+            [COMMAND Within the player scan, compute gesture = C[i][pos % L[i]] and set possibilities[gesture] to 1. RESULT gesture]
+            [COMMAND Within the player scan, if gesture is 'R', append i to predR; if gesture is 'S', append i to predS; if gesture is 'P', append i to predP. RESULT predR]
+            [COMMAND Within the player scan, if possibilities['R'] plus possibilities['S'] plus possibilities['P'] equals 3, print 'IMPOSSIBLE' and return from the function. RESULT _]
+            [COMMAND After the player scan completes, assign r = possibilities['R'], s = possibilities['S'], and p = possibilities['P']. RESULT r]
+            [COMMAND If debug is truthy, print the tuple (r, s, p). RESULT _]
+            [COMMAND If (r, s, p) equals (1, 0, 0), append 'P' to ans, print ans, and return from the function. RESULT ans]
+            [COMMAND If (r, s, p) equals (0, 1, 0), append 'R' to ans, print ans, and return from the function. RESULT ans]
+            [COMMAND If (r, s, p) equals (0, 0, 1), append 'S' to ans, print ans, and return from the function. RESULT ans]
+            [COMMAND If len(ans) equals 500, print 'IMPOSSIBLE'; if debug is truthy, print 'LEN' and ans; then return from the function. RESULT _]
+            [COMMAND If (r, s, p) equals (1, 1, 0), set isAlive[i] to False for every i in predS, then append 'R' to ans. RESULT ans]
+            [COMMAND If (r, s, p) equals (1, 0, 1), set isAlive[i] to False for every i in predR, then append 'P' to ans. RESULT ans]
+            [COMMAND If (r, s, p) equals (0, 1, 1), set isAlive[i] to False for every i in predP, then append 'S' to ans. RESULT ans]
+            [COMMAND Increment pos by 1 and continue to the next iteration of the infinite while loop. RESULT pos]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.
+
+
+SOURCE-CONTRACT RETRY. The previous answer omitted source-derived structural obligations. Recheck the numbered source and source-bound SPL card, then revise the complete answer. Do not blindly append an item if source verification contradicts it.
+
+Contract violations: [{"kind": "missing_required_variable_instance", "anchor": {"kind": "variable_instance", "variable": "ans", "line": 85, "reason": "the target is a read-modify-write update that reads its prior value"}}]
+
+Previous answer:
+
+
+Return only the exact JSON object required by the official task, with no prose or markdown.

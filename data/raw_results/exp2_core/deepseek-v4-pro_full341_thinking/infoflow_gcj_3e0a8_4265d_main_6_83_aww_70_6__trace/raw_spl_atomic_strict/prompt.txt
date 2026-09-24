@@ -1,0 +1,696 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Is there information flow from `(varA,lineA)` to `(varB,lineB)`? If so, provide one feasible trace.", respond with a JSON object:
+
+- If information flow exists:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["varOrExpr", lineNumber            /*, "use" optional */],
+      "to":   ["varOrExpr", lineNumber            /*, "use" optional */],
+      "type": "data" | "control"
+    },
+    // … additional edges
+  ]
+}
+```
+- If no information flow exists, omit the Trace field:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+- Every trace edge must specify "from", "to" (each may include a third "use" element when the line is a conditional statement that only reads without redefining/updating the value), and "type".
+- **We do not consider loop in the trace**.
+
+
+A **trace** represents a **transitive chain of direct flows** arise from compositions of **direct** implicit or explicit flows, where each edge represents a **direct implicit flow** (through control dependence) or a **direct explicit flow** edge (through data dependence).
+
+
+You only need to provide **one** valid trace if you conclude a information flow exists, even if multiple possible chains exist. 
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Is there information flow from `(balance,4)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. Here we focus on `(status,7)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+Hence, A transitive of flow of direct implicit or explicit flows forms a information flow trace.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["balance", 4],
+      "to":   ["balance", 5],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 5],
+      "to":   ["balance", 6, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 6, "use"],
+      "to":   ["status", 7],
+      "type": "control"
+    },
+    {
+      "from": ["status", 7],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+ 
+- The edge from line 6 to `(status,7)` is through control dependence and therefore with a type of "control". 
+- Line 6 only reads the value of `balance` without defining/updating it. So it is marked with `"use"`. 
+- You only need to provide **one** valid chain if you conclude a the information flow exists. 
+
+
+#### Example Question 1.2
+
+Is there information flow from  `(flag,3)` to `(limit,9)`? If so, provide a trace.
+
+**Analysis**
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from either `(status,7)` (if line 6’s condiation evaluates to `true`) or on the original `(status,2)` (if not) to `(limit,9)`. 
+- Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 6 is treated as being evaluated to both possibly true and possibly false.
+  - If line 6 is true, `(limit,9)` depends on `(status,7)`. 
+    - Line 7: `(status,7)` doesn't have any data dependence as it is assigned with a constant number. The execution of line 7 is control-dependent on the condition in line 6.
+    - Line 6: the condition at line 6 directly reads from `(balance,5)`. 
+    - Line 5: `(balance,5)` is updated based on the previous value of `balance` in line 4.
+    - Line 4: `(balance,4)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+  - If line 6 is not true, `(limit,9)` depends on `(status,2)`. 
+    - Line 2: `(status,2)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+- Therefore, among all the possible paths, there is no transitive (indirect) chain of implicit or explicit flow from `(flag,3)` to `(limit,9)`. The information flow doesn't exist.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+#### Example Question 1.3
+
+Is there information flow from  `(status,2)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`.
+- Line 9: `(limit,9)` reads `status`, o there is a direct explicit flow from either `(status,7)`, or the original `(status,2)`, to `(limit,9)`.
+- Similar to the above example, line 6 is possibly evaluated to true or false.
+- If line 6 evaluates to `true`, there is a direct explicit flow from `(status,7)` to `(limit,9)`, which directly data-dependent on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (status,7) -> (limit,9) -> (transaction,10)`.
+- If line 6 evaluates to `false`, `(limit,9)` has a direct data dependence on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (limit,9) -> (transaction,10)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["status", 2],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Is there information flow from  `(size,2)` to `(summary,17)`? If so, provide a trace.
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. We focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`.
+- Line 2: `size` is initialized with a constant number. It is not guarded with any conditions. 
+- Therefore, there is an transitive trace of direct implicit/excplit flows from `(size,2)` to `(summary,17)`.
+
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["size", 2],
+      "to":   ["size", 9, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["size", 9, "use"],
+      "to":   ["j", 14],
+      "type": "control"
+    },
+    {
+      "from": ["j", 14],
+      "to":   ["summary", 17],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Is there information flow from  `(j,5)` to `(score,11)`? If so, provide a trace. 
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`.
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop).
+- If line 11 reads `j` from line 5, it forms a tansitive explicit flow trace: `(j,5) -> (score,11)`.
+- If line 11 reads `j` from line 14, it forms a tansitive explicit flow trace: `(j,5) -> (j,14) -> (score,11)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["j", 5],
+      "to":   ["score", 11],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+
+#### Example Question 2.3:
+Is there information flow from  `(j,1)` to `(i,15)`? If so, provide a trace.
+
+**Analysis**: 
+- Line 15: `(i,15)` updates `i` based on its previous value. So there is a direct explicit flow from either `(i,4)` (initialization) or itself (loop-carried) to `(i,15)`. But we do not consider loop-carried dependencies across iterations in this analysis. So we focus on `(i,4)`.
+- The execution of line 15 is conditional on the while loop at line 9.
+- Line 9: `while i < size` depends on `i` and `size`. It directly reads from `(i,4)` (or possibly `(i,15)`) and `(size,2)`.
+- Both `(i,4)` and `(size,2)` are initialized with constants and are not themselves control-dependent on any earlier values or branches.
+- There is no use of `(j,1)` in the computation of `(i,15)`, nor does `(j,1)` influence whether line 15 executes.
+- Therefore, there is no transitive flow, explicit or implicit, from `(j,1)` to `(i,15)`.
+
+
+**Output**: 
+```json
+{
+  "InformationFlow": false
+}
+```
+
+
+#### Example Question 2.4:
+Is there information flow from  `(val,1)` to `(last,16)`? If so, provide a trace.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8 (or by the loop updates in line 10). Under static analysis, multiple update sites may contribute. We conservatively pick one valid trace (line 8).
+- Line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7.
+- Therefore, there exists a trace from `(val,1)` to `(last,16)`, and the edge from line 7 to `(arr,8)` is through implicit and explicit flows. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["val", 1],
+      "to":   ["val", 7, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["val", 7, "use"],
+      "to":   ["arr", 8],
+      "type": "control"
+    },
+    {
+      "from": ["arr", 8],
+      "to":   ["last", 16],
+      "type": "data"
+    }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.*;
+2   import java.io.*;
+3   public class Solution
+4   {
+5     public static ArrayList<ArrayList<Integer>> table;
+6     public static void main(String [] args)
+7     {
+8       Scanner input = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+9       int t = Integer.parseInt(input.nextLine());
+10      for(int iii = 1; iii <= t; iii++)
+11      {
+12        int n = input.nextInt();
+13        int[] aw = new int[n];
+14        table = new ArrayList<ArrayList<Integer>>();
+15        table.add( new ArrayList<Integer>());
+16        for(int i = 0; i < n; i++)
+17        {
+18          aw[i]=input.nextInt();
+19          table.add( new ArrayList<Integer>());
+20        }
+21        for(int i = 1; i <= n; i++)
+22        {
+23          table.set(i,recurse(aw,i));
+24        }
+25        int max = table.get(n).size();
+26        for(int i = 0; i < n; i++ )
+27        {
+28          table = new ArrayList<ArrayList<Integer>>();
+29          for(int ii = 0; ii < n; ii++)
+30          {
+31            table.add( new ArrayList<Integer>());
+32          }
+33          int[] aww = new int[n-1];
+34          for(int ii = 0; ii < i; ii++ )
+35          {
+36            aww[ii]=aw[ii];
+37          }
+38          for(int ii = i+1; ii < n; ii++)
+39          {
+40            aww[ii-1]=aw[ii];
+41          }
+42          for(int ii = 1; ii <= n-1; ii++)
+43          {
+44            table.set(ii,recurse(aww,ii));
+45          }
+46          int tempmax = table.get(n-1).size();
+47          if(tempmax>max)
+48            max=tempmax;
+49        }
+50        for(int i = 0; i < n; i++ )
+51        {
+52          for(int j = i+1; j < n; j++)
+53          {
+54            table = new ArrayList<ArrayList<Integer>>();
+55            for(int ii = 0; ii < n-1; ii++)
+56            {
+57              table.add( new ArrayList<Integer>());
+58            }
+59            int[] aww = new int[n-2];
+60            for(int ii = 0; ii < i; ii++ )
+61            {
+62              aww[ii]=aw[ii];
+63            }
+64            for(int ii = i+1; ii < j; ii++)
+65            {
+66              aww[ii-1]=aw[ii];
+67            }
+68            for(int ii = j+1; ii < n; ii++)
+69            {
+70              aww[ii-2]=aw[ii];
+71            }
+72            for(int ii = 1; ii <= n-2; ii++)
+73            {
+74              table.set(ii,recurse(aww,ii));
+75            }
+76            int tempmax = table.get(n-2).size();
+77            if(tempmax>max)
+78              max=tempmax;
+79          }
+80        }
+81        System.out.println("Case #"+iii+": "+max);
+82      }
+83    }
+84    public static ArrayList<Integer> recurse(int[] aw, int n)
+85    {
+86      ArrayList<Integer> resul = new ArrayList<Integer>();
+87      if(n==1){resul.add(0);}
+88      else
+89      {
+90        int maxlength = -1;
+91        int minweight = 100000000;
+92        int goodindex = -1;
+93        boolean addon = false;
+94        for(int i = 0; i < n; i++)
+95        {
+96          boolean tempaddon = false;
+97          ArrayList<Integer> result = table.get(i);
+98          int leng = result.size();
+99          if (leng < maxlength) continue;
+100          int weight = 0;
+101          for(int ii : result)
+102          {
+103            weight += aw[ii];
+104          }
+105          if(weight<=6*aw[n-1]){leng ++;weight += aw[n-1];tempaddon=true;}
+106          if(maxlength==leng){if(weight<minweight){minweight=weight;goodindex=i;addon=tempaddon;}}else{maxlength=leng; minweight=weight; goodindex=i;addon=tempaddon;}
+107        }
+108        for(int i : table.get(goodindex))
+109        {
+110          resul.add(i);
+111        }
+112        if(addon)resul.add(n-1);
+113      }
+114      return resul;
+115    }
+116  }
+```
+
+
+**Question**: Is there information flow from `(table,19)` to `(aww,70)` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: main
+Target source anchor: variable=aww, line=70
+Trace source anchor: variable=table, line=19
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 8: Scanner input = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+- line 9: int t = Integer.parseInt(input.nextLine());
+- line 10: for(int iii = 1; iii <= t; iii++)
+- line 12: int n = input.nextInt();
+- line 13: int[] aw = new int[n];
+- line 14: table = new ArrayList<ArrayList<Integer>>();
+- line 15: table.add( new ArrayList<Integer>());
+- line 16: for(int i = 0; i < n; i++)
+- line 18: aw[i]=input.nextInt();
+- line 19: table.add( new ArrayList<Integer>());
+- line 21: for(int i = 1; i <= n; i++)
+- line 25: int max = table.get(n).size();
+- line 26: for(int i = 0; i < n; i++ )
+- line 28: table = new ArrayList<ArrayList<Integer>>();
+- line 29: for(int ii = 0; ii < n; ii++)
+- line 31: table.add( new ArrayList<Integer>());
+- line 33: int[] aww = new int[n-1];
+- line 34: for(int ii = 0; ii < i; ii++ )
+- line 36: aww[ii]=aw[ii];
+- line 38: for(int ii = i+1; ii < n; ii++)
+- line 40: aww[ii-1]=aw[ii];
+- line 42: for(int ii = 1; ii <= n-1; ii++)
+- line 46: int tempmax = table.get(n-1).size();
+- line 47: if(tempmax>max)
+- line 48: max=tempmax;
+- line 50: for(int i = 0; i < n; i++ )
+- line 52: for(int j = i+1; j < n; j++)
+- line 54: table = new ArrayList<ArrayList<Integer>>();
+- line 55: for(int ii = 0; ii < n-1; ii++)
+- line 57: table.add( new ArrayList<Integer>());
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 8, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["BufferedReader", "InputStreamReader", "Scanner", "System", "in", "input", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 9, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["Integer", "input", "int", "nextLine", "parseInt", "t"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 10, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "iii", "int", "t"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 12, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["input", "int", "n", "nextInt"]}
+- {"definitions": ["aw"], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["aw"], "roles": ["definition"], "source_identifiers": ["aw", "int", "n", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 14, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "new", "table"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 15, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "add", "new", "table"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "n"]}
+- {"definitions": ["aw"], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["aw"], "roles": ["definition"], "source_identifiers": ["aw", "i", "input", "nextInt"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "add", "new", "table"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 25, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["get", "int", "max", "n", "size", "table"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "new", "table"]}
+- {"definitions": ["ii"], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["ii"], "roles": ["definition", "control"], "source_identifiers": ["for", "ii", "int", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "add", "new", "table"]}
+- {"definitions": ["aww"], "disposition": "inspect_against_official_dependence_definition", "line": 33, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["aww"], "roles": ["definition"], "source_identifiers": ["aww", "int", "n", "new"]}
+- {"definitions": ["ii"], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["ii"], "roles": ["definition", "control"], "source_identifiers": ["for", "i", "ii", "int"]}
+- {"definitions": ["aww"], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["aww", "ii", "aw"], "roles": ["definition", "use"], "source_identifiers": ["aw", "aww", "ii"]}
+- {"definitions": ["ii"], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["ii"], "roles": ["definition", "control"], "source_identifiers": ["for", "i", "ii", "int", "n"]}
+- {"definitions": ["aww"], "disposition": "inspect_against_official_dependence_definition", "line": 40, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["aww", "ii", "aw"], "roles": ["definition", "use"], "source_identifiers": ["aw", "aww", "ii"]}
+- {"definitions": ["ii"], "disposition": "inspect_against_official_dependence_definition", "line": 42, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["ii"], "roles": ["definition", "control"], "source_identifiers": ["for", "ii", "int", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 46, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["get", "int", "n", "size", "table", "tempmax"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "max", "tempmax"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 48, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["max", "tempmax"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 52, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "j", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "new", "table"]}
+- {"definitions": ["ii"], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["ii"], "roles": ["definition", "control"], "source_identifiers": ["for", "ii", "int", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 57, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["ArrayList", "Integer", "add", "new", "table"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 6-83
+- source signature: `public static void main(String [] args)`
+- source content hash: `74c172fa2336c6b965ebadc70f3419662832efe63acf060db28f70f13d21f305`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+   6    public static void main(String [] args)
+   7    {
+   8      Scanner input = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+   9      int t = Integer.parseInt(input.nextLine());
+  10      for(int iii = 1; iii <= t; iii++)
+  11      {
+  12        int n = input.nextInt();
+  13        int[] aw = new int[n];
+  14        table = new ArrayList<ArrayList<Integer>>();
+  15        table.add( new ArrayList<Integer>());
+  16        for(int i = 0; i < n; i++)
+  17        {
+  18          aw[i]=input.nextInt();
+  19          table.add( new ArrayList<Integer>());
+  20        }
+  21        for(int i = 1; i <= n; i++)
+  22        {
+  23          table.set(i,recurse(aw,i));
+  24        }
+  25        int max = table.get(n).size();
+  26        for(int i = 0; i < n; i++ )
+  27        {
+  28          table = new ArrayList<ArrayList<Integer>>();
+  29          for(int ii = 0; ii < n; ii++)
+  30          {
+  31            table.add( new ArrayList<Integer>());
+  32          }
+  33          int[] aww = new int[n-1];
+  34          for(int ii = 0; ii < i; ii++ )
+  35          {
+  36            aww[ii]=aw[ii];
+  37          }
+  38          for(int ii = i+1; ii < n; ii++)
+  39          {
+  40            aww[ii-1]=aw[ii];
+  41          }
+  42          for(int ii = 1; ii <= n-1; ii++)
+  43          {
+  44            table.set(ii,recurse(aww,ii));
+  45          }
+  46          int tempmax = table.get(n-1).size();
+  47          if(tempmax>max)
+  48            max=tempmax;
+  49        }
+  50        for(int i = 0; i < n; i++ )
+  51        {
+  52          for(int j = i+1; j < n; j++)
+  53          {
+  54            table = new ArrayList<ArrayList<Integer>>();
+  55            for(int ii = 0; ii < n-1; ii++)
+  56            {
+  57              table.add( new ArrayList<Integer>());
+  58            }
+  59            int[] aww = new int[n-2];
+  60            for(int ii = 0; ii < i; ii++ )
+  61            {
+  62              aww[ii]=aw[ii];
+  63            }
+  64            for(int ii = i+1; ii < j; ii++)
+  65            {
+  66              aww[ii-1]=aw[ii];
+  67            }
+  68            for(int ii = j+1; ii < n; ii++)
+  69            {
+  70              aww[ii-2]=aw[ii];
+  71            }
+  72            for(int ii = 1; ii <= n-2; ii++)
+  73            {
+  74              table.set(ii,recurse(aww,ii));
+  75            }
+  76            int tempmax = table.get(n-2).size();
+  77            if(tempmax>max)
+  78              max=tempmax;
+  79          }
+  80        }
+  81        System.out.println("Case #"+iii+": "+max);
+  82      }
+  83    }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+# JSON_PARSE_ERROR: Empty LLM output
+# RAW_LLM_OUTPUT:
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

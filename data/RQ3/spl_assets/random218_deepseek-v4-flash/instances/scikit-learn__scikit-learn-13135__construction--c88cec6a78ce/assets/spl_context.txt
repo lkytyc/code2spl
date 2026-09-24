@@ -1,0 +1,233 @@
+# FILE: sklearn/preprocessing/_discretization.py
+# CLASS KBinsDiscretizer
+
+[DEFINE_WORKER: "Initializes a new instance by assigning the n_bins, encode, and strategy constructor arguments to their corresponding instance attributes." __init__]
+    [INPUTS]
+        <REF> n_bins </REF>: int "Number of bins. Defaults to 5."
+        <REF> encode </REF>: str "Encoding method. Defaults to 'onehot'."
+        <REF> strategy </REF>: str "Binning strategy. Defaults to 'quantile'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the supplied n_bins value, or the default 5 if omitted, to self.n_bins. RESULT self.n_bins]
+            [COMMAND Assign the supplied encode value, or the default 'onehot' if omitted, to self.encode. RESULT self.encode]
+            [COMMAND Assign the supplied strategy value, or the default 'quantile' if omitted, to self.strategy. RESULT self.strategy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fits the discretizer by validating X and the estimator options, computing per-feature bin edges using uniform, quantile, or kmeans strategies, storing the fitted bin attributes, and preparing a one-hot encoder when required." fit]
+    [INPUTS]
+        <REF> X </REF>: numeric array-like, shape (n_samples, n_features) "Data to be discretized."
+        <REF> y </REF>: ignored "Ignored parameter accepted for API compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: KBinsDiscretizer "The fitted estimator with bin_edges_ and n_bins_ attributes set."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate X by calling check_array(X, dtype='numeric') and assign the returned numeric array to X. RESULT X]
+            [COMMAND Set valid_encode to the tuple ('onehot', 'onehot-dense', 'ordinal'). RESULT valid_encode]
+            [COMMAND Check whether self.encode is in valid_encode; if it is not, raise ValueError as described in exception_flows. RESULT encode_valid]
+            [COMMAND Set valid_strategy to the tuple ('uniform', 'quantile', 'kmeans'). RESULT valid_strategy]
+            [COMMAND Check whether self.strategy is in valid_strategy; if it is not, raise ValueError as described in exception_flows. RESULT strategy_valid]
+            [COMMAND Set n_features to X.shape[1], the number of columns of X. RESULT n_features]
+            [COMMAND Set n_bins by calling self._validate_n_bins(n_features). RESULT n_bins]
+            [COMMAND Initialize bin_edges as a numpy object array of zeros with length n_features. RESULT bin_edges]
+            [COMMAND For each feature index jj in range(n_features), extract column = X[:, jj], compute col_min = column.min() and col_max = column.max(), and handle the feature using the matching alternative flow for the constant-feature case or the selected strategy. RESULT processed_features]
+            [COMMAND Set self.bin_edges_ to bin_edges and self.n_bins_ to n_bins. RESULT fitted_attributes]
+            [COMMAND If 'onehot' is in self.encode, create and fit self._encoder as described in the one-hot alternative flow. RESULT encoder_ready]
+            [COMMAND Return self. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over jj, col_min == col_max, meaning the current feature is constant.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit a warning that feature jj is constant and will be replaced with 0. RESULT warning]
+            [COMMAND Set n_bins[jj] to 1. RESULT n_bins[jj]]
+            [COMMAND Set bin_edges[jj] to np.array([-np.inf, np.inf]). RESULT bin_edges[jj]]
+            [COMMAND Continue to the next iteration of the for loop, skipping strategy-specific bin-edge computation for this feature. RESULT next_iteration]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over jj, after the constant-feature check, the current feature is not constant and self.strategy == 'uniform'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set bin_edges[jj] to np.linspace(col_min, col_max, n_bins[jj] + 1). RESULT bin_edges[jj]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over jj, after the constant-feature check, the current feature is not constant and self.strategy == 'quantile'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set quantiles to np.linspace(0, 100, n_bins[jj] + 1). RESULT quantiles]
+            [COMMAND Set bin_edges[jj] to np.asarray(np.percentile(column, quantiles)). RESULT bin_edges[jj]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over jj, after the constant-feature check, the current feature is not constant and self.strategy == 'kmeans'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import KMeans from ..cluster lazily. RESULT KMeans]
+            [COMMAND Set uniform_edges to np.linspace(col_min, col_max, n_bins[jj] + 1). RESULT uniform_edges]
+            [COMMAND Set init to (uniform_edges[1:] + uniform_edges[:-1])[:, None] * 0.5. RESULT init]
+            [COMMAND Create a KMeans instance with n_clusters=n_bins[jj], init=init, and n_init=1. RESULT km]
+            [COMMAND Fit km to column[:, None] and extract cluster_centers_[:, 0] as centers. RESULT centers]
+            [COMMAND Set bin_edges[jj] to (centers[1:] + centers[:-1]) * 0.5. RESULT bin_edges[jj]]
+            [COMMAND Set bin_edges[jj] to np.r_[col_min, bin_edges[jj], col_max]. RESULT bin_edges[jj]]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: 'onehot' is in self.encode, which is true for both 'onehot' and 'onehot-dense'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create OneHotEncoder with categories=[np.arange(i) for i in self.n_bins_] and sparse=(self.encode == 'onehot'). RESULT self._encoder]
+            [COMMAND Fit self._encoder on np.zeros((1, len(self.n_bins_)), dtype=int) as a toy dataset so the encoder is initialized and ready for later transform use. RESULT fitted_encoder]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.encode is not in valid_encode.]
+        [LOG "Valid options for 'encode' are ('onehot', 'onehot-dense', 'ordinal'); got encode=<actual invalid encode value> instead."]
+        [THROW ValueError "Raised when the encode attribute is not one of the supported one-hot or ordinal options."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.strategy is not in valid_strategy.]
+        [LOG "Valid options for 'strategy' are ('uniform', 'quantile', 'kmeans'); got strategy=<actual invalid strategy value> instead."]
+        [THROW ValueError "Raised when the strategy attribute is not one of the supported binning strategies."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates the scalar or array n_bins specification and returns an integer array of shape (n_features,) containing per-feature bin counts, raising ValueError when the bin specification has an invalid type, value, or shape." _validate_n_bins]
+    [INPUTS]
+        <REF> self </REF>: KBinsDiscretizer "The discretizer instance; its n_bins attribute is read as the user-supplied bin specification."
+        <REF> n_features </REF>: int "Number of features; the returned array has this many elements."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> n_bins_ </REF>: numpy.ndarray of int "Validated per-feature bin counts returned by the method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current value of self.n_bins and set orig_bins to it. RESULT orig_bins]
+            [COMMAND Branch on whether orig_bins is an instance of numbers.Number. If it is, follow the scalar-number alternative flow; otherwise continue with the array conversion step. RESULT scalar_number_branch]
+            [COMMAND On the array path, convert orig_bins to an integer ndarray by calling check_array(orig_bins, dtype=np.int, copy=True, ensure_2d=False), storing the result as n_bins. RESULT n_bins]
+            [COMMAND On the array path, validate the shape of n_bins: first test n_bins.ndim > 1; only if that is false, test n_bins.shape[0] != n_features. If either test passes, trigger the shape exception flow. RESULT shape_validated]
+            [COMMAND On the array path, compute the boolean mask bad_nbins_value as the elementwise OR of (n_bins < 2) and (n_bins != orig_bins), with no short-circuiting. RESULT bad_nbins_value]
+            [COMMAND On the array path, compute violating_indices as the first-dimension indices where bad_nbins_value is true, using np.where(bad_nbins_value)[0]. RESULT violating_indices]
+            [COMMAND On the array path, if violating_indices.shape[0] > 0, trigger the invalid-bin-values exception flow; otherwise return n_bins. RESULT n_bins_]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: orig_bins is an instance of numbers.Number]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If orig_bins is not an instance of numbers.Integral or np.integer, trigger the invalid scalar n_bins type exception flow. RESULT scalar_type_checked]
+            [COMMAND If orig_bins is an integral value and orig_bins < 2, trigger the invalid scalar bin count exception flow. RESULT scalar_value_checked]
+            [COMMAND Return np.full(n_features, orig_bins, dtype=np.int), an integer array of length n_features filled with orig_bins. RESULT n_bins_]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: orig_bins is a numbers.Number but not an instance of numbers.Integral or np.integer]
+        [LOG "KBinsDiscretizer received an invalid n_bins type; expected int."]
+        [THROW ValueError "Raised when the scalar n_bins value is numeric but not an integer type."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: orig_bins is an integral numeric scalar and orig_bins < 2]
+        [LOG "KBinsDiscretizer received an invalid number of bins; expected at least 2."]
+        [THROW ValueError "Raised when the scalar n_bins value is less than 2."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: array path and (n_bins.ndim > 1 or, when n_bins.ndim <= 1, n_bins.shape[0] != n_features)]
+        [LOG "n_bins must be a scalar or array of shape (n_features,)."]
+        [THROW ValueError "Raised when array-like n_bins is multi-dimensional or has the wrong first-dimension length."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: array path and violating_indices.shape[0] > 0]
+        [LOG "KBinsDiscretizer received invalid bin counts at one or more indices; each bin count must be at least 2 and must be an int."]
+        [THROW ValueError "Raised when an element of n_bins is less than 2 or was changed by conversion to integer type."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Discretizes an input numeric array into bin indices using precomputed bin edges, clips the result, and returns either ordinal bin labels or encoder-transformed output." transform]
+    [INPUTS]
+        <REF> X </REF>: numeric array-like, shape (n_samples, n_features) "Data to be discretized."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> Xt </REF>: numeric array-like or sparse matrix "Data in the binned space."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call check_is_fitted(self, ['bin_edges_']) to verify that the estimator has been fitted with bin edge attributes. RESULT None]
+            [COMMAND Validate and convert X using check_array(X, copy=True, dtype=FLOAT_DTYPES), storing the result in Xt. RESULT Xt]
+            [COMMAND Read the fitted attribute self.n_bins_.shape[0] and store the expected number of features in n_features. RESULT n_features]
+            [COMMAND Validate that Xt.shape[1] equals n_features; if not, the exception flow for a feature-count mismatch is triggered. RESULT None]
+            [COMMAND Read self.bin_edges_ into bin_edges. RESULT bin_edges]
+            [COMMAND For each column index jj in range(Xt.shape[1]), set rtol to 1.e-5 and atol to 1.e-8, compute eps = atol + rtol * np.abs(Xt[:, jj]), and assign Xt[:, jj] = np.digitize(Xt[:, jj] + eps, bin_edges[jj][1:]). RESULT Xt]
+            [COMMAND Clip Xt in-place using np.clip(Xt, 0, self.n_bins_ - 1, out=Xt). RESULT Xt]
+            [COMMAND Evaluate self.encode to determine the final return path. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.encode == 'ordinal']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return Xt directly as the binned ordinal data. RESULT Xt]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.encode != 'ordinal']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._encoder.transform(Xt) as the final transformed output. RESULT encoded_output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self is not fitted or the 'bin_edges_' attribute is missing]
+        [LOG "This estimator has not been fitted yet."]
+        [THROW NotFittedError "Raised by check_is_fitted when the fitted attribute bin_edges_ is not present."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Xt.shape[1] != n_features]
+        [LOG "Incorrect number of features. Expecting {n_features}, received {Xt.shape[1]}."]
+        [THROW ValueError "Raised when the number of columns in the input data does not match the expected number of features from the fitted model."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Transforms discretized data back to the original feature space by mapping each binned value to the corresponding bin center." inverse_transform]
+    [INPUTS]
+        <REF> Xt </REF>: numeric array-like, shape (n_sample, n_features) "Transformed data in the binned space."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> Xinv </REF>: numeric array-like "Data in the original feature space."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Verify that the transformer is fitted by calling check_is_fitted(self, ['bin_edges_']); if it is not fitted, the NotFittedError exception flow is taken. RESULT self]
+            [COMMAND If 'onehot' is in self.encode, set Xt to self._encoder.inverse_transform(Xt). RESULT Xt]
+            [COMMAND Create Xinv by validating Xt with check_array, forcing a copy, and converting it to FLOAT_DTYPES. RESULT Xinv]
+            [COMMAND Set n_features to self.n_bins_.shape[0]. RESULT n_features]
+            [COMMAND Validate that Xinv.shape[1] equals n_features; if not, the ValueError exception flow is taken. RESULT Xinv]
+            [COMMAND For jj from 0 to n_features-1, read bin_edges = self.bin_edges_[jj], compute bin_centers = (bin_edges[1:] + bin_edges[:-1]) * 0.5, and replace Xinv[:, jj] with bin_centers[np.int_(Xinv[:, jj])]. RESULT Xinv]
+            [COMMAND Return Xinv. RESULT Xinv]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: If check_is_fitted raises because self.bin_edges_ is missing, meaning the transformer is not fitted yet.]
+        [LOG "NotFittedError: This inverse_transform instance is not fitted yet. Call 'fit' with appropriate arguments before using this estimator."]
+        [THROW NotFittedError "Raised by check_is_fitted when the fitted attribute bin_edges_ is not present."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: If Xinv.shape[1] != n_features.]
+        [LOG "Incorrect number of features. Expecting {n_features}, received {Xinv.shape[1]}."]
+        [THROW ValueError "Raised when the number of features in Xinv does not match the expected number of features from the fitted transform."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

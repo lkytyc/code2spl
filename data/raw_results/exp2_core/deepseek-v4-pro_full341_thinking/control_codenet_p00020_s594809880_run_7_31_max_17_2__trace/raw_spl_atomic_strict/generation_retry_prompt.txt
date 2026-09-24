@@ -1,0 +1,363 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.util.Scanner;
+2   public class Main {
+3   	StringBuffer max;
+4   	public static void main(String[] args) {
+5   		new Main().run();
+6   	}
+7   	private void run() {
+8   		Scanner scan = new Scanner(System.in);
+9   		String[] b = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"};
+10  		String[] s = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"};
+11  		max = new StringBuffer();
+12  		while (scan.hasNext()) {
+13  			String min = scan.next();
+14  			for (int i = 0; i < min.length(); i++) {
+15  				String str = min.substring(i, i+1);
+16  				if (str.equals(".")) {
+17  					max.append(str);
+18  				}else {
+19  					for (int j = 0; j < s.length; j++) {
+20  						if (str.equals(s[j])) {
+21  							max.append(b[j]);
+22  							continue;
+23  						}
+24  					}
+25  				}
+26  			}
+27  			max.append(" ");
+28  		}
+29  		max.delete(max.length()-1, max.length());
+30  		System.out.println(max);
+31  	}
+32  	private void debug() {
+33  		System.out.println();
+34  	}
+35  }
+```
+
+
+**Question**: Does line `14` have control dependence over line `17` in function `run`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: run
+Target source anchor: variable=<none>, line=14
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: run
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a loop header whose condition controls its next execution: {'kind': 'line', 'line': 14, 'reason': 'the target is a loop header whose condition controls its next execution'}
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within the outer while loop, for each character index i from 0 to min.length() - 1 inclusive, extract the one-character substring str at position i. RESULT str]
+- [COMMAND Within the for-i loop, if str equals ".", append str to max; otherwise proceed to the lowercase-matching loop. RESULT max]
+- [COMMAND Within the else branch of the dot check, for each j from 0 to s.length - 1 inclusive, if str equals s[j], append b[j] to max and continue the innermost j loop; if no match is found, append nothing. RESULT max]
+- [COMMAND After the outer while loop ends, delete the last character of max, which is the trailing space appended after the final token, by calling max.delete(max.length() - 1, max.length()). RESULT max]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 12: while (scan.hasNext()) {
+- line 14: for (int i = 0; i < min.length(); i++) {
+- line 16: if (str.equals(".")) {
+- line 19: for (int j = 0; j < s.length; j++) {
+- line 20: if (str.equals(s[j])) {
+- line 22: continue;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 12, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["hasNext", "scan", "while"]}
+- {"definitions": ["i"], "disposition": "inspect_against_official_dependence_definition", "line": 14, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["i", "length"], "roles": ["definition", "use", "control"], "source_identifiers": ["for", "i", "int", "length", "min"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["equals", "if", "str"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["length"], "roles": ["use", "control"], "source_identifiers": ["for", "int", "j", "length", "s"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["equals", "if", "j", "s", "str"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["continue"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `run`
+- source lines: 7-31
+- source signature: `private void run() {`
+- source content hash: `547032681c3ba6ed36f2d7840c493e1b01b86405d80588d440db8c36c7fbaa42`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+   7   private void run() {
+   8    Scanner scan = new Scanner(System.in);
+   9    String[] b = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"};
+  10    String[] s = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"};
+  11    max = new StringBuffer();
+  12    while (scan.hasNext()) {
+  13     String min = scan.next();
+  14     for (int i = 0; i < min.length(); i++) {
+  15      String str = min.substring(i, i+1);
+  16      if (str.equals(".")) {
+  17       max.append(str);
+  18      }else {
+  19       for (int j = 0; j < s.length; j++) {
+  20        if (str.equals(s[j])) {
+  21         max.append(b[j]);
+  22         continue;
+  23        }
+  24       }
+  25      }
+  26     }
+  27     max.append(" ");
+  28    }
+  29    max.delete(max.length()-1, max.length());
+  30    System.out.println(max);
+  31   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads whitespace-separated tokens from standard input, converts each lowercase letter to its uppercase equivalent, preserves dots, removes the trailing space, and prints the resulting string." run]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a Scanner named scan reading from System.in. RESULT scan]
+            [COMMAND Initialize b as a 26-element String array containing uppercase letters from A at index 0 through Z at index 25. RESULT b]
+            [COMMAND Initialize s as a 26-element String array containing lowercase letters from a at index 0 through z at index 25. RESULT s]
+            [COMMAND Create a new empty StringBuffer named max. RESULT max]
+            [COMMAND While scan.hasNext() is true, process each token and accumulate transformed output in max. RESULT max]
+            [COMMAND Within the outer while loop, read the next token from scan into String min. RESULT min]
+            [COMMAND Within the outer while loop, for each character index i from 0 to min.length() - 1 inclusive, extract the one-character substring str at position i. RESULT str]
+            [COMMAND Within the for-i loop, if str equals ".", append str to max; otherwise proceed to the lowercase-matching loop. RESULT max]
+            [COMMAND Within the else branch of the dot check, for each j from 0 to s.length - 1 inclusive, if str equals s[j], append b[j] to max and continue the innermost j loop; if no match is found, append nothing. RESULT max]
+            [COMMAND After the for-i loop finishes for the current token min, append a single space to max. RESULT max]
+            [COMMAND After the outer while loop ends, delete the last character of max, which is the trailing space appended after the final token, by calling max.delete(max.length() - 1, max.length()). RESULT max]
+            [COMMAND Print the contents of max to System.out. RESULT System.out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: No tokens are read from standard input, so the while loop never executes and max remains empty when max.delete(max.length() - 1, max.length()) is called.]
+        [LOG "Attempted to delete the last character from an empty StringBuffer; start index is -1 and end index is 0."]
+        [THROW StringIndexOutOfBoundsException "Thrown by StringBuffer.delete because the calculated start index is less than 0."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.
+
+
+SOURCE-CONTRACT RETRY. The previous answer omitted source-derived structural obligations. Recheck the numbered source and source-bound SPL card, then revise the complete answer. Do not blindly append an item if source verification contradicts it.
+
+Contract violations: [{"kind": "missing_required_line", "anchor": {"kind": "line", "line": 14, "reason": "the target is a loop header whose condition controls its next execution"}}]
+
+Previous answer:
+{
+  "ControlDependence": true,
+  "Trace": [14, 16, 17]
+}
+
+Return only the exact JSON object required by the official task, with no prose or markdown.

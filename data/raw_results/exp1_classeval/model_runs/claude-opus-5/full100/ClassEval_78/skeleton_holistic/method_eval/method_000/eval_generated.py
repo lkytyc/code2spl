@@ -1,0 +1,92 @@
+import re
+
+class SplitSentence:
+    """
+    The class allows to split sentences, count words in a sentence, and process a text file to find the maximum word count.
+    """
+
+    def split_sentences(self, sentences_string):
+        """
+        Split a string into a list of sentences. Sentences end with . or ? and with a space after that. Please note that Mr. also end with . but are not sentences.
+        :param sentences_string: string, string to split
+        :return:list, split sentence list
+        >>> ss = SplitSentence()
+        >>> ss.split_sentences("aaa aaaa. bb bbbb bbb? cccc cccc. dd ddd?")
+        ['aaa aaaa.', 'bb bbbb bbb?', 'cccc cccc.', 'dd ddd?']
+        """
+        # Split on . or ? that are followed by a space or end of string,
+        # but not when preceded by common abbreviations like Mr, Mrs, Dr, etc.
+        pattern = r'(?<!\bMr)(?<!\bMrs)(?<!\bDr)(?<!\bMs)[.?](?=\s|$)'
+        parts = re.split(pattern, sentences_string)
+        sentences = []
+        delimiters = re.findall(pattern, sentences_string)
+        for i, part in enumerate(parts):
+            part = part.strip()
+            if part:
+                if i < len(delimiters):
+                    sentences.append(part + delimiters[i])
+                else:
+                    sentences.append(part)
+        return sentences
+
+    def count_words(self, sentence):
+        """
+        Count the number of words in a sentence. Note that words are separated by spaces and that punctuation marks and numbers are not counted as words.
+        :param sentence:string, sentence to be counted, where words are separated by spaces
+        :return:int, number of words in the sentence
+        >>> ss.count_words("abc def")
+        2
+        """
+        words = sentence.split()
+        count = 0
+        for word in words:
+            # Strip punctuation and check if remaining string contains only letters
+            cleaned = re.sub(r'[^a-zA-Z]', '', word)
+            if cleaned:
+                count += 1
+        return count
+
+    def process_text_file(self, sentences_string):
+        """
+        Given a text, return the number of words in the longest sentence
+        :param sentences_string: string, undivided long sentence
+        :return:int, the number of words in the longest sentence
+        >>> ss.process_text_file("aaa aaaa. bb bbbb bbb? cccc ccccccc cc ccc. dd ddd?")
+        4
+        """
+        sentences = self.split_sentences(sentences_string)
+        if not sentences:
+            return 0
+        return max(self.count_words(sentence) for sentence in sentences)
+
+import unittest
+
+class SplitSentenceTestSplitSentences(unittest.TestCase):
+    def test_split_sentences_1(self):
+        ss = SplitSentence()
+        lst = ss.split_sentences("aaa aaaa. bb bbbb bbb? cccc cccc. dd ddd?")
+        self.assertEqual(lst, ['aaa aaaa.', 'bb bbbb bbb?', 'cccc cccc.', 'dd ddd?'])
+
+    def test_split_sentences_2(self):
+        ss = SplitSentence()
+        lst = ss.split_sentences("Who is Mr. Smith? He is a teacher.")
+        self.assertEqual(lst, ['Who is Mr. Smith?', 'He is a teacher.'])
+
+    def test_split_sentences_3(self):
+        ss = SplitSentence()
+        lst = ss.split_sentences("Who is A.B.C.? He is a teacher.")
+        self.assertEqual(lst, ['Who is A.B.C.?', 'He is a teacher.'])
+
+    def test_split_sentences_4(self):
+        ss = SplitSentence()
+        lst = ss.split_sentences("aaa aaaa. bb bbbb bbb? cccc cccc.")
+        self.assertEqual(lst, ['aaa aaaa.', 'bb bbbb bbb?', 'cccc cccc.'])
+
+    def test_split_sentences_5(self):
+        ss = SplitSentence()
+        lst = ss.split_sentences("aaa aaaa. bb bbbb bbb?")
+        self.assertEqual(lst, ['aaa aaaa.', 'bb bbbb bbb?'])
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,144 @@
+from collections import deque
+
+class EightPuzzle:
+    def __init__(self, board):
+        self.start = self._flatten_board(board)
+        self.goal = (1, 2, 3, 4, 5, 6, 7, 8, 0)
+
+    def _flatten_board(self, board):
+        if isinstance(board, tuple) and len(board) == 9 and isinstance(board[0], int):
+            return board
+        if isinstance(board, list) and len(board) == 9 and isinstance(board[0], int):
+            return tuple(board)
+        return tuple(cell for row in board for cell in row)
+
+    def locate_blank(self, state=None):
+        if state is None:
+            state = self.start
+        state = self._flatten_board(state)
+        return state.index(0)
+
+    def find_blank(self, state=None):
+        return self.locate_blank(state)
+
+    def valid_moves(self, state=None):
+        if state is None:
+            state = self.start
+        blank = self.locate_blank(state)
+        row, col = divmod(blank, 3)
+
+        moves = []
+        if row > 0:
+            moves.append('up')
+        if row < 2:
+            moves.append('down')
+        if col > 0:
+            moves.append('left')
+        if col < 2:
+            moves.append('right')
+        return moves
+
+    def move_blank(self, direction, state=None):
+        if state is None:
+            state = self.start
+        state = self._flatten_board(state)
+
+        blank = self.locate_blank(state)
+        row, col = divmod(blank, 3)
+
+        if direction == 'up':
+            target = (row - 1, col)
+        elif direction == 'down':
+            target = (row + 1, col)
+        elif direction == 'left':
+            target = (row, col - 1)
+        elif direction == 'right':
+            target = (row, col + 1)
+        else:
+            raise ValueError("Invalid move direction")
+
+        tr, tc = target
+        if not (0 <= tr < 3 and 0 <= tc < 3):
+            raise ValueError("Cannot move blank in that direction")
+
+        target_index = tr * 3 + tc
+        lst = list(state)
+        lst[blank], lst[target_index] = lst[target_index], lst[blank]
+        return tuple(lst)
+
+    def move(self, direction, state=None):
+        return self.move_blank(direction, state)
+
+    def solve(self):
+        start = self.start
+        goal = self.goal
+
+        if start == goal:
+            return []
+
+        queue = deque([(start, [])])
+        visited = {start}
+
+        while queue:
+            state, path = queue.popleft()
+
+            for direction in self.valid_moves(state):
+                next_state = self.move_blank(direction, state)
+                if next_state in visited:
+                    continue
+
+                next_path = path + [direction]
+                if next_state == goal:
+                    return next_path
+
+                visited.add(next_state)
+                queue.append((next_state, next_path))
+
+        return None
+
+import unittest
+
+class EightPuzzleTestGetPossibleMoves(unittest.TestCase):
+    def test_get_possible_moves_1(self):
+        eightPuzzle = EightPuzzle(None)
+        state = [[2, 3, 4], [5, 0, 1], [6, 8, 7]]
+        result = eightPuzzle.get_possible_moves(state)
+        expected = ['up', 'down', 'left', 'right']
+        for direction in result:
+            self.assertIn(direction, expected)
+
+    def test_get_possible_moves_2(self):
+        eightPuzzle = EightPuzzle(None)
+        state = [[2, 3, 4], [5, 8, 1], [6, 0, 7]]
+        result = eightPuzzle.get_possible_moves(state)
+        expected = ['up', 'left', 'right']
+        for direction in result:
+            self.assertIn(direction, expected)
+
+    def test_get_possible_moves_3(self):
+        eightPuzzle = EightPuzzle(None)
+        state = [[2, 0, 4], [5, 3, 1], [6, 8, 7]]
+        result = eightPuzzle.get_possible_moves(state)
+        expected = ['down', 'left', 'right']
+        for direction in result:
+            self.assertIn(direction, expected)
+
+    def test_get_possible_moves_4(self):
+        eightPuzzle = EightPuzzle(None)
+        state = [[2, 3, 4], [5, 1, 0], [6, 8, 7]]
+        result = eightPuzzle.get_possible_moves(state)
+        expected = ['up', 'down', 'left']
+        for direction in result:
+            self.assertIn(direction, expected)
+
+    def test_get_possible_moves_5(self):
+        eightPuzzle = EightPuzzle(None)
+        state = [[2, 3, 4], [0, 5, 1], [6, 8, 7]]
+        result = eightPuzzle.get_possible_moves(state)
+        expected = ['up', 'down', 'right']
+        for direction in result:
+            self.assertIn(direction, expected)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

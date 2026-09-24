@@ -1,0 +1,467 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.BufferedReader;
+2   import java.io.IOException;
+3   import java.io.InputStreamReader;
+4   import java.net.ServerSocket;
+5   import java.util.ArrayList;
+6   import java.util.List;
+7   public class Solution {
+8       public static void main(String[] args) {
+9           BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(System.in));
+10          try {
+11              int t = Integer.parseInt(bufferedReader.readLine());
+12              List<List<String>> caseList = new ArrayList(t);
+13              for (int testCaseNum = 0; testCaseNum < t; testCaseNum++) {
+14                  List<String> singleCase = new ArrayList<>();
+15                  String rchv = bufferedReader.readLine();
+16                  singleCase.add(rchv);
+17                  int n = Integer.parseInt(rchv.split(" ")[0]);
+18                  for (int i =0; i<n; i++) {
+19                      singleCase.add(bufferedReader.readLine());
+20                  }
+21                  caseList.add(singleCase);
+22              }
+23              int b = 0;
+24              for (List<String> singleCase : caseList) {
+25                  b++;
+26                  if (processCase(singleCase)) {
+27                      System.out.println("Case #"+b+": POSSIBLE");
+28                  } else {
+29                      System.out.println("Case #"+b+": IMPOSSIBLE");
+30                  }
+31              }
+32          } catch (IOException e) {
+33              e.printStackTrace();
+34          }
+35      }
+36      public static boolean processCase(List<String> caseList) {
+37          int[] rchv = new int[4];
+38          String[] split = caseList.get(0).split(" ");
+39          for (int i = 0; i < rchv.length; i++){
+40              rchv[i] = Integer.parseInt(split[i]);
+41          }
+42          if (rchv[1] < 10 && rchv[0] < 10 && rchv[2] == 1 && rchv[3] == 1) {
+43              return processSmall(rchv, caseList);
+44          }
+45          return false;
+46      }
+47      public static boolean processSmall(int[] rchv, List<String> caseList) {
+48          List<int[]> chipCoords = new ArrayList<>();
+49          List<Integer> xCoords = new ArrayList<>();
+50          List<Integer> yCoords = new ArrayList<>();
+51          for (int i = 0; i < rchv[0]; i++) {
+52              String row = caseList.get(i+1);
+53              String[] split = row.split("");
+54              for (int j = 0; j < rchv[1]; j++) {
+55                  if ("@".equals(split[j])) {
+56                      int[] coords = new int[2];
+57                      coords[0] = i;
+58                      xCoords.add(i);
+59                      coords[1] = j;
+60                      yCoords.add(j);
+61                      chipCoords.add(coords);
+62                  }
+63              }
+64          }
+65          for (int x =0; x<rchv[0]; x++) {
+66              for (int y = 0; y< rchv[1]; y++) {
+67                  int topright = 0;
+68                  int topleft = 0;
+69                  int bottomLeft = 0;
+70                  int bottomRight = 0;
+71                  for (int z = 0; z < chipCoords.size(); z++) {
+72                      if (chipCoords.get(z)[0] <= x) {
+73                          if (chipCoords.get(z)[1] <= y) {
+74                              bottomLeft ++;
+75                          } else {
+76                              bottomRight ++;
+77                          }
+78                      } else {
+79                          if (chipCoords.get(z)[1] < y) {
+80                              topleft ++;
+81                          } else {
+82                              topright ++;
+83                          }
+84                      }
+85                  }
+86                  if (bottomRight == bottomLeft && bottomLeft == topleft && topleft == topright) {
+87                      return true;
+88                  }
+89              }
+90          }
+91          return false;
+92      }
+93  }
+```
+
+
+**Question**: Does `(row,52)` have data dependence over `(split,53)` in function `processSmall`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: processSmall
+Target source anchor: variable=split, line=53
+Trace source anchor: variable=row, line=52
+Attached SPL owners: processSmall
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND For the current row, compute split = row.split("") so that split[j] is the string at column j. RESULT split]
+- [COMMAND For each column index j from 0 to rchv[1]-1, if split[j] equals "@", create coords = new int[2], set coords[0] = i, coords[1] = j, add i to xCoords, add j to yCoords, and add coords to chipCoords. RESULT chipCoords]
+- [COMMAND For each row index i from 0 to rchv[0]-1, read row = caseList.get(i+1). RESULT row]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 51: for (int i = 0; i < rchv[0]; i++) {
+- line 52: String row = caseList.get(i+1);
+- line 53: String[] split = row.split("");
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 51, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "rchv"]}
+- {"definitions": ["row"], "disposition": "inspect_against_official_dependence_definition", "line": 52, "position": "before_target", "reason": "row", "relevant_identifiers": ["String", "row"], "roles": ["definition", "use"], "source_identifiers": ["String", "caseList", "get", "i", "row"]}
+- {"definitions": ["split"], "disposition": "inspect_against_official_dependence_definition", "line": 53, "position": "target", "reason": "split", "relevant_identifiers": ["split", "String", "row"], "roles": ["definition", "use"], "source_identifiers": ["String", "row", "split"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `processSmall`
+- source lines: 47-92
+- source signature: `public static boolean processSmall(int[] rchv, List<String> caseList) {`
+- source content hash: `57821824567b33cafe68fcebab3a83fc4ac81d7a96aac7560196d4757a411bb2`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```java
+  47      public static boolean processSmall(int[] rchv, List<String> caseList) {
+  48          List<int[]> chipCoords = new ArrayList<>();
+  49          List<Integer> xCoords = new ArrayList<>();
+  50          List<Integer> yCoords = new ArrayList<>();
+  51          for (int i = 0; i < rchv[0]; i++) {
+  52              String row = caseList.get(i+1);
+  53              String[] split = row.split("");
+  54              for (int j = 0; j < rchv[1]; j++) {
+  55                  if ("@".equals(split[j])) {
+  56                      int[] coords = new int[2];
+  57                      coords[0] = i;
+  58                      xCoords.add(i);
+  59                      coords[1] = j;
+  60                      yCoords.add(j);
+  61                      chipCoords.add(coords);
+  62                  }
+  63              }
+  64          }
+  65          for (int x =0; x<rchv[0]; x++) {
+  66              for (int y = 0; y< rchv[1]; y++) {
+  67                  int topright = 0;
+  68                  int topleft = 0;
+  69                  int bottomLeft = 0;
+  70                  int bottomRight = 0;
+  71                  for (int z = 0; z < chipCoords.size(); z++) {
+  72                      if (chipCoords.get(z)[0] <= x) {
+  73                          if (chipCoords.get(z)[1] <= y) {
+  74                              bottomLeft ++;
+  75                          } else {
+  76                              bottomRight ++;
+  77                          }
+  78                      } else {
+  79                          if (chipCoords.get(z)[1] < y) {
+  80                              topleft ++;
+  81                          } else {
+  82                              topright ++;
+  83                          }
+  84                      }
+  85                  }
+  86                  if (bottomRight == bottomLeft && bottomLeft == topleft && topleft == topright) {
+  87                      return true;
+  88                  }
+  89              }
+  90          }
+  91          return false;
+  92      }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Scans the grid rows for '@' chips and returns true if there exists a boundary (x, y) in the grid such that the four surrounding regions contain the same number of chips." processSmall]
+    [INPUTS]
+        <REF> rchv </REF>: int[] "Two-element int array where rchv[0] is the number of rows and rchv[1] is the number of columns in the scanned grid."
+        <REF> caseList </REF>: List<String> "List of row strings; row i is read from caseList.get(i+1), so index 0 is not used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "Returns true as soon as a boundary with equal counts in all four regions is found; otherwise returns false."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize chipCoords as an empty ArrayList of int[] coordinate pairs, xCoords as an empty ArrayList of Integer, and yCoords as an empty ArrayList of Integer. RESULT chipCoords]
+            [COMMAND For each row index i from 0 to rchv[0]-1, read row = caseList.get(i+1). RESULT row]
+            [COMMAND For the current row, compute split = row.split("") so that split[j] is the string at column j. RESULT split]
+            [COMMAND For each column index j from 0 to rchv[1]-1, if split[j] equals "@", create coords = new int[2], set coords[0] = i, coords[1] = j, add i to xCoords, add j to yCoords, and add coords to chipCoords. RESULT chipCoords]
+            [COMMAND For each x from 0 to rchv[0]-1, run an inner loop over each y from 0 to rchv[1]-1; at the start of each (x,y) iteration, set topright, topleft, bottomLeft, and bottomRight to 0. RESULT counters]
+            [COMMAND Within the nested x/y loops, for each z from 0 to chipCoords.size()-1, classify chipCoords[z] exactly as in the original code: if chipCoords[z][0] <= x and chipCoords[z][1] <= y increment bottomLeft; if chipCoords[z][0] <= x and chipCoords[z][1] > y increment bottomRight; if chipCoords[z][0] > x and chipCoords[z][1] < y increment topleft; if chipCoords[z][0] > x and chipCoords[z][1] >= y increment topright. RESULT counters]
+            [COMMAND After the z loop for the current (x,y), evaluate the short-circuit condition bottomRight == bottomLeft && bottomLeft == topleft && topleft == topright and store whether it is true. RESULT quadrants_equal]
+            [COMMAND If the x/y loops complete without the early-return alternative being taken, return false. RESULT false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: quadrants_equal is true for the current (x,y).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return true immediately from processSmall, skipping all remaining x/y loop iterations. RESULT true]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

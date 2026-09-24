@@ -1,0 +1,66 @@
+class WeatherSystem:
+    def __init__(self, city) -> None:
+        self.temperature = None
+        self.weather = None
+        self.city = city
+        self.weather_list = {}
+
+    def query(self, weather_list, tmp_units = 'celsius'):
+        if self.city not in weather_list:
+            return False
+
+        self.weather_list = weather_list
+        city_data = self.weather_list[self.city]
+        self.temperature = city_data["temperature"]
+        self.weather = city_data["weather"]
+
+        current_units = str(city_data.get("temperature units", "celsius")).lower()
+        tmp_units = tmp_units.lower() if isinstance(tmp_units, str) else "celsius"
+
+        if current_units == "celsius" and tmp_units == "fahrenheit":
+            self.temperature = self.celsius_to_fahrenheit()
+        elif current_units == "fahrenheit" and tmp_units == "celsius":
+            self.temperature = self.fahrenheit_to_celsius()
+
+        return self.temperature, self.weather
+
+    def set_city(self, city):
+        self.city = city
+
+    def celsius_to_fahrenheit(self):
+        return self.temperature * 9 / 5 + 32
+
+    def fahrenheit_to_celsius(self):
+        return (self.temperature - 32) * 5 / 9
+
+import unittest
+
+class WeatherSystemTestSetCity(unittest.TestCase):
+    def test_set_city(self):
+        weatherSystem = WeatherSystem('New York')
+        weatherSystem.set_city('Beijing')
+        self.assertEqual(weatherSystem.city, 'Beijing')
+
+    def test_set_city_2(self):
+        weatherSystem = WeatherSystem('New York')
+        weatherSystem.set_city('Shanghai')
+        self.assertEqual(weatherSystem.city, 'Shanghai')
+
+    def test_set_city_3(self):
+        weatherSystem = WeatherSystem('New York')
+        weatherSystem.set_city('Shanghai')
+        self.assertNotEqual(weatherSystem.city, 'Beijing')
+
+    def test_set_city_4(self):
+        weatherSystem = WeatherSystem('New York')
+        weatherSystem.set_city('Shanghai')
+        self.assertNotEqual(weatherSystem.city, 'New York')
+
+    def test_set_city_5(self):
+        weatherSystem = WeatherSystem('New York')
+        weatherSystem.set_city('Shanghai')
+        self.assertNotEqual(weatherSystem.city, 'Tokyo')
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

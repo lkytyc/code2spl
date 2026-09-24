@@ -1,0 +1,232 @@
+# FILE: sklearn/ensemble/_iforest.py
+# CLASS IsolationForest
+
+[DEFINE_WORKER: "Initializes the estimator by configuring the superclass ensemble with an ExtraTreeRegressor base estimator and the provided hyperparameters, then stores the contamination value on the instance." IsolationForest.__init__]
+    [INPUTS]
+        <REF> n_estimators </REF>: int "Number of base estimators in the ensemble; default 100."
+        <REF> max_samples </REF>: int, float, or 'auto' "Number or ratio of samples to draw for each base estimator; default 'auto'."
+        <REF> contamination </REF>: 'auto' or float "Expected contamination level; default 'auto'."
+        <REF> max_features </REF>: float "Proportion of features to use for each base estimator; default 1.0."
+        <REF> bootstrap </REF>: bool "Whether samples are drawn with replacement; default False."
+        <REF> n_jobs </REF>: int or None "Number of parallel jobs; default None."
+        <REF> random_state </REF>: int, RandomState instance, or None "Controls randomness of the estimator and sampling; default None."
+        <REF> verbose </REF>: int "Verbosity level; default 0."
+        <REF> warm_start </REF>: bool "Whether to reuse the previous fit solution and add estimators; default False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().__init__ with estimator=ExtraTreeRegressor(max_features=1, splitter='random', random_state=random_state), noting that the estimator's max_features=1 is independent of the max_features parameter passed to this constructor, and pass bootstrap=bootstrap, bootstrap_features=False, n_estimators=n_estimators, max_samples=max_samples, max_features=max_features, warm_start=warm_start, n_jobs=n_jobs, random_state=random_state, verbose=verbose. RESULT None]
+            [COMMAND Assign the constructor argument contamination to the instance attribute self.contamination. RESULT self.contamination]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to indicate that out-of-bag score computation is not supported by the isolation forest implementation." _set_oob_score]
+    [INPUTS]
+        <REF> X </REF>: unknown "Input data for which the out-of-bag score would be calculated."
+        <REF> y </REF>: unknown "Target labels for which the out-of-bag score would be calculated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'OOB score not supported by iforest'. RESULT no_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When the method is called with X and y]
+        [LOG "OOB score not supported by iforest"]
+        [THROW NotImplementedError "Indicates that out-of-bag score is not supported by iforest."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a dictionary requesting the thread-based joblib backend for ExtraTreeRegressor, which releases the GIL and avoids inter-process communication overhead." _parallel_args]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> parallel_backend_config </REF>: dict "A dictionary containing the single key 'prefer' with the value 'threads'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new dictionary literal with key "prefer" and string value "threads", then return it as the method result. RESULT parallel_backend_config]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Predicts whether each sample is an outlier or inlier by thresholding the decision function at zero, returning +1 for inliers and -1 for outliers." predict]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix of shape (n_samples, n_features) "The input samples. Internally converted to dtype=np.float32, and sparse matrices are converted to csr_matrix."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> is_inlier </REF>: ndarray of shape (n_samples,) "For each observation, +1 if it is considered an inlier according to the fitted model, -1 otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that the model has been fitted by calling check_is_fitted(self). RESULT fitted_status]
+            [COMMAND Compute raw decision scores for X by calling self.decision_function(X). RESULT decision_func]
+            [COMMAND Create an integer array is_inlier with the same shape as decision_func, initialized to all ones using np.ones_like(decision_func, dtype=int). RESULT is_inlier]
+            [COMMAND Set every position in is_inlier where decision_func < 0 to -1. RESULT is_inlier]
+            [COMMAND Return is_inlier as the prediction result. RESULT is_inlier]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The model has not been fitted.]
+        [LOG "This estimator is not fitted yet. Call 'fit' with appropriate arguments before using this estimator."]
+        [THROW NotFittedError "Raised by check_is_fitted when the model is not fitted."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the average anomaly score of input samples by subtracting the fitted offset from the score_samples result, so that zero is the outlier threshold." decision_function]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix of shape (n_samples, n_features) "The input samples. Internally, it will be converted to dtype=np.float32 and if a sparse matrix is provided to a sparse csr_matrix."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> scores </REF>: ndarray of shape (n_samples,) "The anomaly score of the input samples. The lower, the more abnormal. Negative scores represent outliers, positive scores represent inliers."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the raw anomaly scores by invoking self.score_samples(X), then subtract self.offset_ from the resulting scores to make 0 the threshold for being an outlier. RESULT scores]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes sample anomaly scores as the negated internal chunked score from the isolation forest, so lower scores indicate more abnormal samples." score_samples]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix of shape (n_samples, n_features) "The input samples to score."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> scores </REF>: ndarray of shape (n_samples,) "The anomaly score of the input samples. The lower, the more abnormal."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the estimator is fitted by calling check_is_fitted(self). RESULT _]
+            [COMMAND Validate the input data X by calling self._validate_data(X, accept_sparse='csr', dtype=np.float32, reset=False) and assign the returned validated array to X. RESULT X]
+            [COMMAND Return the opposite of the anomaly score by returning the negation of self._compute_chunked_score_samples(X). RESULT scores]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The estimator is not fitted when check_is_fitted(self) is called.]
+        [LOG "NotFittedError: This IsolationForest instance is not fitted yet. Call fit with appropriate arguments before using this estimator."]
+        [THROW NotFittedError "Raised by check_is_fitted because the estimator's fitted attribute is missing or indicates an unfitted state."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: X is invalid, such as not being array-like or a compatible sparse matrix, having wrong dimensions, or containing values that cannot be cast to float32 during self._validate_data.]
+        [LOG "ValueError: Input validation failed for X in self._validate_data."]
+        [THROW ValueError "Raised by self._validate_data when the input data X does not satisfy the validation requirements."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes per-sample scores in memory-bounded chunks and returns a Fortran-ordered NumPy array, using subsampled features only when the configured maximum number of features is less than the full feature count." _compute_chunked_score_samples]
+    [INPUTS]
+        <REF> X </REF>: array-like of shape (n_samples, n_features) "Input data for which the chunked score samples are computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> scores </REF>: numpy.ndarray of shape (n_samples,) with Fortran order "Computed score for each sample in X."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute n_samples by calling _num_samples(X). RESULT n_samples]
+            [COMMAND If self._max_features equals X.shape[1], set subsample_features to False; otherwise set subsample_features to True. RESULT subsample_features]
+            [COMMAND Compute chunk_n_rows by calling get_chunk_n_rows(row_bytes=16 * self._max_features, max_n_rows=n_samples). RESULT chunk_n_rows]
+            [COMMAND Generate slices by calling gen_batches(n_samples, chunk_n_rows). RESULT slices]
+            [COMMAND Initialize scores as np.zeros(n_samples, order='f'); when n_samples is zero this creates an empty array. RESULT scores]
+            [COMMAND For each slice sl in slices, compute self._compute_score_samples(X[sl], subsample_features) and assign the result to scores[sl]. RESULT scores]
+            [COMMAND Return scores. RESULT scores]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes per-sample anomaly scores by summing path-length contributions across all fitted trees and normalizing by the average path length for max_samples." _compute_score_samples]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix "Data matrix for which per-sample anomaly scores are computed."
+        <REF> subsample_features </REF>: bool "Whether each tree should be applied only to its configured feature subset."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> scores </REF>: numpy.ndarray "Array of anomaly scores with shape (n_samples,), where larger values indicate more anomalous samples."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set n_samples from X.shape[0]. RESULT n_samples]
+            [COMMAND Initialize depths as a Fortran-order zero array of length n_samples with np.zeros(n_samples, order='f'). RESULT depths]
+            [COMMAND Compute average_path_length_max_samples by calling _average_path_length([self._max_samples]). RESULT average_path_length_max_samples]
+            [COMMAND For each tree_idx in enumerate(zip(self.estimators_, self.estimators_features_)), unpack tree and features. If subsample_features is truthy, set X_subset = X[:, features]; otherwise set X_subset = X. RESULT X_subset]
+            [COMMAND Within the ensemble loop, compute leaves_index = tree.apply(X_subset, check_input=False). RESULT leaves_index]
+            [COMMAND Within the ensemble loop, accumulate depths by adding self._decision_path_lengths[tree_idx][leaves_index] + self._average_path_length_per_tree[tree_idx][leaves_index] - 1.0. RESULT depths]
+            [COMMAND Set denominator = len(self.estimators_) * average_path_length_max_samples. RESULT denominator]
+            [COMMAND Compute scores = 2 ** (-np.divide(depths, denominator, out=np.ones_like(depths), where=denominator != 0)). When denominator is 0, np.divide leaves the corresponding out entry as 1.0, so the quotient becomes -1.0 and the final value is 0.5. RESULT scores]
+            [COMMAND Return scores. RESULT scores]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a static dictionary of xfail check reasons, mapping 'check_sample_weights_invariance' to a tuple containing the explanation for the estimator's tagging metadata." _more_tags]
+    [INPUTS]
+        <REF> self </REF>: object "The estimator instance whose tags are being generated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "A nested dictionary of xfail check reasons, with the inner value stored as a one-element tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a one-element tuple containing the string 'zero sample_weight is not equivalent to removing samples'. RESULT xfail_reason_tuple]
+            [COMMAND Create an inner dictionary mapping the key 'check_sample_weights_invariance' to xfail_reason_tuple. RESULT xfail_checks_dict]
+            [COMMAND Create an outer dictionary mapping the key '_xfail_checks' to xfail_checks_dict and return it. RESULT tags_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the average path length for isolation tree leaves from leaf sample counts, using 0.0 for n <= 1, 1.0 for n == 2, and 2.0 * (log(n - 1) + euler_gamma) - 2.0 * (n - 1) / n for n > 2, then returns the result in the original input shape." _average_path_length]
+    [INPUTS]
+        <REF> n_samples_leaf </REF>: array-like of shape (n_samples,) "The number of training samples in each test sample leaf, for each estimator."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> average_path_length </REF>: ndarray of shape (n_samples,) "The average path length for each input sample, with the original shape restored."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate n_samples_leaf with check_array using ensure_2d=False and reassign the validated array to n_samples_leaf. RESULT n_samples_leaf]
+            [COMMAND Save the original shape of n_samples_leaf as n_samples_leaf_shape. RESULT n_samples_leaf_shape]
+            [COMMAND Reshape n_samples_leaf to a single row with shape (1, -1) and reassign it to n_samples_leaf. RESULT n_samples_leaf]
+            [COMMAND Initialize average_path_length as a zero array with the same shape as the reshaped n_samples_leaf. RESULT average_path_length]
+            [COMMAND Create mask_1 that is True where n_samples_leaf is less than or equal to 1. RESULT mask_1]
+            [COMMAND Create mask_2 that is True where n_samples_leaf is equal to 2. RESULT mask_2]
+            [COMMAND Create not_mask as the logical NOT of the element-wise logical OR of mask_1 and mask_2. RESULT not_mask]
+            [COMMAND Set average_path_length elements selected by mask_1 to 0.0. RESULT average_path_length]
+            [COMMAND Set average_path_length elements selected by mask_2 to 1.0. RESULT average_path_length]
+            [COMMAND Set average_path_length elements selected by not_mask to 2.0 * (log(n_samples_leaf[not_mask] - 1.0) + np.euler_gamma) - 2.0 * (n_samples_leaf[not_mask] - 1.0) / n_samples_leaf[not_mask]. RESULT average_path_length]
+            [COMMAND Reshape average_path_length to n_samples_leaf_shape and return the reshaped array. RESULT average_path_length]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

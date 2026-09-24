@@ -1,0 +1,189 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `Calculator.__init__`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Initialize the operators lookup table with arithmetic lambda functions for addition, subtraction, multiplication, division, and exponentiation." __init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a dictionary and assign it to self.operators with keys for '+', '-', '*', '/', and '^'. RESULT self.operators]
+            [COMMAND For '+' map to a lambda that returns x + y, for '-' map to a lambda that returns x - y, for '*' map to a lambda that returns x * y, for '/' map to a lambda that returns x / y, and for '^' map to a lambda that returns x ** y. RESULT operator_functions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: A later call of the division lambda uses y equal to 0.]
+        [LOG "The division function in self.operators performs x / y and can fail on zero division."]
+        [THROW ZeroDivisionError "Raised by division when the right operand is zero."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `Calculator.calculate`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Evaluates an arithmetic expression string by parsing numeric tokens and using operand and operator stacks to apply precedence and parentheses rules, then returns the final numeric result or None if no operand was produced." calculate]
+    [INPUTS]
+        <REF> expression </REF>: string "Arithmetic expression text scanned one character at a time."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: number_or_null "The final computed numeric value from the expression, or None when no operand remains."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize operand_stack as an empty list, operator_stack as an empty list, and num_buffer as an empty string. RESULT initialized_state]
+            [COMMAND Iterate through each character char in expression. RESULT char_iteration]
+            [COMMAND Within the loop for each char, if char.isdigit() is true or char equals '.', append char to num_buffer. RESULT updated_num_buffer]
+            [COMMAND Within the same loop, if char is not a digit and not '.', first check whether num_buffer is non-empty; if it is, convert num_buffer to float, append that value to operand_stack, and reset num_buffer to an empty string. RESULT flushed_buffer_to_operand_stack]
+            [COMMAND Within the non-numeric branch, if char is one of '+-*/^', repeatedly apply the top stacked operator while operator_stack is non-empty, operator_stack[-1] is not '(', and self.precedence(operator_stack[-1]) is greater than or equal to self.precedence(char), updating both operand_stack and operator_stack from self.apply_operator on each iteration. RESULT precedence_reduced_stacks]
+            [COMMAND After finishing any required reductions for an operator char, append char to operator_stack. RESULT operator_pushed]
+            [COMMAND Within the non-numeric branch, if char equals '(', append char to operator_stack. RESULT open_parenthesis_pushed]
+            [COMMAND Within the non-numeric branch, if char equals ')', repeatedly apply the top stacked operator while operator_stack is non-empty and operator_stack[-1] is not '(', updating both operand_stack and operator_stack from self.apply_operator on each iteration. RESULT parenthesized_operators_reduced]
+            [COMMAND After reducing operators for a closing parenthesis, pop the top item from operator_stack to discard the matching '('. RESULT open_parenthesis_removed]
+            [COMMAND After the full character loop completes, if num_buffer is non-empty, convert num_buffer to float and append that value to operand_stack. RESULT final_buffer_flushed]
+            [COMMAND After any remaining buffered number is flushed, while operator_stack is non-empty, repeatedly call self.apply_operator to update operand_stack and operator_stack until all remaining operators are resolved. RESULT fully_reduced_stacks]
+            [COMMAND Return operand_stack[-1] if operand_stack is non-empty; otherwise return None. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: A scanned character is neither numeric, nor '.', nor one of '+-*/^', nor '(' , nor ')'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If num_buffer is non-empty before that character, flush it by converting num_buffer to float, appending it to operand_stack, and resetting num_buffer to an empty string. RESULT buffer_flushed_before_unhandled_character]
+            [COMMAND Perform no operator-stack or parenthesis action for that character and continue scanning the next character. RESULT unhandled_character_ignored]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: operand_stack is empty after all parsing and operator reductions are complete.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None instead of a numeric value. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `Calculator.precedence`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Returns the precedence value for a given operator by looking it up in a fixed mapping and defaulting to 0 when the operator is not defined." precedence]
+    [INPUTS]
+        <REF> operator </REF>: text "The operator symbol whose precedence should be retrieved."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: integer "The precedence level for the operator, or 0 if the operator is not present in the mapping."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a fixed dictionary named precedences that maps '+' to 1, '-' to 1, '*' to 2, '/' to 2, and '^' to 3. RESULT precedences]
+            [COMMAND Return the value associated with operator from precedences, using 0 as the default when operator is not a key in the dictionary. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `Calculator.apply_operator`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Pops one operator from the operator stack, pops two operands from the operand stack, applies the selected operator, and pushes the result back before returning both stacks." apply_operator]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing the operator lookup table."
+        <REF> operand_stack </REF>: stack "Stack of operands used for binary operations."
+        <REF> operator_stack </REF>: stack "Stack of pending operators."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "Updated operand stack and operator stack."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Pop the top operator from operator_stack and store it in operator. RESULT operator]
+            [COMMAND Check whether operator equals '^'. RESULT branch_condition]
+            [COMMAND Within either branch, pop operand2 from operand_stack, then pop operand1 from operand_stack. RESULT operand1_operand2]
+            [COMMAND Within either branch, compute result by calling the operator function from self.operators for operator with operand1 and operand2. RESULT result]
+            [COMMAND Within either branch, append result to operand_stack. RESULT operand_stack]
+            [COMMAND Return the updated operand_stack and operator_stack. RESULT operand_stack, operator_stack]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If operator is '^', execute the true branch, which performs the same operand pop, operator application, and result push sequence as the else branch.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Pop operand2 and operand1 from operand_stack. RESULT operand1_operand2]
+            [COMMAND Apply the '^' operator function from self.operators to operand1 and operand2. RESULT result]
+            [COMMAND Append result to operand_stack. RESULT operand_stack]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If operator is not '^', execute the else branch, which performs the same operand pop, operator application, and result push sequence.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Pop operand2 and operand1 from operand_stack. RESULT operand1_operand2]
+            [COMMAND Apply the operator function from self.operators for the current operator to operand1 and operand2. RESULT result]
+            [COMMAND Append result to operand_stack. RESULT operand_stack]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: operator_stack is empty when popping the operator.]
+        [LOG "operator_stack.pop() cannot produce an operator because the stack has no elements."]
+        [THROW IndexError "The operator pop fails because the stack is empty."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: operand_stack does not contain at least two operands when popping operand2 and operand1.]
+        [LOG "operand_stack.pop() cannot produce both operands because the stack lacks sufficient values."]
+        [THROW IndexError "The operand pops fail because the stack does not contain two values."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+

@@ -1,0 +1,172 @@
+# FILE: sympy/core/sympify.py
+# CLASS SympifyError
+
+[DEFINE_WORKER: "Initializes the instance by assigning the provided expr and base_exc arguments to the corresponding attributes, with base_exc defaulting to None when omitted." __init__]
+    [INPUTS]
+        <REF> expr </REF>: object "The expression value to assign to self.expr."
+        <REF> base_exc </REF>: object|null "Optional base exception to assign to self.base_exc; defaults to None when not provided."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the expr argument to the instance attribute self.expr. RESULT self.expr]
+            [COMMAND Assign the base_exc argument to the instance attribute self.base_exc, using None as the default when base_exc is omitted. RESULT self.base_exc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS CantSympify
+
+[DEFINE_WORKER: "Returns True if any class in the method resolution order of type(a) is defined directly in the numpy module, otherwise False." _is_numpy_instance]
+    [INPUTS]
+        <REF> a </REF>: object "The object whose type hierarchy is inspected for numpy-defined classes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "True if any class in the MRO of type(a) has a __module__ equal to 'numpy'; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the type object of the input value a using the built-in type() function. RESULT a_type]
+            [COMMAND Read the __mro__ attribute of a_type to obtain the tuple of classes in the method resolution order, starting with a_type followed by its base classes. RESULT mro_classes]
+            [COMMAND Use any() to iterate over each class type_ in mro_classes and compare type_.__module__ to the string 'numpy'. RESULT has_numpy_class]
+            [COMMAND Return true as soon as any type_ matches because any() short-circuits; otherwise return false after all classes have been checked. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a numpy scalar value to the appropriate SymPy type, using a complex-aware converter or generic sympify for non-floating inputs and precision-preserving Float conversion for numpy floating-point inputs." _convert_numpy_types]
+    [INPUTS]
+        <REF> a </REF>: numpy scalar "Numpy scalar value to be converted to a SymPy type; supports item(), np.asarray(), np.size(), and np.finfo() as applicable."
+        <REF> sympify_args </REF>: dict "Keyword arguments forwarded to sympify when the input is a non-complex, non-floating numpy value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> converted_value </REF>: SymPy object "The resulting SymPy expression, number, or Float obtained from the selected conversion path."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import numpy as np and begin converting the input value `a`. RESULT np]
+            [COMMAND Evaluate the outer condition `not isinstance(a, np.floating)` and store whether `a` is not a numpy floating-point scalar. RESULT is_not_floating]
+            [COMMAND If `is_not_floating` is true, evaluate `np.iscomplex(a)` and store whether the non-floating input is complex. RESULT is_complex]
+            [COMMAND Execute the conversion branch selected according to `is_not_floating` and `is_complex`, and capture its returned value. RESULT converted_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: `is_not_floating` is true and `is_complex` is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return `converter[complex](a.item())` to convert the complex numpy value using the registered complex converter. RESULT converted_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: `is_not_floating` is true and `is_complex` is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return `sympify(a.item(), **sympify_args)` to convert the non-floating, non-complex numpy value generically. RESULT converted_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: `is_not_floating` is false, meaning `a` is a numpy floating-point scalar]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inside the floating-point conversion try block, import `Float` from `sympy.core.numbers`. RESULT Float]
+            [COMMAND Compute `prec = np.finfo(a).nmant + 1`, including the implicit leading mantissa bit that is not stored. RESULT prec]
+            [COMMAND Convert `a` to a scalar string using `str(list(np.reshape(np.asarray(a), (1, np.size(a)))[0]))[1:-1]` and reassign that string back to `a`. RESULT a]
+            [COMMAND Try to return `Float(a, precision=prec)` as the converted SymPy Float. RESULT converted_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: A `NotImplementedError` is raised while executing the floating-point conversion try block.]
+        [LOG "Translation for numpy float : {a} is not implemented"]
+        [THROW SympifyError "Indicates that SymPy cannot translate the given numpy floating-point value."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Strictly converts an object into a SymPy expression for internal arithmetic and equality operations, rejecting unsupported input types." _sympify]
+    [INPUTS]
+        <REF> a </REF>: object "The Python object to convert into a SymPy expression."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sympy_expr </REF>: Expr "The strict SymPy expression produced from a."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call sympify with a and strict=True to convert a into a SymPy expression, and return the resulting expression. RESULT sympy_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: a cannot be converted to a SymPy expression when strict=True]
+        [LOG "sympify(a, strict=True) failed because the input type is not supported for symbolic conversion."]
+        [THROW TypeError "Raised when a is not a type that can be strictly converted to a SymPy expression."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rewrites a parenthesized string expression with a temporary placeholder to prevent SymPy automatic distribution, parses it with sympify, retries without the placeholder if a TypeError occurs, and finally replaces the placeholder with 1 in the parsed expression." kernS]
+    [INPUTS]
+        <REF> s </REF>: string "String representation of a SymPy expression to be parsed using the kernS distribution-prevention hack."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> expr </REF>: object "Sympified expression with the temporary kern symbol replaced by 1 when the hack was used; otherwise the ordinary sympify result."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the string module, choice from random, and Symbol from sympy.core.symbol. RESULT imports_ready]
+            [COMMAND Initialize hit to False and set quoted to True if s contains a double quote or a single quote. RESULT initial_state]
+            [COMMAND Evaluate the rewriting guard: s contains '(' and quoted is False. RESULT rewrite_guard]
+            [COMMAND If the rewriting guard is true, verify that the number of '(' characters in s equals the number of ')' characters; otherwise raise SympifyError('unmatched left parenthesis'). RESULT parentheses_balanced]
+            [COMMAND If the rewriting guard is true, strip all whitespace from s using ''.join(s.split()) and save the stripped string as olds. RESULT stripped_s]
+            [COMMAND If the rewriting guard is true, replace every occurrence of '*(' with '* *(' in s to separate a multiplicative coefficient from a following parenthesized expression. RESULT s_after_step1]
+            [COMMAND If the rewriting guard is true, replace every occurrence of '** *' with '**' in s to keep exponential operators intact. RESULT s_after_step2]
+            [COMMAND If the rewriting guard is true, set target to '-( *(' and replace every occurrence of '-(' in s with target to mark negated parenthesized expressions. RESULT s_after_step3]
+            [COMMAND If the rewriting guard is true, repeatedly find each occurrence of target in s; for each occurrence, scan forward tracking nested parentheses to find its matching closing parenthesis, insert an extra ')' immediately before that closing parenthesis, and continue searching from just after the inserted ')' until no target remains. RESULT s_after_doubling]
+            [COMMAND If the rewriting guard is true and a space remains in s, generate a unique kern placeholder by starting with '_' and appending random letters or digits until kern is not a substring of s, replace every space in s with kern, and set hit to True. RESULT kern]
+            [COMMAND Run a for loop with i in range(2); in each iteration attempt expr = sympify(s) and break immediately if it succeeds. RESULT expr]
+            [COMMAND Continue with the kern substitution path, which is valid only when hit is True. RESULT expr]
+            [COMMAND Create the substitution dictionary rep = {Symbol(kern): 1}. RESULT rep]
+            [COMMAND Define the nested helper _clear(expr) so lists, tuples, and sets are rebuilt with recursively cleared elements, objects having a subs method are transformed by expr.subs(rep, hack2=True), and all other objects are returned unchanged. RESULT _clear]
+            [COMMAND Call expr = _clear(expr) to remove every remaining kern symbol from the parsed expression. RESULT expr]
+            [COMMAND Return expr. RESULT expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: s does not contain '(' or quoted is True, so the rewriting guard is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip all string rewriting and proceed directly to the sympify parse loop with the original s. RESULT s]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: sympify(s) raises TypeError inside the two-iteration loop while hit is True.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Restore s from olds, set hit to False, and continue to the next iteration of the loop. RESULT s]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: sympify(s) raises TypeError inside the two-iteration loop while hit is False.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call expr = sympify(s) again from inside the except block; if it succeeds, keep expr and allow the loop to continue, otherwise let the raised TypeError propagate. RESULT expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After the parse loop, hit is False.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return expr immediately without applying the kern substitution. RESULT expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The rewriting guard is true and the number of '(' characters in s differs from the number of ')' characters.]
+        [LOG "Unmatched left parenthesis detected in the input expression before rewriting."]
+        [THROW SympifyError "Raised because the parentheses in the input string are unbalanced."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

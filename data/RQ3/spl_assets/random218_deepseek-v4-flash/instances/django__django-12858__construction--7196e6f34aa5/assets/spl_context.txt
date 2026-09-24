@@ -1,0 +1,1635 @@
+# FILE: django/db/models/base.py
+# CLASS Deferred
+
+# CLASS ModelBase
+
+[DEFINE_WORKER: "Adds a value to a class by calling value.contribute_to_class(cls, name) when the value supports the contribution protocol, otherwise directly assigning the value as the class attribute name." add_to_class]
+    [INPUTS]
+        <REF> cls </REF>: class "The target class receiving the contributed or assigned value."
+        <REF> name </REF>: str "The name of the class attribute to set on cls."
+        <REF> value </REF>: object "The value to contribute to the class; may support the contribute_to_class protocol or be a plain attribute value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether value supports the contribution protocol by calling _has_contribute_to_class(value). RESULT supports_contribution]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: supports_contribution is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call value.contribute_to_class(cls, name) to let the value contribute itself to cls. RESULT contributed_class]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: supports_contribution is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign value directly as the attribute named name on cls using setattr(cls, name, value). RESULT assigned_class]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the base manager instance associated with the given model class by reading cls._meta.base_manager." _base_manager]
+    [INPUTS]
+        <REF> cls </REF>: class "The model class whose metadata contains the base manager."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Manager "The base manager instance from cls._meta.base_manager."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access cls._meta to obtain the model metadata object. RESULT cls._meta]
+            [COMMAND Access cls._meta.base_manager to obtain the base manager instance. RESULT cls._meta.base_manager]
+            [COMMAND Return cls._meta.base_manager from the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the default manager for a Django model class by reading the default_manager attribute from the model's _meta object." _default_manager]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "The class object representing a Django model whose default manager is to be retrieved."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Django model manager "The default manager instance associated with the given model class."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the _meta attribute from the given class cls. RESULT meta_object]
+            [COMMAND Access the default_manager attribute from the meta object and return it to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS ModelStateFieldsCacheDescriptor
+
+# CLASS ModelState
+
+# CLASS Model
+
+[DEFINE_WORKER: "Initializes a model instance by assigning positional and keyword arguments to concrete fields, related objects, properties, and virtual fields, using deferred sentinel checks and raising IndexError or TypeError for invalid argument counts or unexpected keyword names." Model.__init__]
+    [INPUTS]
+        <REF> self </REF>: object "The model instance being initialized."
+        <REF> args </REF>: tuple "Positional argument values corresponding to model fields."
+        <REF> kwargs </REF>: dict "Keyword argument values for model fields, related object names, properties, and virtual fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Alias instance metadata and helpers: set cls to self.__class__, opts to self._meta, _setattr to built-in setattr, and _DEFERRED to the enclosing DEFERRED sentinel. RESULT local_aliases]
+            [COMMAND Send the pre_init signal with sender=cls, args=args, and kwargs=kwargs. RESULT pre_init_signal]
+            [COMMAND Create a fresh ModelState object and assign it to self._state. RESULT self._state]
+            [COMMAND If len(args) is greater than len(opts.concrete_fields), raise IndexError with the exact message 'Number of args exceeds number of fields'; otherwise continue. RESULT validated_arg_count]
+            [COMMAND Choose the positional-assignment path based on kwargs: if kwargs is falsy, use the fast path over iter(opts.concrete_fields); if kwargs is truthy, use the slow path over iter(opts.fields). In both paths, consume fields_iter via zip(args, fields_iter) so that fields_iter remains positioned at the next unpaired field for the remaining-fields loop. RESULT positional_assignment_complete]
+            [COMMAND For each remaining field in fields_iter, set is_related_object to False; if field.attname is not in kwargs and field.column is None, continue to the next field without assignment. RESULT remaining_field_loop_started]
+            [COMMAND For each remaining field in fields_iter after the virtual-field skip, resolve the field value: if kwargs is truthy and field.remote_field is an instance of ForeignObjectRel, try popping field.name as rel_obj and set is_related_object to True; if field.name is absent, try popping field.attname as val, and if that is also absent use field.get_default(). For non-relation fields when kwargs is truthy, try popping field.attname as val and use field.get_default() on KeyError. If kwargs is falsy, use field.get_default() for the field. RESULT resolved_field_value]
+            [COMMAND For each resolved remaining field, if is_related_object is True and rel_obj is not _DEFERRED, call _setattr(self, field.name, rel_obj); otherwise, if is_related_object is False and val is not _DEFERRED, call _setattr(self, field.attname, val). RESULT remaining_field_assignments]
+            [COMMAND If kwargs is truthy after the field loop, set property_names to opts._property_names and iterate over tuple(kwargs); for each prop, recognize it as a property or valid field using short-circuiting check prop in property_names or opts.get_field(prop); if recognized, call _setattr(self, prop, kwargs[prop]) only when kwargs[prop] is not _DEFERRED, then delete kwargs[prop]; if opts.get_field(prop) or _setattr raises AttributeError or FieldDoesNotExist, ignore that exception and leave the key in kwargs. RESULT remaining_kwargs_processed]
+            [COMMAND After recognized kwargs are removed, if any unrecognized keys remain in kwargs, raise TypeError for the first remaining kwarg using the message pattern "%s() got an unexpected keyword argument '%s'" with cls.__name__ and the kwarg name. RESULT unexpected_kwargs_checked]
+            [COMMAND Call super().__init__() to initialize the base class. RESULT super_initialized]
+            [COMMAND Send the post_init signal with sender=cls and instance=self. RESULT post_init_signal]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: kwargs is empty/falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create fields_iter by calling iter(opts.concrete_fields). RESULT fields_iter]
+            [COMMAND For each (val, field) pair produced by zip(args, fields_iter), if val is _DEFERRED continue; otherwise call _setattr(self, field.attname, val). Rely on zip pulling from args first so that if args is exhausted, fields_iter is not advanced further. RESULT fast_path_field_assignments]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: kwargs is non-empty/truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create fields_iter by calling iter(opts.fields). RESULT fields_iter]
+            [COMMAND For each (val, field) pair produced by zip(args, fields_iter), if val is _DEFERRED continue; otherwise call _setattr(self, field.attname, val) and then call kwargs.pop(field.name, None) to remove a matching keyword argument. RESULT slow_path_field_assignments]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: len(args) is greater than len(opts.concrete_fields)]
+        [LOG "IndexError: Number of args exceeds number of fields"]
+        [THROW IndexError "Raised when more positional arguments are supplied than the model has concrete fields."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: After processing recognized keyword arguments, kwargs still contains one or more unrecognized keyword names]
+        [LOG "TypeError: '%s() got an unexpected keyword argument '%s'' with cls.__name__ and the remaining kwarg name"]
+        [THROW TypeError "Raised for any leftover keyword argument that is not a recognized property, field, or virtual field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a model instance from database values, reordering a partial values list to match concrete_fields order and substituting DEFERRED for missing values before initializing the instance and setting its database state." from_db]
+    [INPUTS]
+        <REF> cls </REF>: class "Model class whose constructor is called to create the new instance."
+        <REF> db </REF>: object "Database alias or connection identifier to store in the new instance's _state.db."
+        <REF> field_names </REF>: collection of strings "Attribute names that have supplied values; used to decide whether each concrete field consumes a value or receives DEFERRED."
+        <REF> values </REF>: sequence "Supplied field values; must support len() and iteration, and be accepted as positional arguments by cls."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> new </REF>: model instance "The constructed cls instance with _state.adding set to False and _state.db set to db."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether len(values) differs from len(cls._meta.concrete_fields). If the lengths differ, follow the alternative flow to rebuild values; otherwise keep values as provided. RESULT values]
+            [COMMAND Construct a new model instance by calling cls with the values list unpacked as positional arguments. RESULT new]
+            [COMMAND Set the new instance's _state.adding attribute to False. RESULT new_state_adding]
+            [COMMAND Set the new instance's _state.db attribute to db. RESULT new_state_db]
+            [COMMAND Return the new instance. RESULT new]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: len(values) is not equal to len(cls._meta.concrete_fields).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create an iterator values_iter from the original values. RESULT values_iter]
+            [COMMAND Iterate over cls._meta.concrete_fields in declaration order. For each field f, if f.attname is in field_names, consume the next item from values_iter with next(); otherwise use DEFERRED. Build a new list from these items; any leftover values in values_iter after the loop are ignored. RESULT values]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: While consuming items in the alternative flow, values_iter is exhausted before every concrete field whose attname appears in field_names has received a value.]
+        [LOG "StopIteration: not enough supplied values for the requested field names."]
+        [THROW StopIteration "Raised by next(values_iter) when the original values are exhausted while aligning fields in field_names."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves the current value of the primary key attribute for the instance, using the provided meta object or falling back to self._meta." _get_pk_val]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose primary key value is retrieved."
+        <REF> meta </REF>: object|null "Optional metadata object. If falsy, self._meta is used as the effective metadata."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: any "The value of the attribute named by effective_meta.pk.attname on self."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine effective_meta: if the meta argument is falsy, set effective_meta to self._meta; otherwise set effective_meta to meta, short-circuiting the fallback evaluation. RESULT effective_meta]
+            [COMMAND Read the primary key attribute name from effective_meta.pk.attname. RESULT pk_attname]
+            [COMMAND Return getattr(self, pk_attname). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over non-primary-key parent links of a Django model instance, copies the given value to each corresponding target field, then assigns the value to the model's primary key attribute and returns the result of that assignment." _set_pk_val]
+    [INPUTS]
+        <REF> self </REF>: Django model instance "The model instance whose parent-link fields and primary key attribute are updated."
+        <REF> value </REF>: object "The value to be assigned to the parent-link target fields and to the primary key attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Always None because the method returns the result of calling setattr on the primary key attribute."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each parent_link in self._meta.parents.values(). RESULT parent_link]
+            [COMMAND Inside the for loop over parent_link, evaluate the short-circuit condition: if parent_link is falsy, skip the body; otherwise, verify parent_link != self._meta.pk before executing the body. RESULT parent_link_is_valid]
+            [COMMAND Inside the for loop and only when the short-circuit condition is true, call setattr(self, parent_link.target_field.attname, value) to assign value to the parent-link target attribute. RESULT parent_link_updated]
+            [COMMAND After the for loop completes, call setattr(self, self._meta.pk.attname, value) and return its result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the set of concrete model field attribute names that are not currently present in the instance's __dict__, indicating deferred fields." get_deferred_fields]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: set "Set of deferred field attribute names that are not present in self.__dict__."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the collection of concrete field objects from self._meta.concrete_fields. RESULT concrete_fields]
+            [COMMAND Iterate over each concrete field f in concrete_fields and evaluate f.attname to obtain the field attribute name. RESULT field_name]
+            [COMMAND For each field_name, test whether field_name is absent from self.__dict__; if absent, add field_name to the result set; if present, exclude it. RESULT deferred_field_names]
+            [COMMAND Return the deferred_field_names set as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reloads field values for the current model instance from the database, optionally limited to a provided or non-deferred field set, and clears stale cached relations after refreshing." refresh_from_db]
+    [INPUTS]
+        <REF> using </REF>: string or None "Optional database alias used to reload the instance; when None, uses the instance's current database or the read router."
+        <REF> fields </REF>: iterable of str or None "Optional field attnames to reload; if None, all non-deferred fields are reloaded. When not None, the iterable may be mutated by removing fields already present in the prefetched-objects cache."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "This method updates the current instance in place and returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If fields is None, reset self._prefetched_objects_cache to an empty dictionary; otherwise, prepare the fields list by removing any fields already cached in self._prefetched_objects_cache. RESULT prepared_fields_state]
+            [COMMAND When fields is not None, read the existing _prefetched_objects_cache with getattr(self, '_prefetched_objects_cache', ()); for each field in fields, if field is present in that cache, delete the cache entry and remove field from the fields iterable. RESULT cleaned_fields]
+            [COMMAND After the field-cleaning loop, if fields is now empty, return immediately from the method. RESULT early_return]
+            [COMMAND If any remaining field in fields contains LOOKUP_SEP, trigger the ValueError exception path for invalid fields. RESULT invalid_fields_error]
+            [COMMAND Set hints to {'instance': self}. RESULT hints]
+            [COMMAND Build db_instance_qs as self.__class__._base_manager.db_manager(using, hints=hints).filter(pk=self.pk). RESULT db_instance_qs]
+            [COMMAND Set deferred_fields to self.get_deferred_fields(). RESULT deferred_fields]
+            [COMMAND If fields is not None, convert fields to a list and apply db_instance_qs.only(*fields); otherwise, if deferred_fields is truthy, compute fields as the attnames of self._meta.concrete_fields not present in deferred_fields and apply db_instance_qs.only(*fields); if neither holds, leave db_instance_qs unchanged. RESULT queryset_with_selected_fields]
+            [COMMAND Evaluate db_instance = db_instance_qs.get() to retrieve the refreshed database instance. RESULT db_instance]
+            [COMMAND Set non_loaded_fields to db_instance.get_deferred_fields(). RESULT non_loaded_fields]
+            [COMMAND For each field in self._meta.concrete_fields, if field.attname is in non_loaded_fields, skip that field; otherwise set attribute self.field.attname to getattr(db_instance, field.attname), and if the field is a relation and field.is_cached(self) is true, call field.delete_cached_value(self) to clear the cached foreign key value. RESULT refreshed_concrete_field_values]
+            [COMMAND For each related field in self._meta.related_objects, if field.is_cached(self) is true, call field.delete_cached_value(self) to clear the cached related value. RESULT cleared_related_object_caches]
+            [COMMAND Set self._state.db to db_instance._state.db. RESULT updated_instance_database_state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: fields is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self._prefetched_objects_cache to an empty dictionary. RESULT cleared_prefetched_objects_cache]
+            [COMMAND Skip the fields-cleaning and early-return validation branch because no explicit fields were provided. RESULT skipped_fields_validation]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: fields is provided and is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over fields and remove from the prefetched-objects cache and from fields every field that is already present in the cache. RESULT filtered_fields]
+            [COMMAND If fields is empty after the removals, return immediately from the method. RESULT empty_fields_return]
+            [COMMAND If any remaining field contains LOOKUP_SEP, trigger the ValueError exception path. RESULT invalid_fields_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: fields is None and deferred_fields is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build fields as a list of f.attname for f in self._meta.concrete_fields when f.attname is not in deferred_fields. RESULT non_deferred_concrete_fields]
+            [COMMAND Apply db_instance_qs.only(*fields) to load only the non-deferred concrete fields. RESULT queryset_with_non_deferred_fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: fields is not None and, after removing cached fields, at least one remaining field contains LOOKUP_SEP]
+        [LOG "Found LOOKUP_SEP in fields argument; relations and transforms are not allowed in fields."]
+        [THROW ValueError "Raised to reject field names that contain the lookup separator, which would indicate relation traversal or transform syntax."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the serialized value of the requested model field by using the field's attname when the field exists, so foreign keys serialize as their id, and falls back to the model attribute value when no field definition is found." serializable_value]
+    [INPUTS]
+        <REF> self </REF>: object "The model instance whose serializable field value is requested."
+        <REF> field_name </REF>: string "The name of the field whose serialized value should be returned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The field's serialized value. When the field is a foreign key, this is the id value; when no field definition exists, it is the model attribute value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within a try block, look up the Field object for field_name by calling self._meta.get_field(field_name) and assign it to field. RESULT field]
+            [COMMAND After the try block succeeds, return getattr(self, field.attname), using the resolved field's attname as the attribute to read; no default is supplied, so missing attributes propagate AttributeError. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self._meta.get_field(field_name) raises FieldDoesNotExist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the model attribute value via getattr(self, field_name), preserving the fallback behavior for names that do not correspond to a registered field. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Save the current model instance to the database, validating cached related objects and normalizing update_fields before delegating to save_base." save]
+    [INPUTS]
+        <REF> force_insert </REF>: bool "If true, force the save to perform an SQL insert or equivalent."
+        <REF> force_update </REF>: bool "If true, force the save to perform an SQL update or equivalent."
+        <REF> using </REF>: str | None "Database alias to use; if None or empty, it is resolved via router.db_for_write using the model class and instance."
+        <REF> update_fields </REF>: Iterable[str] | None "Optional field names restricting which fields are saved. An empty iterable causes an immediate return; invalid field names raise ValueError."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each concrete field in self._meta.concrete_fields. RESULT field]
+            [COMMAND Within the concrete-field loop, for each field where field.is_relation is true and, when that holds, field.is_cached(self) is true, retrieve the cached related object as obj = getattr(self, field.name, None). RESULT obj]
+            [COMMAND Within the concrete-field loop, if obj is falsy, continue to the next concrete field and skip all remaining checks for the current field. RESULT none]
+            [COMMAND Within the concrete-field loop, for a cached relation object that is truthy, when obj.pk is None and field.remote_field.multiple is false, call field.remote_field.delete_cached_value(obj). RESULT none]
+            [COMMAND Within the concrete-field loop, for a cached relation object that is truthy, when obj.pk is None, raise ValueError (see exception_flows). RESULT none]
+            [COMMAND Within the concrete-field loop, for a cached relation object that is truthy, when obj.pk is not None and getattr(self, field.attname) is None, call setattr(self, field.attname, obj.pk). RESULT none]
+            [COMMAND Within the concrete-field loop, for a cached relation object that is truthy and has obj.pk not None, if getattr(obj, field.target_field.attname) != getattr(self, field.attname), call field.delete_cached_value(self). RESULT none]
+            [COMMAND After the concrete-field loop, assign using = using or router.db_for_write(self.__class__, instance=self), keeping the caller-provided using when it is truthy. RESULT using]
+            [COMMAND If force_insert is true and either force_update or update_fields is truthy, raise ValueError (see exception_flows). RESULT none]
+            [COMMAND Assign deferred_fields = self.get_deferred_fields(). RESULT deferred_fields]
+            [COMMAND If update_fields is not None and update_fields is empty, return immediately from save without calling save_base. RESULT none]
+            [COMMAND If update_fields is not None and update_fields is non-empty, assign update_fields = frozenset(update_fields). RESULT update_fields]
+            [COMMAND If update_fields is not None and update_fields is non-empty, build field_names as the set containing each field.name from self._meta.fields where field.primary_key is false, and also field.attname whenever field.name != field.attname. RESULT field_names]
+            [COMMAND If update_fields is not None and update_fields is non-empty, compute non_model_fields = update_fields.difference(field_names); if non_model_fields is non-empty, raise ValueError (see exception_flows). RESULT non_model_fields]
+            [COMMAND If update_fields is None, not force_insert, deferred_fields is truthy, and using == self._state.db, build field_names as the set of field.attname for concrete fields in self._meta.concrete_fields where field.primary_key is false and the field has no 'through' attribute. RESULT field_names]
+            [COMMAND In the deferred-fields branch, compute loaded_fields = field_names.difference(deferred_fields); if loaded_fields is non-empty, assign update_fields = frozenset(loaded_fields). RESULT loaded_fields]
+            [COMMAND Call self.save_base(using=using, force_insert=force_insert, force_update=force_update, update_fields=update_fields). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Within the concrete-field loop, for a cached relation object that is truthy, obj.pk is None.]
+        [LOG "save() prohibited to prevent data loss due to unsaved related object '<field.name>'."]
+        [THROW ValueError "Raised because a related object without a saved primary key is assigned to a relation field; this prevents silent data loss."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: force_insert is true and either force_update or update_fields is truthy.]
+        [LOG "Cannot force both insert and updating in model saving."]
+        [THROW ValueError "Raised when conflicting save modes are requested."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: update_fields is not None, update_fields is non-empty, and non_model_fields = update_fields.difference(field_names) is non-empty.]
+        [LOG "The following fields do not exist in this model or are m2m fields: <comma-joined non_model_fields>."]
+        [THROW ValueError "Raised when update_fields contains names that are not valid non-primary-key model fields or are many-to-many fields."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Handles the once-per-save common work for a Django model instance: resolves the database, enforces save-option invariants, skips proxy and auto-created models where appropriate, emits pre/post-save signals, and executes parent/table saving inside the proper transaction context." save_base]
+    [INPUTS]
+        <REF> raw </REF>: bool "When True, skips saving parent models and skips value changes before save; used by fixture loading."
+        <REF> force_insert </REF>: bool "Forces an INSERT operation; conflicts with force_update or a non-empty update_fields."
+        <REF> force_update </REF>: bool "Forces an UPDATE operation; conflicts with force_insert."
+        <REF> using </REF>: str|None "Database alias to use; if falsy, it is resolved via router.db_for_write."
+        <REF> update_fields </REF>: iterable|None "Optional fields to update; must be None or a non-empty collection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None; save effects are applied to the instance and through signals."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the database alias: if using is falsy, call router.db_for_write(self.__class__, instance=self) and use its result; otherwise keep the provided using. Store the resolved alias back into using. RESULT using]
+            [COMMAND Validate save options: assert that force_insert is not combined with force_update or a truthy update_fields; on failure, AssertionError is raised. RESULT none]
+            [COMMAND Validate update_fields: assert that update_fields is either None or a truthy/non-empty collection; on failure, AssertionError is raised. RESULT none]
+            [COMMAND Set origin to self.__class__, preserving the original model class for signal senders. RESULT origin]
+            [COMMAND Set cls to origin, making cls reference the same class as origin. RESULT cls]
+            [COMMAND If cls._meta.proxy is truthy, set cls to cls._meta.concrete_model; otherwise keep cls unchanged. origin remains the original proxy model class. RESULT cls]
+            [COMMAND Set meta to cls._meta. RESULT meta]
+            [COMMAND If meta.auto_created is false, send the pre_save signal with sender=origin, instance=self, raw=raw, using=using, update_fields=update_fields. RESULT none]
+            [COMMAND If meta.parents is truthy, set context_manager to transaction.atomic(using=using, savepoint=False); otherwise set context_manager to transaction.mark_for_rollback_on_error(using=using). RESULT context_manager]
+            [COMMAND Enter context_manager as the active database transaction scope. RESULT none]
+            [COMMAND Inside the context_manager block, initialize parent_inserted to False. RESULT parent_inserted]
+            [COMMAND Inside the context_manager block, if raw is false, call self._save_parents(cls, using, update_fields) and assign its return value to parent_inserted; if raw is true, leave parent_inserted as False. RESULT parent_inserted]
+            [COMMAND Inside the context_manager block, call self._save_table(raw, cls, force_insert or parent_inserted, force_update, using, update_fields) and assign its return value to updated. RESULT updated]
+            [COMMAND Exit the context_manager block; the selected transaction policy is applied, including rollback on error if mark_for_rollback_on_error was used. RESULT none]
+            [COMMAND Set self._state.db to using, storing the database on which the object was saved. RESULT self._state.db]
+            [COMMAND Set self._state.adding to False, marking the instance as no longer pending insertion. RESULT self._state.adding]
+            [COMMAND If meta.auto_created is false, send the post_save signal with sender=origin, instance=self, created=(not updated), update_fields=update_fields, raw=raw, using=using. RESULT none]
+            [COMMAND Finish the method, implicitly returning None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: force_insert is truthy and either force_update is truthy or update_fields is truthy.]
+        [LOG "Assertion failed: force_insert cannot be combined with force_update or non-empty update_fields."]
+        [THROW AssertionError "Raised when the save request contains conflicting force_insert and force_update/update_fields options."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: update_fields is not None and update_fields is falsy, for example an empty list or empty tuple.]
+        [LOG "Assertion failed: update_fields must be None or a non-empty collection."]
+        [THROW AssertionError "Raised when update_fields is provided but contains no fields to update."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Saves all parent model instances of cls using values from self, synchronizing inherited primary-key/link fields and returning whether any parent row was inserted." _save_parents]
+    [INPUTS]
+        <REF> self </REF>: Model instance "Instance whose field values are used to save the parent rows."
+        <REF> cls </REF>: Model class "Current model class whose parents are to be saved."
+        <REF> using </REF>: str "Database alias to use for the save operations."
+        <REF> update_fields </REF>: list | tuple | set | None "Field names to restrict the save operation to, or None to update all fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> inserted </REF>: bool "True if at least one parent row was inserted; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the model metadata from cls._meta and assign it to meta. RESULT meta]
+            [COMMAND Initialize inserted to False; this flag records whether any parent row is inserted. RESULT inserted]
+            [COMMAND For each parent model and associated field (which may be None) in meta.parents.items(), begin the parent-saving loop. RESULT parent, field]
+            [COMMAND Within the loop over (parent, field), using short-circuit evaluation, if field is truthy and getattr(self, parent._meta.pk.attname) is None and getattr(self, field.attname) is not None, synchronize the inherited parent PK by setting getattr(self, parent._meta.pk.attname) to getattr(self, field.attname). RESULT self]
+            [COMMAND Within the loop over (parent, field), recursively call self._save_parents(cls=parent, using=using, update_fields=update_fields) and assign the returned boolean to parent_inserted. RESULT parent_inserted]
+            [COMMAND Within the loop over (parent, field), call self._save_table(cls=parent, using=using, update_fields=update_fields, force_insert=parent_inserted) and assign the returned boolean to updated. RESULT updated]
+            [COMMAND Within the loop over (parent, field), if updated is falsy, set inserted to True; inserted remains True for all later iterations. RESULT inserted]
+            [COMMAND Within the loop over (parent, field), if field is truthy, set getattr(self, field.attname) to self._get_pk_val(parent._meta), copying the parent primary key into the link field. RESULT self]
+            [COMMAND Within the loop over (parent, field), if field is truthy and field.is_cached(self) is true, call field.delete_cached_value(self) to invalidate the cached parent instance. RESULT self]
+            [COMMAND After the loop has processed every parent entry, return the inserted flag. RESULT inserted]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Saves a model instance's row for a single table by updating an existing row when possible and inserting otherwise, returning whether an UPDATE was executed." _save_table]
+    [INPUTS]
+        <REF> self </REF>: Model instance "The model instance being saved for a single table."
+        <REF> raw </REF>: bool "When true, use raw field values directly and bypass pre-save field processing."
+        <REF> cls </REF>: Model class "Model class whose metadata and base manager are used; must be provided by the caller even though the parameter defaults to None."
+        <REF> force_insert </REF>: bool "When true, skip the update attempt and force an insert."
+        <REF> force_update </REF>: bool "When true, force an update and require that it affects at least one row."
+        <REF> using </REF>: str or None "Database alias to use for the update/insert queries."
+        <REF> update_fields </REF>: iterable of str or None "Field names or attribute names to restrict an update; when provided, the update must affect a row."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> updated </REF>: bool "True when an UPDATE affected a row; False when an INSERT was performed or no update occurred."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the model metadata by assigning `meta = cls._meta`. RESULT meta]
+            [COMMAND Build `non_pks` as a new list containing each field in `meta.local_concrete_fields` whose `primary_key` attribute is falsy. RESULT non_pks]
+            [COMMAND If `update_fields` is truthy, rebuild `non_pks` so it contains only fields whose `name` or `attname` appears in `update_fields`; if `update_fields` is falsy, leave `non_pks` unchanged. RESULT non_pks]
+            [COMMAND Call `self._get_pk_val(meta)` and assign the result to `pk_val`. RESULT pk_val]
+            [COMMAND If `pk_val is None`, generate a primary key by calling `meta.pk.get_pk_value_on_save(self)`, assign it to `pk_val`, and set it on the instance with `setattr(self, meta.pk.attname, pk_val)`; otherwise keep the existing `pk_val`. RESULT pk_val]
+            [COMMAND Set `pk_set = pk_val is not None` to record whether a primary key value is present. RESULT pk_set]
+            [COMMAND After computing `pk_set`, if `not pk_set` and (`force_update` or `update_fields`) are truthy, raise ValueError instead of continuing; otherwise proceed. RESULT validated]
+            [COMMAND Initialize `updated = False` to track whether an UPDATE row is affected. RESULT updated]
+            [COMMAND If `not raw`, `not force_insert`, `self._state.adding`, `meta.pk.default` is truthy, and `meta.pk.default is not NOT_PROVIDED` are all true, set `force_insert = True`. RESULT force_insert]
+            [COMMAND If `pk_set` is false or `force_insert` is true, skip the update branch. Otherwise create `base_qs = cls._base_manager.using(using)`. RESULT base_qs]
+            [COMMAND Within the `pk_set and not force_insert` update branch, build `values` as a list of `(f, None, value)` tuples for each field `f` in `non_pks`; when `raw` is truthy use `getattr(self, f.attname)`, otherwise use `f.pre_save(self, False)`. RESULT values]
+            [COMMAND Within the same update branch, set `forced_update = update_fields or force_update` using short-circuit semantics. RESULT forced_update]
+            [COMMAND Within the same update branch, call `self._do_update(base_qs, using, pk_val, values, update_fields, forced_update)` and assign the returned boolean to `updated`. RESULT updated]
+            [COMMAND Within the same update branch, after `_do_update`, verify update invariants: if `force_update` is truthy and `updated` is false, raise DatabaseError; if `update_fields` is truthy and `updated` is false, raise DatabaseError. RESULT update_checked]
+            [COMMAND If `updated` is true, skip the insert path; otherwise enter the insert path. RESULT updated]
+            [COMMAND Within the insert path, if `meta.order_with_respect_to` is set, use that field's `get_filter_kwargs_for_object(self)` to filter `cls._base_manager.using(using)`, aggregate `_order__max` as `Coalesce(ExpressionWrapper(Max('_order') + Value(1), output_field=IntegerField()), Value(0))`, and assign the result to `self._order`. RESULT self._order]
+            [COMMAND Within the insert path, set `fields = meta.local_concrete_fields` as the initial insert field list. RESULT fields]
+            [COMMAND Within the insert path, if `not pk_set`, rebuild `fields` by excluding `meta.auto_field` so the database can generate the primary key. RESULT fields]
+            [COMMAND Within the insert path, set `returning_fields = meta.db_returning_fields`. RESULT returning_fields]
+            [COMMAND Within the insert path, call `self._do_insert(cls._base_manager, using, fields, returning_fields, raw)` and assign the result to `results`. RESULT results]
+            [COMMAND Within the insert path, if `results` is truthy, iterate over `zip(results[0], returning_fields)` and for each `value, field` pair assign the returned value to the instance with `setattr(self, field.attname, value)`. RESULT self]
+            [COMMAND Return the final value of `updated`. RESULT updated]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: `not pk_set` and (`force_update` or `update_fields`) is true]
+        [LOG "Cannot force an update in save() with no primary key."]
+        [THROW ValueError "Raised when an update is forced or update_fields are supplied but the instance has no primary key."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: `force_update` is true and `updated` is false after `_do_update`]
+        [LOG "Forced update did not affect any rows."]
+        [THROW DatabaseError "Raised when a forced update does not affect any rows."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: `update_fields` is truthy, `updated` is false after `_do_update`, and `force_update` is falsy (so the previous forced-update exception is not raised first)]
+        [LOG "Save with update_fields did not affect any rows."]
+        [THROW DatabaseError "Raised when an update restricted to update_fields does not affect any rows."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Attempts to update the model row matching pk_val, returning True when an update affected a matching row, while treating empty updates as successful if update_fields is provided or the row still exists, and using an existence re-check when select_on_save is enabled." _do_update]
+    [INPUTS]
+        <REF> self </REF>: Model "Model instance whose _meta.select_on_save setting controls the select-before-update path."
+        <REF> base_qs </REF>: QuerySet "Base queryset used to locate the object to update."
+        <REF> using </REF>: str "Database alias for the update; not directly referenced in this method body."
+        <REF> pk_val </REF>: object "Primary key value used to filter the object to update."
+        <REF> values </REF>: dict "Field values for the update; if empty/falsy, no UPDATE is attempted."
+        <REF> update_fields </REF>: iterable or None "Fields explicitly selected for update; used to determine success for empty values."
+        <REF> forced_update </REF>: bool "Whether this is a forced update, disabling select-on-save behavior."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the model was updated or treated as updated; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Filter base_qs to rows whose primary key equals pk_val and assign the resulting queryset to filtered. RESULT filtered]
+            [COMMAND Evaluate whether values is empty/falsy. If it is, branch to the empty-values alternative flow; otherwise continue. RESULT values_empty]
+            [COMMAND Evaluate whether self._meta.select_on_save is truthy and forced_update is false. If both hold, branch to the select-on-save alternative flow; otherwise continue. RESULT select_on_save_active]
+            [COMMAND When neither the empty-values nor the select-on-save branch applies, execute filtered._update(values) and return True if the affected row count is greater than 0, otherwise return False. RESULT default_update_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: values is empty/falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the empty-values branch, return True if update_fields is not None; otherwise return the result of filtered.exists(). RESULT empty_values_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self._meta.select_on_save is truthy and forced_update is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the select-on-save branch, evaluate filtered.exists(); if it returns False, return False without executing the update. RESULT pre_update_exists]
+            [COMMAND In the select-on-save branch, if filtered.exists() is True, execute filtered._update(values) and capture the number of affected rows. RESULT update_affected_count]
+            [COMMAND In the select-on-save branch, if the captured update row count is greater than 0, return True. RESULT update_success]
+            [COMMAND In the select-on-save branch, if the captured update row count is 0, evaluate filtered.exists() again and return True if the row still exists, otherwise return False. RESULT post_update_exists]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates insertion of the current model instance to manager._insert by wrapping self in a list and forwarding fields, returning_fields, using, and raw, then returns the result." _do_insert]
+    [INPUTS]
+        <REF> self </REF>: object "Current model instance to be inserted."
+        <REF> manager </REF>: object "Manager object whose _insert method performs the insert."
+        <REF> using </REF>: object "Database alias or connection to use for the insert."
+        <REF> fields </REF>: list "Fields to include in the insert."
+        <REF> returning_fields </REF>: list "Fields to return after insert, if defined."
+        <REF> raw </REF>: bool "Flag indicating whether raw values are used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> insert_result </REF>: object "Return value of manager._insert, typically the newly created model data when returning_fields is defined."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Wrap self in a single-element list. RESULT self_as_list]
+            [COMMAND Call manager._insert with self_as_list as the first positional argument and fields=fields, returning_fields=returning_fields, using=using, raw=raw as keyword arguments. RESULT insert_result]
+            [COMMAND Return insert_result to the caller of _do_insert. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deletes the current model instance after resolving the database alias and collecting related objects for deletion." delete]
+    [INPUTS]
+        <REF> using </REF>: string or None "Optional database alias to use for deletion; if falsy, the alias is resolved through router.db_for_write."
+        <REF> keep_parents </REF>: boolean "Whether to keep parent objects when deleting an instance involved in multi-table inheritance."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> deletion_result </REF>: tuple "The result of Collector.delete(): a tuple containing the total number of deleted objects and a dictionary of deleted objects per model type."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the database alias by evaluating `using or router.db_for_write(self.__class__, instance=self)`, keeping the existing `using` value when it is truthy and computing the fallback alias only when it is falsy. RESULT using]
+            [COMMAND Assert that `self.pk` is not None; if it is None, raise an AssertionError with the formatted message using the object name and primary key attribute name. RESULT pk_validated]
+            [COMMAND Instantiate `Collector(using=using)` and assign it to `collector`. RESULT collector]
+            [COMMAND Call `collector.collect([self], keep_parents=keep_parents)` to collect the instance and all related objects that must be deleted. RESULT collector]
+            [COMMAND Return the result of `collector.delete()`. RESULT deletion_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The primary key `self.pk` is None.]
+        [LOG "Formatted assertion message: '%s object can't be deleted because its %s attribute is set to None.' (formatted with self._meta.object_name and self._meta.pk.attname)"]
+        [THROW AssertionError "Raised when the model instance has no primary key assigned."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the display label for a model field by looking up the field's raw value in its flattened choice dictionary, falling back to the raw value, and applying force_str with strings_only=True." _get_FIELD_display]
+    [INPUTS]
+        <REF> self </REF>: object "Model instance on which the field display is computed; source of the raw field value."
+        <REF> field </REF>: ModelField "Model field object supplying attname for the attribute to read and flatchoices for the available choices."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The matching choice label if found; otherwise the original raw value. force_str(..., strings_only=True) converts lazy strings to str and passes non-lazy non-string values through unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the raw field value from self by getting the attribute named field.attname, and store it as value. RESULT value]
+            [COMMAND Build choices_dict by applying make_hashable to field.flatchoices and passing the result to dict; duplicate keys resolve to the last value and an empty choices list yields an empty dictionary. RESULT choices_dict]
+            [COMMAND Determine selected_display by calling choices_dict.get(make_hashable(value), value), using the matching choice label when make_hashable(value) is a key and the original value otherwise. RESULT selected_display]
+            [COMMAND Return force_str(selected_display, strings_only=True), converting lazy string objects to strings and leaving non-lazy non-string values unchanged. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self has no attribute named field.attname]
+        [LOG "AttributeError while reading the field's raw value."]
+        [THROW AttributeError "Raised when the attribute identified by field.attname does not exist on self."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Finds and returns the next or previous model instance relative to the current instance by comparing the given field value and primary key, with optional caller-supplied filters and deterministic ordering." _get_next_or_previous_by_FIELD]
+    [INPUTS]
+        <REF> self </REF>: DjangoModelInstance "The current Django model instance used as the reference point for the next or previous lookup."
+        <REF> field </REF>: DjangoModelField "The model field used to determine which record is next or previous."
+        <REF> is_next </REF>: bool "Boolean flag; True selects the next record and False selects the previous record."
+        <REF> kwargs </REF>: dict "Additional keyword filter arguments applied to the queryset before the next or previous lookup."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: DjangoModelInstance "The first matching next or previous model instance."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set op to 'gt' if is_next is True, otherwise set op to 'lt'. RESULT op]
+            [COMMAND Set order to an empty string if is_next is True, otherwise set order to '-'. RESULT order]
+            [COMMAND Store the current instance's field value by reading getattr(self, field.attname) into param. RESULT param]
+            [COMMAND Build the base Q filter q to select records where the field value is strictly greater than param if op is 'gt', or strictly less than param if op is 'lt'. RESULT q]
+            [COMMAND Extend q by ORing it with the tie-breaker Q filter that selects records where the field value equals param and the primary key is strictly greater than self.pk if op is 'gt', or strictly less than self.pk if op is 'lt'. RESULT q]
+            [COMMAND Construct the queryset qs by starting from self.__class__._default_manager.using(self._state.db), applying caller-supplied kwargs filters, applying q, and ordering first by the field name with the selected order prefix and then by 'pk' with the same order prefix, where an empty prefix means ascending and '-' means descending. RESULT qs]
+            [COMMAND Return the first element of qs using qs[0]. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.pk is falsy, indicating the current instance has not been saved.]
+        [LOG "get_next/get_previous cannot be used on unsaved objects."]
+        [THROW ValueError "Raised because the next or previous lookup cannot be performed on unsaved objects."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Accessing qs[0] raises IndexError because the queryset is empty.]
+        [LOG "The model's object name plus the text ' matching query does not exist.'"]
+        [THROW DoesNotExist "Raised via self.DoesNotExist to indicate that no matching next or previous object exists."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves, caches, and returns the next or previous object in the order_with_respect_to ordering for the current model instance." _get_next_or_previous_in_order]
+    [INPUTS]
+        <REF> is_next </REF>: bool "Boolean flag indicating whether to fetch the next object (True) or the previous object (False) in the ordered relationship."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> adjacent_object </REF>: object "The adjacent model instance in the order_with_respect_to ordering, either next or previous depending on is_next."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the cache attribute name as '__' + str(is_next) + '_order_cache' and store it in cachename. RESULT cachename]
+            [COMMAND If self does not have an attribute named cachename, set the comparison operator op to 'gt' when is_next is truthy, otherwise 'lt'. RESULT op]
+            [COMMAND In the cache-miss branch, set the ordering direction order to '_order' when is_next is truthy, otherwise '-_order'. RESULT order]
+            [COMMAND In the cache-miss branch, retrieve order_field from self._meta.order_with_respect_to. RESULT order_field]
+            [COMMAND In the cache-miss branch, build filter_args by calling order_field.get_filter_kwargs_for_object(self). RESULT filter_args]
+            [COMMAND In the cache-miss branch, query self.__class__._default_manager filtered by filter_args and the lookup key '_order__' + op against a subquery of self's own _order value obtained by filtering the default manager by {self._meta.pk.name: self.pk}, ordered by order, sliced with [:1], and retrieve the single object with .get(); assign it to obj. RESULT obj]
+            [COMMAND In the cache-miss branch, cache obj on self with setattr(self, cachename, obj). RESULT self]
+            [COMMAND After the optional cache-miss branch, return getattr(self, cachename). RESULT adjacent_object]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The filtered and ordered queryset returns no object when .get() is called.]
+        [LOG "No adjacent ordered object exists for the current object."]
+        [THROW DoesNotExist "Raised by .get() when no next or previous object matches the ordered-relationship query."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Provides an empty validation hook that performs no operations after per-field cleaning has completed." clean]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Execute the empty hook body, performing no additional validation or side effects. RESULT no_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates unique and date constraints on the model, merges date-related errors into the general error dictionary, and raises ValidationError when any errors exist." validate_unique]
+    [INPUTS]
+        <REF> exclude </REF>: Optional[Iterable[str]] "An optional iterable of field names to exclude from unique and date checks; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._get_unique_checks with exclude, unpacking the returned tuple into unique_checks and date_checks. RESULT unique_checks, date_checks]
+            [COMMAND Call self._perform_unique_checks on unique_checks to compute the errors dictionary. RESULT errors]
+            [COMMAND Call self._perform_date_checks on date_checks to compute the date_errors dictionary. RESULT date_errors]
+            [COMMAND For each key k and value v in date_errors.items(), merge v into errors by calling errors.setdefault(k, []).extend(v). RESULT errors]
+            [COMMAND Evaluate whether errors is truthy after merging all date error entries. RESULT condition_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: errors is falsy after merging all date error entries]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Reach the end of the method normally and return None implicitly without raising an exception. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: errors is truthy after merging all date error entries]
+        [LOG "ValidationError raised because one or more unique or date validation checks failed."]
+        [THROW ValidationError "Raised with the collected errors dictionary mapping field names to lists of error messages when any unique or date validation checks fail."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects unique-together, unique constraint, and unique-for-date/year/month checks for the model and its parent classes while excluding any field names present in the exclude argument." _get_unique_checks]
+    [INPUTS]
+        <REF> self </REF>: object "Model instance whose _meta metadata is inspected."
+        <REF> exclude </REF>: Optional[list or set of strings] "Field names to exclude from unique and date uniqueness checks; when None it is replaced with an empty list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple (unique_checks, date_checks) where unique_checks contains (model_class, tuple(field_names)) entries and date_checks contains (model_class, 'date'|'year'|'month', field_name, referenced_field_name) entries."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If exclude is None, set exclude to an empty list; otherwise use the provided exclude collection. RESULT exclude]
+            [COMMAND Initialize unique_checks as an empty list. RESULT unique_checks]
+            [COMMAND Initialize unique_togethers as a list containing the tuple (self.__class__, self._meta.unique_together). RESULT unique_togethers]
+            [COMMAND Initialize constraints as a list containing the tuple (self.__class__, self._meta.total_unique_constraints). RESULT constraints]
+            [COMMAND For each parent_class returned by self._meta.get_parent_list(), in the same iteration append (parent_class, parent_class._meta.unique_together) to unique_togethers if parent_class._meta.unique_together is truthy, and append (parent_class, parent_class._meta.total_unique_constraints) to constraints if parent_class._meta.total_unique_constraints is truthy. RESULT unique_togethers, constraints]
+            [COMMAND For each (model_class, unique_together) pair in unique_togethers, and for each check in unique_together, if no field name in check is present in exclude using a short-circuited any(...) search, append (model_class, tuple(check)) to unique_checks. RESULT unique_checks]
+            [COMMAND For each (model_class, model_constraints) pair in constraints, and for each constraint in model_constraints, if no field name in constraint.fields is present in exclude using a short-circuited any(...) search, append (model_class, constraint.fields) to unique_checks. RESULT unique_checks]
+            [COMMAND Initialize date_checks as an empty list. RESULT date_checks]
+            [COMMAND Initialize fields_with_class as a list containing the tuple (self.__class__, self._meta.local_fields). RESULT fields_with_class]
+            [COMMAND For each parent_class returned by self._meta.get_parent_list(), append (parent_class, parent_class._meta.local_fields) to fields_with_class. RESULT fields_with_class]
+            [COMMAND For each (model_class, fields) pair in fields_with_class, and for each field f in fields, assign name = f.name. If name is in exclude, continue to the next field. If f.unique is truthy, append (model_class, (name,)) to unique_checks. If f.unique_for_date is truthy and f.unique_for_date is not in exclude, append (model_class, 'date', name, f.unique_for_date) to date_checks. If f.unique_for_year is truthy and f.unique_for_year is not in exclude, append (model_class, 'year', name, f.unique_for_year) to date_checks. If f.unique_for_month is truthy and f.unique_for_month is not in exclude, append (model_class, 'month', name, f.unique_for_month) to date_checks. RESULT unique_checks, date_checks]
+            [COMMAND Return the pair (unique_checks, date_checks). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates the current model instance against all supplied unique constraints by querying the default manager for conflicting rows and collecting unique-error messages keyed by field name or NON_FIELD_ERRORS." _perform_unique_checks]
+    [INPUTS]
+        <REF> self </REF>: Model instance "The model instance being validated; provides field values, model metadata, state, and unique error messages."
+        <REF> unique_checks </REF>: iterable of (model_class, list of field_name strings) "Each tuple contains a model class and a list of field names that together define a unique constraint to check."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: dict "Maps a field name or NON_FIELD_ERRORS to a list of unique constraint error messages; empty when no conflicts are found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors as an empty dictionary to collect unique validation errors. RESULT errors]
+            [COMMAND Iterate over unique_checks; for each tuple (model_class, unique_check), process the unique constraint. RESULT model_class, unique_check]
+            [COMMAND For the current unique constraint, initialize lookup_kwargs as an empty dictionary. RESULT lookup_kwargs]
+            [COMMAND Iterate over each field_name in unique_check. RESULT field_name]
+            [COMMAND Inside the inner field loop, resolve f = self._meta.get_field(field_name) and lookup_value = getattr(self, f.attname). RESULT f, lookup_value]
+            [COMMAND Inside the inner field loop, if lookup_value is None, or lookup_value is an empty string and connection.features.interprets_empty_strings_as_nulls is true, skip this field by continuing to the next field_name. RESULT none]
+            [COMMAND Inside the inner field loop, if f.primary_key is true and self._state.adding is false, skip this field by continuing to the next field_name. RESULT none]
+            [COMMAND Inside the inner field loop, if neither skip condition applies, store lookup_kwargs[str(field_name)] = lookup_value. RESULT lookup_kwargs]
+            [COMMAND Inside the outer loop, after the inner field loop completes, if len(unique_check) is not equal to len(lookup_kwargs), skip this unique constraint by continuing to the next outer iteration. RESULT none]
+            [COMMAND Inside the outer loop, build qs = model_class._default_manager.filter(**lookup_kwargs). RESULT qs]
+            [COMMAND Inside the outer loop, get model_class_pk = self._get_pk_val(model_class._meta). RESULT model_class_pk]
+            [COMMAND Inside the outer loop, if self._state.adding is false and model_class_pk is not None, exclude pk=model_class_pk by reassigning qs = qs.exclude(pk=model_class_pk). RESULT qs]
+            [COMMAND Inside the outer loop, determine whether qs.exists() is true. RESULT conflict_exists]
+            [COMMAND Inside the outer loop, if conflict_exists is false, do not record an error for this unique constraint. RESULT none]
+            [COMMAND Inside the outer loop, if conflict_exists is true, choose the error key: if len(unique_check) == 1 use key = unique_check[0]; otherwise use key = NON_FIELD_ERRORS. RESULT key]
+            [COMMAND Inside the outer loop, if conflict_exists is true, append self.unique_error_message(model_class, unique_check) to errors.setdefault(key, []). RESULT errors]
+            [COMMAND After all unique constraints have been processed, return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Loops through configured date-related uniqueness checks, uses Django querysets to detect conflicting existing records, and returns a dictionary of validation errors keyed by field." _perform_date_checks]
+    [INPUTS]
+        <REF> self </REF>: object "Model instance being validated; its date fields, pk, and _state.adding flag are used for the uniqueness queries."
+        <REF> date_checks </REF>: iterable of tuples "Iterable of tuples (model_class, lookup_type, field, unique_for) describing each date uniqueness check to perform."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: dict "Dictionary mapping each checked field to a list of date error messages produced by conflicts."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors as an empty dictionary. RESULT errors]
+            [COMMAND For each tuple (model_class, lookup_type, field, unique_for) in date_checks, process that date check. RESULT current_date_check]
+            [COMMAND Within the loop, initialize lookup_kwargs as an empty dictionary. RESULT lookup_kwargs]
+            [COMMAND Within the loop, get date = getattr(self, unique_for) from the current instance. RESULT date]
+            [COMMAND Within the loop, if date is None, continue to the next tuple in date_checks. RESULT continue_loop]
+            [COMMAND Within the loop, if lookup_type == 'date', set lookup_kwargs['<unique_for>__day'] = date.day. RESULT lookup_kwargs]
+            [COMMAND Within the loop, if lookup_type == 'date', set lookup_kwargs['<unique_for>__month'] = date.month. RESULT lookup_kwargs]
+            [COMMAND Within the loop, if lookup_type == 'date', set lookup_kwargs['<unique_for>__year'] = date.year. RESULT lookup_kwargs]
+            [COMMAND Within the loop, if lookup_type != 'date', set lookup_kwargs['<unique_for>__<lookup_type>'] = getattr(date, lookup_type). RESULT lookup_kwargs]
+            [COMMAND Within the loop, set lookup_kwargs[field] = getattr(self, field). RESULT lookup_kwargs]
+            [COMMAND Within the loop, build the queryset qs = model_class._default_manager.filter(**lookup_kwargs). RESULT qs]
+            [COMMAND Within the loop, if not self._state.adding and self.pk is not None, reassign qs = qs.exclude(pk=self.pk). RESULT qs]
+            [COMMAND Within the loop, if qs.exists(), append self.date_error_message(lookup_type, field, unique_for) to errors.setdefault(field, []). RESULT errors]
+            [COMMAND After the loop finishes, return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a ValidationError with contextual model, field, and date-field labels for a unique-for-date uniqueness failure." date_error_message]
+    [INPUTS]
+        <REF> self </REF>: Model instance "Model instance whose metadata and fields are used for error context."
+        <REF> lookup_type </REF>: str "Lookup type that caused the uniqueness constraint conflict."
+        <REF> field_name </REF>: str "Name of the field that must be unique for the date constraint."
+        <REF> unique_for </REF>: str "Name of the date field that participates in the uniqueness constraint."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ValidationError </REF>: ValidationError "Configured ValidationError instance for the unique_for_date violation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the model metadata object self._meta and bind it to opts. RESULT opts]
+            [COMMAND Resolve the field object for field_name from opts and bind it to field. RESULT field]
+            [COMMAND Resolve the date field object for unique_for from opts to obtain its verbose name. RESULT date_field]
+            [COMMAND Build the params dictionary with model, model_name from capfirst(opts.verbose_name), lookup_type, field, field_label from capfirst(field.verbose_name), date_field, and date_field_label from capfirst(opts.get_field(unique_for).verbose_name). RESULT params]
+            [COMMAND Construct and return a ValidationError instance using field.error_messages['unique_for_date'], code 'unique_for_date', and params. RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns the appropriate ValidationError for a model unique constraint violation, using a single-field unique message when unique_check contains one field and a unique_together message otherwise." unique_error_message]
+    [INPUTS]
+        <REF> self </REF>: object "The model instance for which the uniqueness error is generated."
+        <REF> model_class </REF>: type "The model class whose _meta options provide field verbose names."
+        <REF> unique_check </REF>: tuple/list "A sequence of field names defining the unique constraint; length selects the unique or unique_together error."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ValidationError </REF>: ValidationError "A ValidationError instance with code 'unique' for one field or code 'unique_together' for multiple fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign opts from model_class._meta. RESULT opts]
+            [COMMAND Build params dictionary with model set to self, model_class set to model_class, model_name set to capfirst(opts.verbose_name), and unique_check set to unique_check. RESULT params]
+            [COMMAND Evaluate whether len(unique_check) == 1 to select the single-field unique path or the multi-field unique_together path. RESULT is_single_unique]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When is_single_unique is true, indicating len(unique_check) == 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the unique field from opts using unique_check[0]. RESULT field]
+            [COMMAND Set params['field_label'] to capfirst(field.verbose_name). RESULT params]
+            [COMMAND Return a ValidationError with message field.error_messages['unique'], code 'unique', and params. RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When is_single_unique is false, indicating len(unique_check) != 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build field_labels by applying capfirst(opts.get_field(f).verbose_name) for each f in unique_check. RESULT field_labels]
+            [COMMAND Set params['field_labels'] to get_text_list(field_labels, _('and')). RESULT params]
+            [COMMAND Return a ValidationError with message _("%(model_name)s with this %(field_labels)s already exists."), code 'unique_together', and params. RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Runs clean_fields(), clean(), and optional validate_unique() on the model, accumulating any ValidationError messages and raising a single ValidationError if any validation errors occur." full_clean]
+    [INPUTS]
+        <REF> exclude </REF>: iterable or None "Optional field names to exclude from validation; None is replaced with an empty list, and any other iterable is copied into a list."
+        <REF> validate_unique </REF>: bool "Whether to run unique validation after field and model cleaning. Defaults to True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None implicitly when no validation errors are collected; otherwise raises ValidationError."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary named errors as the validation error accumulator. RESULT errors]
+            [COMMAND Normalize exclude: if exclude is None, set exclude = []; otherwise, set exclude = list(exclude) to create a shallow-copied list. RESULT exclude]
+            [COMMAND Call self.clean_fields(exclude=exclude). If it raises ValidationError as e, assign errors = e.update_error_dict(errors) to merge the field errors into errors. RESULT errors]
+            [COMMAND Call self.clean(). If it raises ValidationError as e, assign errors = e.update_error_dict(errors) to merge the model-level errors into errors. RESULT errors]
+            [COMMAND If validate_unique is truthy, iterate over each key name in errors and append name to exclude when name is not NON_FIELD_ERRORS and name is not already in exclude. RESULT exclude]
+            [COMMAND If validate_unique is truthy, after the exclusion-collection loop, call self.validate_unique(exclude=exclude). If it raises ValidationError as e, assign errors = e.update_error_dict(errors) to merge the unique-check errors into errors. RESULT errors]
+            [COMMAND Evaluate the final error guard: if errors is non-empty, the exception flow is taken; otherwise, the method exits with an implicit None return. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: validate_unique is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip collecting existing error names into exclude and skip calling self.validate_unique; continue to the final errors check. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: errors is empty after all validation processing]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip raising ValidationError and return None implicitly. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: errors is non-empty after clean_fields, clean, and optional unique validation]
+        [LOG "One or more validation errors were accumulated in the errors dictionary."]
+        [THROW ValidationError "Raised with the accumulated errors dictionary to report all validation failures."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Cleans and validates each model field, skipping excluded or blank-and-empty fields, collecting per-field validation errors, and raising ValidationError if any errors are found." clean_fields]
+    [INPUTS]
+        <REF> exclude </REF>: Optional[list] "Collection of field names to skip during validation, or None to skip no fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If exclude is None, set exclude to an empty list. RESULT exclude]
+            [COMMAND Initialize errors as an empty dictionary. RESULT errors]
+            [COMMAND For each field f in self._meta.fields, begin an iteration; if f.name is in exclude, skip the rest of the current iteration and continue to the next field. RESULT f]
+            [COMMAND Within the for loop over f, retrieve raw_value using getattr(self, f.attname). RESULT raw_value]
+            [COMMAND Within the for loop over f, if f.blank is truthy and raw_value is in f.empty_values, skip the rest of the current iteration and continue to the next field. RESULT iteration_status]
+            [COMMAND Within the for loop over f, call f.clean(raw_value, self) to obtain cleaned_value and assign it to the field with setattr(self, f.attname, cleaned_value). RESULT cleaned_value]
+            [COMMAND Within the for loop over f, if f.clean raises ValidationError as e, store e.error_list in errors[f.name] and continue the loop without re-raising that per-field error. RESULT errors]
+            [COMMAND After the for loop, if errors is non-empty, raise ValidationError(errors). RESULT ValidationError]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: After the for loop, errors is a non-empty dictionary.]
+        [LOG "Validation failed for one or more fields; the errors dictionary contains each failing field name mapped to its error_list."]
+        [THROW ValidationError "Raised with the collected errors dictionary to report all field validation errors together."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a Django model by accumulating results from the applicable model check methods into a list, skipping the main validation block for swapped models, and returning the collected errors." check]
+    [INPUTS]
+        <REF> cls </REF>: class "Django model class on which the check is invoked."
+        <REF> kwargs </REF>: dict "Keyword arguments passed to validation helpers; may include 'databases'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "List of validation errors accumulated from all executed model checks."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate cls._check_swappable(), cls._check_model(), and cls._check_managers(**kwargs) in that order, unpacking their returned iterables into a new list assigned to errors. RESULT errors]
+            [COMMAND When cls._meta.swapped is falsy, inside the validation block assign databases to kwargs.get('databases') if it is truthy, otherwise assign databases to []. RESULT databases]
+            [COMMAND When cls._meta.swapped is falsy, inside the validation block evaluate cls._check_fields(**kwargs), cls._check_m2m_through_same_relationship(), and cls._check_long_column_names(databases) in that order and extend errors with their unpacked elements. RESULT errors]
+            [COMMAND When cls._meta.swapped is falsy, inside the validation block build clash_errors as a tuple by evaluating cls._check_id_field(), cls._check_field_name_clashes(), cls._check_model_name_db_lookup_clashes(), cls._check_property_name_related_field_accessor_clashes(), and cls._check_single_primary_key() in that order and unpacking their returned iterables. RESULT clash_errors]
+            [COMMAND When cls._meta.swapped is falsy, inside the validation block extend errors with all elements of clash_errors. RESULT errors]
+            [COMMAND When cls._meta.swapped is falsy and clash_errors is empty, inside the validation block evaluate cls._check_column_name_clashes() and extend errors with its elements; when clash_errors is not empty, skip this extension to avoid consequent column-name clash reports. RESULT errors]
+            [COMMAND When cls._meta.swapped is falsy, inside the validation block evaluate cls._check_index_together(), cls._check_unique_together(), cls._check_indexes(databases), cls._check_ordering(), and cls._check_constraints(databases) in that order and extend errors with their unpacked elements. RESULT errors]
+            [COMMAND Return the accumulated errors list. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: cls._meta.swapped is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the model validation block and return errors as initially constructed from cls._check_swappable(), cls._check_model(), and cls._check_managers(**kwargs). RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a model's swapped reference can be resolved, appending Django system check errors E001 or E002 when the swapped reference is malformed or uninstalled." _check_swappable]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "A Django model class whose _meta.swapped and _meta.swappable attributes are validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of django.core.checks.Error "A list of Django system check errors. It is empty when cls._meta.swapped is falsy or the reference resolves successfully; otherwise it contains one error with id 'models.E001' or 'models.E002'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named errors to collect validation errors. RESULT errors]
+            [COMMAND If cls._meta.swapped is truthy, execute the try block and attempt to resolve the model by calling apps.get_model(cls._meta.swapped). If cls._meta.swapped is falsy, skip the try block and continue with the existing errors list. If the call succeeds, leave errors unchanged. RESULT model_lookup]
+            [COMMAND Return the errors list. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: apps.get_model(cls._meta.swapped) raises ValueError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append a django.core.checks.Error to errors with message "'%s' is not of the form 'app_label.app_name'." formatted with cls._meta.swappable and id 'models.E001'. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: apps.get_model(cls._meta.swapped) raises LookupError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split cls._meta.swapped on '.' into app_label and model_name. RESULT app_label, model_name]
+            [COMMAND Append a django.core.checks.Error to errors with message "'%s' references '%s.%s', which has not been installed, or is abstract." formatted with cls._meta.swappable, app_label, model_name and id 'models.E002'. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Verifies that Django proxy models do not declare local concrete fields or local many-to-many fields, collecting a models.E017 system check error when they do." _check_model]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "The model class to check for invalid proxy model field declarations."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "A list of Django check errors; contains one checks.Error with id models.E017 if the proxy model defines local fields or local many-to-many fields, otherwise empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors as an empty list. RESULT errors]
+            [COMMAND Evaluate cls._meta.proxy; if it is false, skip the proxy model field check. RESULT is_proxy]
+            [COMMAND Within the outer condition where cls._meta.proxy is true, evaluate cls._meta.local_fields or cls._meta.local_many_to_many using short-circuit logic. RESULT has_local_fields]
+            [COMMAND Within the outer proxy condition and the inner condition where local fields or local many-to-many fields are present, append a new checks.Error instance to errors, using the message "Proxy model '%s' contains model fields." formatted with cls.__name__ and the id 'models.E017'. RESULT errors]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects and returns all errors produced by checking every manager configured on the model class." _check_managers]
+    [INPUTS]
+        <REF> cls </REF>: class "The model class whose manager checks are being performed."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded unchanged to each manager's check method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "Accumulated list of errors returned by all manager checks."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors to an empty list. RESULT errors]
+            [COMMAND For each manager in cls._meta.managers, call manager.check(**kwargs) and extend errors with the iterable returned by that call. RESULT errors]
+            [COMMAND Return the accumulated errors list. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks all local fields and local many-to-many fields of a model class and returns the accumulated validation errors." _check_fields]
+    [INPUTS]
+        <REF> cls </REF>: class "Model class whose metadata provides local fields and local many-to-many fields."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to each field's check method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "Aggregated list of validation errors from the checked fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named errors. RESULT errors]
+            [COMMAND For each field in cls._meta.local_fields, call field.check(**kwargs) and extend errors with the returned list. RESULT errors]
+            [COMMAND For each field in cls._meta.local_many_to_many, call field.check(from_model=cls, **kwargs) and extend errors with the returned list. RESULT errors]
+            [COMMAND Return the accumulated errors list. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether any intermediate model is reused by more than one many-to-many field on the given model and returns a list of Django system check errors for duplicate relations." _check_m2m_through_same_relationship]
+    [INPUTS]
+        <REF> cls </REF>: ModelBase subclass "The model class whose local many-to-many fields are checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of checks.Error "List of Django system check errors; each duplicate many-to-many relation produces an error with id models.E003."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors to an empty list. RESULT errors]
+            [COMMAND Initialize seen_intermediary_signatures to an empty list. RESULT seen_intermediary_signatures]
+            [COMMAND Assign cls._meta.local_many_to_many to fields as the starting collection of local many-to-many fields. RESULT fields]
+            [COMMAND Rebind fields to a lazy generator expression keeping only f where isinstance(f.remote_field.model, ModelBase). RESULT fields]
+            [COMMAND Rebind fields to another lazy generator expression keeping only f where isinstance(f.remote_field.through, ModelBase). RESULT fields]
+            [COMMAND For each f in the final lazy generator fields, construct signature = (f.remote_field.model, cls, f.remote_field.through, f.remote_field.through_fields). RESULT signature]
+            [COMMAND Within the for loop over each f, if signature is already in seen_intermediary_signatures, append a checks.Error to errors with message "The model has two identical many-to-many relations through the intermediate model '%s'." % f.remote_field.through._meta.label, obj=cls, and id='models.E003'. RESULT errors]
+            [COMMAND Within the for loop over each f, otherwise in the else branch of the same condition, append signature to seen_intermediary_signatures. RESULT seen_intermediary_signatures]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a model field named 'id' is the primary key when the model's primary key is also named 'id', returning a Django system check error otherwise." _check_id_field]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "The Django model class whose local fields are inspected for a non-primary-key field named 'id'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list of checks.Error "A list containing one checks.Error with id 'models.E004' if the invalid 'id' field exists; otherwise an empty list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Collect every field f from cls._meta.local_fields where f.name == 'id' and f != cls._meta.pk into a new list called fields. RESULT fields]
+            [COMMAND Evaluate the condition `fields and not fields[0].primary_key and cls._meta.pk.name == 'id'` using short-circuit and evaluation, and store the boolean result. RESULT invalid_id_field]
+            [COMMAND If invalid_id_field is true, execute the invalid-id-field error alternative flow; otherwise return an empty list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: invalid_id_field is true, meaning fields is non-empty, the first field is not the primary key, and the model primary key is named 'id'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing one checks.Error with the message "'id' can only be used as a field name if the field also sets 'primary_key=True'.", with obj set to cls and id set to 'models.E004'. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks a Django model class for field name or attribute name clashes introduced by multi-table inheritance and local fields, returning E005/E006 validation errors while ignoring the automatic vs explicit id conflict." _check_field_name_clashes]
+    [INPUTS]
+        <REF> cls </REF>: model class "The Django model class whose _meta metadata is inspected for parent and local fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "A list of django.checks.Error objects for each detected field name or attribute name clash; empty if no clashes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors as an empty list. RESULT errors]
+            [COMMAND Initialize used_fields as an empty dictionary. RESULT used_fields]
+            [COMMAND Within the outer loop over each parent in cls._meta.get_parent_list() and the inner loop over each local field f in parent._meta.local_fields, set clash to the first truthy value among used_fields.get(f.name), used_fields.get(f.attname), and None. RESULT clash]
+            [COMMAND Within the outer loop over parent in cls._meta.get_parent_list() and the inner loop over f in parent._meta.local_fields, if clash is truthy, append to errors a checks.Error with message "The field '%s' from parent model '%s' clashes with the field '%s' from parent model '%s'." formatted with clash.name, clash.model._meta, f.name, f.model._meta, and with obj=cls and id='models.E005'. RESULT errors]
+            [COMMAND Within the outer loop over parent in cls._meta.get_parent_list() and the inner loop over f in parent._meta.local_fields, after the clash check for f, set used_fields[f.name] = f and used_fields[f.attname] = f. RESULT used_fields]
+            [COMMAND Within the outer loop over each parent in cls._meta.get_parent_list() and the inner loop over each field f in parent._meta.get_fields(), if the field object f is not already a key in used_fields, set used_fields[f.name] = f. RESULT used_fields]
+            [COMMAND Within the loop over each local field f in cls._meta.local_fields, set clash to the first truthy value among used_fields.get(f.name), used_fields.get(f.attname), and None. RESULT clash]
+            [COMMAND Within the loop over f in cls._meta.local_fields, set id_conflict by evaluating, with short-circuiting, f.name == "id" and clash and clash.name == "id" and clash.model == cls. RESULT id_conflict]
+            [COMMAND Within the loop over f in cls._meta.local_fields, if clash is truthy and id_conflict is false, append to errors a checks.Error with message "The field '%s' clashes with the field '%s' from model '%s'." formatted with f.name, clash.name, clash.model._meta, and with obj=f and id='models.E006'. RESULT errors]
+            [COMMAND Within the loop over f in cls._meta.local_fields, after the clash check for f, set used_fields[f.name] = f and used_fields[f.attname] = f. RESULT used_fields]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks a Django model's local fields for duplicate column names and returns a list of models.E007 check errors for each column name already used by another field." _check_column_name_clashes]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "The model class whose local fields are checked for duplicate database column names."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of django.core.checks.Error "The list of check errors; contains one models.E007 error for each duplicate column name found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize used_column_names to an empty list. RESULT used_column_names]
+            [COMMAND Initialize errors to an empty list. RESULT errors]
+            [COMMAND For each field f in cls._meta.local_fields, unpack f.get_attname_column() into _ (ignored attribute name) and column_name. RESULT column_name]
+            [COMMAND Within the loop over f, if column_name is truthy and column_name is in used_column_names (due to short-circuit evaluation, the membership check is skipped when column_name is falsy), append a checks.Error with message "Field '%s' has column name '%s' that is used by another field." % (f.name, column_name), hint="Specify a 'db_column' for the field.", obj=cls, id='models.E007' to errors. RESULT errors]
+            [COMMAND Within the same loop over f, otherwise (if column_name is falsy or column_name is not in used_column_names), append column_name to used_column_names, including a falsy column_name if that is the value produced by get_attname_column(). RESULT used_column_names]
+            [COMMAND After processing all local fields (possibly zero fields), return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that a class name does not begin or end with an underscore and does not contain the lookup separator, returning checks errors for any violations." _check_model_name_db_lookup_clashes]
+    [INPUTS]
+        <REF> cls </REF>: type "Django model class whose __name__ attribute is validated for query lookup collisions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "List of checks.Error objects; empty list when the model name is valid."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named errors to accumulate validation errors. RESULT errors]
+            [COMMAND Read the class name from cls.__name__ and store it in model_name. RESULT model_name]
+            [COMMAND If model_name starts with an underscore or ends with an underscore, append to errors a checks.Error with message "The model name '%s' cannot start or end with an underscore as it collides with the query lookup syntax." formatted with model_name, obj=cls, and id='models.E023'. RESULT errors]
+            [COMMAND Else if model_name contains LOOKUP_SEP, append to errors a checks.Error with message "The model name '%s' cannot contain double underscores as it collides with the query lookup syntax." formatted with model_name, obj=cls, and id='models.E024'. RESULT errors]
+            [COMMAND Return the errors list. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks a Django model class for properties whose names clash with related-field accessors and returns a list of validation errors." _check_property_name_related_field_accessor_clashes]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "The model class whose _meta metadata is inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of django.core.checks.Error "A list of validation errors, one for each property name that clashes with a related-field accessor."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors as an empty list. RESULT errors]
+            [COMMAND Read property_names from cls._meta._property_names. RESULT property_names]
+            [COMMAND Create related_field_accessors as a lazy generator that iterates over cls._meta._get_fields(reverse=False), keeps only fields where f.is_relation is truthy and f.related_model is not None, and yields f.get_attname() for each kept field. RESULT related_field_accessors]
+            [COMMAND For each accessor in related_field_accessors, consume the generator and expose each yielded accessor name as the loop variable. RESULT accessor]
+            [COMMAND Inside the for loop over related_field_accessors, if the current accessor is present in property_names, append a new checks.Error with message "The property '%s' clashes with a related field accessor." % accessor, obj=cls, and id='models.E025' to errors. RESULT errors]
+            [COMMAND After all accessors have been processed, return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a Django model defines more than one local primary-key field and, if so, appends a models.E026 validation error to the returned error list." _check_single_primary_key]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "Django model class whose local fields are inspected for primary-key definitions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "List of Django checks.Error objects; contains one models.E026 error if multiple local primary-key fields are found, otherwise is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named errors. RESULT errors]
+            [COMMAND Count the model's local primary-key fields by iterating over cls._meta.local_fields and summing 1 for each field f for which f.primary_key is true. RESULT primary_key_count]
+            [COMMAND If primary_key_count is greater than 1, append a checks.Error instance to errors with message "The model cannot have more than one field with 'primary_key=True'.", obj=cls, and id='models.E026'; otherwise leave errors unchanged. RESULT errors]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates the structure of a model's index_together meta option, returning a single Django system check error for an invalid outer or inner element type, and otherwise returning all local field errors collected from each valid field grouping." _check_index_together]
+    [INPUTS]
+        <REF> cls </REF>: Model class object "The model class whose _meta.index_together option is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of checks.Error "A list containing either one structural validation error or the accumulated field errors from every valid tuple/list inside index_together."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether cls._meta.index_together is an instance of tuple or list. RESULT outer_type_valid]
+            [COMMAND If outer_type_valid is false, use the first alternative flow to return the early error. RESULT early_return_e008]
+            [COMMAND If outer_type_valid is true, check whether every element in cls._meta.index_together is an instance of tuple or list, inspecting elements in order and stopping at the first invalid element. RESULT all_elements_valid]
+            [COMMAND If all_elements_valid is false, use the second alternative flow to return the early error. RESULT early_return_e009]
+            [COMMAND After both validation checks pass, initialize an empty list named errors. RESULT errors]
+            [COMMAND For each fields element in cls._meta.index_together, call cls._check_local_fields(fields, "index_together") and extend the errors list with the returned result. RESULT errors]
+            [COMMAND Return the accumulated errors list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: cls._meta.index_together is not an instance of tuple or list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error("'index_together' must be a list or tuple.", obj=cls, id='models.E008'). RESULT early_return_e008]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: cls._meta.index_together is an instance of tuple or list, but at least one of its elements is not an instance of tuple or list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error("All 'index_together' elements must be lists or tuples.", obj=cls, id='models.E009'). RESULT early_return_e009]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks the unique_together model option by ensuring it is a tuple or list of tuples or lists and, for structurally valid values, validating each field grouping through _check_local_fields." _check_unique_together]
+    [INPUTS]
+        <REF> cls </REF>: Class "Model class whose _meta.unique_together option is being checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: List[checks.Error] "A list of validation errors: one checks.Error with id models.E010 if unique_together is not a tuple/list, one checks.Error with id models.E011 if an element is not a tuple/list, or the accumulated field-level errors (possibly empty) when the structure is valid."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the first guard: if cls._meta.unique_together is not an instance of tuple or list, take the alternative flow that returns models.E010 and skip all further validation. RESULT type_guard_checked]
+            [COMMAND After the first guard passes, use a short-circuiting any() check to evaluate whether at least one element in cls._meta.unique_together is not an instance of tuple or list; if so, take the alternative flow that returns models.E011 and skip all further validation. RESULT element_guard_checked]
+            [COMMAND If both structural guards pass, initialize an empty errors list. RESULT errors_initialized]
+            [COMMAND Loop over each fields element in cls._meta.unique_together, call cls._check_local_fields(fields, "unique_together"), and extend errors with the returned list. RESULT errors_collected]
+            [COMMAND Return the accumulated errors list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: cls._meta.unique_together is not an instance of tuple or list.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error with message "'unique_together' must be a list or tuple.", obj=cls, and id='models.E010'. RESULT early_error_E010]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Before the loop, cls._meta.unique_together is an instance of tuple or list, but at least one element in it is not an instance of tuple or list.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error with message "All 'unique_together' elements must be lists or tuples.", obj=cls, and id='models.E011'. RESULT early_error_E011]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks Django model indexes for invalid or overly long names, warns for database backends that do not support partial index conditions, and validates that all index-referenced fields exist." _check_indexes]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "Model class whose _meta.indexes and _meta.required_db_features are inspected."
+        <REF> databases </REF>: iterable of database aliases "Database aliases used to check migration permissions and partial index support."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "Accumulated Django system check Error and Warning objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named errors. RESULT errors]
+            [COMMAND For each index in cls._meta.indexes, check the first character of index.name. If index.name[0] is '_' or is a digit, append a checks.Error with message The index name '%s' cannot start with an underscore or a number. formatted with index.name, obj=cls, and id='models.E033' to errors. RESULT errors]
+            [COMMAND Still within the loop over cls._meta.indexes, if len(index.name) is greater than index.max_name_length, append a checks.Error with message The index name '%s' cannot be longer than %d characters. formatted with index.name and index.max_name_length, obj=cls, and id='models.E034' to errors. RESULT errors]
+            [COMMAND For each db in databases, if router.allow_migrate_model(db, cls) is false, continue to the next database. RESULT db]
+            [COMMAND Within the remaining db loop, set connection to connections[db]. RESULT connection]
+            [COMMAND Within the same db loop, if connection.features.supports_partial_indexes is true or 'supports_partial_indexes' is in cls._meta.required_db_features (short-circuit OR), continue to the next database. RESULT db]
+            [COMMAND Within the same db loop, after passing those guard conditions, if any index in cls._meta.indexes has a condition that is not None, append a checks.Warning with message %s does not support indexes with conditions. formatted with connection.display_name, hint Conditions will be ignored. Silence this warning if you don't care about it., obj=cls, and id='models.W037' to errors. RESULT errors]
+            [COMMAND Set fields to a flat list of field values from every (field, _) pair in index.fields_orders for each index in cls._meta.indexes. RESULT fields]
+            [COMMAND Extend errors with the result returned by cls._check_local_fields(fields, 'indexes'). RESULT errors]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates the supplied field names against a Django model's forward fields and returns system check errors for nonexistent fields, reverse ManyToMany fields, and fields not local to the model." _check_local_fields]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "Model class whose metadata is inspected."
+        <REF> fields </REF>: list of strings "Field names to validate."
+        <REF> option </REF>: string "Name of the option being checked; used in error messages."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of django.core.checks.Error "Accumulated validation errors; empty when all field names are valid."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import django.db.models as models to access models.ManyToManyRel. RESULT models]
+            [COMMAND Initialize forward_fields_map as an empty dictionary. RESULT forward_fields_map]
+            [COMMAND For each field returned by cls._meta._get_fields(reverse=False), store field in forward_fields_map keyed by field.name; if field has an attname attribute, also store it keyed by field.attname. RESULT forward_fields_map]
+            [COMMAND Initialize errors as an empty list. RESULT errors]
+            [COMMAND For each field_name in fields, attempt to get field from forward_fields_map using field_name. RESULT field]
+            [COMMAND On a successful lookup, if field.remote_field is an instance of models.ManyToManyRel, append a checks.Error with id 'models.E013' reporting that option refers to a ManyToManyField field_name but ManyToManyFields are not permitted in option, with obj=cls. RESULT errors]
+            [COMMAND On a successful lookup, in the elif branch after the ManyToManyRel check is false, if field is not in cls._meta.local_fields, append a checks.Error with id 'models.E016' reporting that option refers to field field_name which is not local to model cls._meta.object_name, hint 'This issue may be caused by multi-table inheritance.', and obj=cls. RESULT errors]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When the lookup forward_fields_map[field_name] raises KeyError for the current field_name in the loop]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append a checks.Error with id 'models.E012' reporting that option refers to the nonexistent field field_name, with obj=cls. RESULT errors]
+            [COMMAND Continue to the next field_name in the outer for loop without executing the successful-lookup validation block. RESULT field_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a Django model's Meta.ordering option and returns a list of Django system check errors when ordering conflicts with order_with_respect_to, has the wrong type, or references missing fields, related fields, or lookups; otherwise returns an empty list." _check_ordering]
+    [INPUTS]
+        <REF> cls </REF>: model class "The Django model class whose Meta.ordering option is being checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of checks.Error "List of Django system check errors; empty when ordering is valid or no check is required."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If cls._meta._ordering_clash is truthy, return a list containing one checks.Error with message "'ordering' and 'order_with_respect_to' cannot be used together.", obj=cls, and id='models.E021'. RESULT ordering_clash_error]
+            [COMMAND If cls._meta.order_with_respect_to is truthy, or only if that is false, cls._meta.ordering is falsy, return an empty list. RESULT empty_error_list]
+            [COMMAND If cls._meta.ordering is not a list or tuple, return a list containing one checks.Error with message "'ordering' must be a tuple or list (even if you want to order by only one field).", obj=cls, and id='models.E014'. RESULT invalid_ordering_type_error]
+            [COMMAND Initialize errors as an empty list. RESULT errors]
+            [COMMAND Set fields to cls._meta.ordering. RESULT fields]
+            [COMMAND Reassign fields to a lazy generator that yields only string elements f from the previous fields where f != '?'. RESULT fields]
+            [COMMAND Reassign fields to a lazy generator that transforms each f from the previous generator to f[1:] if f.startswith('-') else f. RESULT fields]
+            [COMMAND Initialize _fields as an empty list. RESULT _fields]
+            [COMMAND Initialize related_fields as an empty list. RESULT related_fields]
+            [COMMAND For each f in fields, if LOOKUP_SEP occurs anywhere in f, append f to related_fields; otherwise append f to _fields. RESULT partitioned_fields]
+            [COMMAND Set fields to _fields. RESULT fields]
+            [COMMAND For each field in related_fields, reset _cls = cls and fld = None; for each part in field.split(LOOKUP_SEP), try: if part == 'pk', set fld to _cls._meta.pk, else set fld to _cls._meta.get_field(part); if fld.is_relation is true, set _cls to fld.get_path_info()[-1].to_opts.model, otherwise set _cls to None. RESULT resolved_related_path]
+            [COMMAND In the except block of the related-field traversal, catching FieldDoesNotExist and AttributeError, if fld is None or fld.get_transform(part) is None, append a checks.Error with message "'ordering' refers to the nonexistent field, related field, or lookup '%s'." % field, obj=cls, and id='models.E015' to errors. RESULT errors]
+            [COMMAND Reassign fields to a set containing only f from the previous fields where f != 'pk'. RESULT fields]
+            [COMMAND Initialize invalid_fields as an empty list. RESULT invalid_fields]
+            [COMMAND Set opts to cls._meta. RESULT opts]
+            [COMMAND Build valid_fields as set(chain.from_iterable((f.name, f.attname) if not (f.auto_created and not f.concrete) else (f.field.related_query_name(),) for f in chain(opts.fields, opts.related_objects))). RESULT valid_fields]
+            [COMMAND Extend invalid_fields with fields - valid_fields. RESULT invalid_fields]
+            [COMMAND For each invalid_field in invalid_fields, append a checks.Error with message "'ordering' refers to the nonexistent field, related field, or lookup '%s'." % invalid_field, obj=cls, and id='models.E015' to errors. RESULT errors]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether auto-generated database column names for local fields and many-to-many through-model fields exceed the smallest maximum name length among all databases where the model will be created, returning Django system check errors with IDs models.E018 and models.E019 for violations." _check_long_column_names]
+    [INPUTS]
+        <REF> cls </REF>: Django model class "The model class whose local fields and local many-to-many fields are inspected for overlong auto-generated column names."
+        <REF> databases </REF>: iterable of database aliases "Database aliases to consider when determining the most restrictive maximum name length."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of django.core.checks.Error "Collected Django system check errors for every auto-generated column name that exceeds the applicable maximum length."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors to a new empty list, and set allowed_len and db_alias to None. RESULT errors, allowed_len, db_alias]
+            [COMMAND For each database db in databases, first check if router.allow_migrate_model(db, cls) is false; if so, skip that database and continue with the next one. Otherwise get connection = connections[db] and max_name_length = connection.ops.max_name_length(). RESULT connection, max_name_length]
+            [COMMAND Within the same database loop, if max_name_length is None or connection.features.truncates_names is true, skip to the next database; otherwise continue to the selection logic. RESULT continue_or_proceed]
+            [COMMAND Within that selection logic, if allowed_len is None, set allowed_len = max_name_length and db_alias = db; otherwise, if max_name_length < allowed_len, update allowed_len = max_name_length and db_alias = db to keep the most restrictive limit. RESULT allowed_len, db_alias]
+            [COMMAND After the database loop, if allowed_len is not None, proceed using the selected db_alias and allowed_len as the applicable database and maximum name length. RESULT allowed_len, db_alias]
+            [COMMAND For each local field f in cls._meta.local_fields, call f.get_attname_column() and unpack the returned pair as the ignored attribute name and column_name. RESULT column_name]
+            [COMMAND For each such local field f, if f.db_column is None and column_name is not None and len(column_name) > allowed_len, append to errors a checks.Error with message 'Autogenerated column name too long for field "%s". Maximum length is "%s" for database "%s".' % (column_name, allowed_len, db_alias), hint 'Set the column name manually using "db_column".', obj=cls, and id='models.E018'. RESULT errors]
+            [COMMAND For each local many-to-many field f in cls._meta.local_many_to_many, if f.remote_field.through is a string, skip this field and continue with the next M2M field. RESULT next_m2m_field]
+            [COMMAND For each eligible local many-to-many field f, iterate over m2m in f.remote_field.through._meta.local_fields, call m2m.get_attname_column() and unpack the returned pair as the ignored attribute name and rel_name. RESULT rel_name]
+            [COMMAND For each such m2m field, if m2m.db_column is None and rel_name is not None and len(rel_name) > allowed_len, append to errors a checks.Error with message 'Autogenerated column name too long for M2M field "%s". Maximum length is "%s" for database "%s".' % (rel_name, allowed_len, db_alias), hint 'Use "through" to create a separate model for M2M and then set column_name using "db_column".', obj=cls, and id='models.E019'. RESULT errors]
+            [COMMAND Return the accumulated errors list. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: databases is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately without performing any checks. RESULT []]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: allowed_len remains None after processing all databases, meaning no usable database maximum name length was found]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the current errors list unchanged. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects Django system check warnings for model constraints that are unsupported by each allowed database connection." _check_constraints]
+    [INPUTS]
+        <REF> cls </REF>: model class "The model class whose _meta.constraints and _meta.required_db_features are inspected."
+        <REF> databases </REF>: iterable of database aliases "Database aliases to check for constraint feature support."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list of checks.Warning "Accumulated warning objects for unsupported constraint features."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors as an empty list. RESULT errors]
+            [COMMAND For each db in databases, begin the loop body. RESULT db]
+            [COMMAND Within the loop over db, call router.allow_migrate_model(db, cls) and check whether it is falsy. RESULT allow_migration]
+            [COMMAND Within the loop over db, after the router guard passes, set connection to connections[db]. RESULT connection]
+            [COMMAND Within the loop over db, evaluate the W027 condition: not (connection.features.supports_table_check_constraints or 'supports_table_check_constraints' in cls._meta.required_db_features) and any(isinstance(constraint, CheckConstraint) for constraint in cls._meta.constraints). Due to short-circuiting, the any scan is evaluated only when the feature is unsupported and not required. RESULT w027_triggered]
+            [COMMAND Within the loop over db, if w027_triggered is true, append a checks.Warning with message '%s does not support check constraints.' % connection.display_name, hint A constraint won't be created. Silence this warning if you don't care about it., obj cls, and id 'models.W027' to errors. RESULT errors]
+            [COMMAND Within the loop over db, evaluate the W036 condition: not (connection.features.supports_partial_indexes or 'supports_partial_indexes' in cls._meta.required_db_features) and any(isinstance(constraint, UniqueConstraint) and constraint.condition is not None for constraint in cls._meta.constraints). Due to short-circuiting, the any scan is evaluated only when the feature is unsupported and not required. RESULT w036_triggered]
+            [COMMAND Within the loop over db, if w036_triggered is true, append a checks.Warning with message '%s does not support unique constraints with conditions.' % connection.display_name, hint A constraint won't be created. Silence this warning if you don't care about it., obj cls, and id 'models.W036' to errors. RESULT errors]
+            [COMMAND Within the loop over db, evaluate the W038 condition: not (connection.features.supports_deferrable_unique_constraints or 'supports_deferrable_unique_constraints' in cls._meta.required_db_features) and any(isinstance(constraint, UniqueConstraint) and constraint.deferrable is not None for constraint in cls._meta.constraints). Due to short-circuiting, the any scan is evaluated only when the feature is unsupported and not required. RESULT w038_triggered]
+            [COMMAND Within the loop over db, if w038_triggered is true, append a checks.Warning with message '%s does not support deferrable unique constraints.' % connection.display_name, hint A constraint won't be created. Silence this warning if you don't care about it., obj cls, and id 'models.W038' to errors. RESULT errors]
+            [COMMAND After all databases have been processed, return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: For the current db, router.allow_migrate_model(db, cls) returns a falsy value.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the remainder of the current loop iteration and move to the next database in databases. RESULT db]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: For the current db, w027_triggered is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not append the W027 warning; proceed to the W036 check for the same database. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: For the current db, w036_triggered is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not append the W036 warning; proceed to the W038 check for the same database. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: For the current db, w038_triggered is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not append the W038 warning; proceed to the next database, or return errors after the loop finishes. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Dynamically creates and returns a new exception subclass whose __qualname__ is prefixed with the attached class's qualified name so that it remains picklable when attached." subclass_exception]
+    [INPUTS]
+        <REF> name </REF>: str "The name of the new exception subclass and the final component of its __qualname__."
+        <REF> bases </REF>: tuple "The base classes for the new exception subclass."
+        <REF> module </REF>: str "The value to store as the new class's __module__ attribute."
+        <REF> attached_to </REF>: type "The class to which the returned exception class will be attached; its __qualname__ is used to build the new class's qualified name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> exception_subclass </REF>: type "The newly created exception subclass, intended to be attached as an attribute to attached_to for pickling."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute qualified_name by formatting attached_to.__qualname__ and name as '%s.%s'. RESULT qualified_name]
+            [COMMAND Build the class namespace dictionary with '__module__' set to module and '__qualname__' set to qualified_name. RESULT namespace]
+            [COMMAND Call type(name, bases, namespace) to dynamically create the exception subclass. RESULT exception_subclass]
+            [COMMAND Return exception_subclass as the result of the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a value is a non-class object that has a contribute_to_class attribute." _has_contribute_to_class]
+    [INPUTS]
+        <REF> value </REF>: object "The object to inspect; may be any Python value including a class."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if value is not a class and has a contribute_to_class attribute; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine whether value is a class by calling inspect.isclass(value). RESULT value_is_class]
+            [COMMAND If value_is_class is False, check whether value has an attribute named contribute_to_class by calling hasattr(value, 'contribute_to_class'). RESULT has_contribute_to_class]
+            [COMMAND Return has_contribute_to_class as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value_is_class is True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately without evaluating hasattr(value, 'contribute_to_class'). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Bulk-updates the _order field of ordered objects related to self so their order matches the provided primary key list, using the model's order_with_respect_to relationship and an optional database alias." method_set_order]
+    [INPUTS]
+        <REF> self </REF>: object "The model instance whose related ordered objects are reordered."
+        <REF> ordered_obj </REF>: Django Model class "The model class of the ordered objects; its _meta.order_with_respect_to supplies the relation field."
+        <REF> id_list </REF>: iterable of primary keys "The new ordering of primary keys; the index of each key becomes its _order value."
+        <REF> using </REF>: str or None "Database alias. If None, it resolves to DEFAULT_DB_ALIAS."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None; the method updates _order values in the database via bulk_update."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If using is None, assign using = DEFAULT_DB_ALIAS. RESULT using]
+            [COMMAND Read ordered_obj._meta.order_with_respect_to and assign it to order_wrt. RESULT order_wrt]
+            [COMMAND Call order_wrt.get_forward_related_filter(self) and assign the returned filter keyword argument dictionary to filter_args. RESULT filter_args]
+            [COMMAND Build the base queryset by calling ordered_obj.objects.db_manager(using).filter(**filter_args). RESULT ordered_queryset]
+            [COMMAND Create the ordered object list ordered_obj(pk=pk, _order=order) for order, pk in enumerate(id_list) with order starting at 0, then call ordered_queryset.bulk_update(..., ['_order']). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a flat queryset of primary keys for ordered objects filtered by the forward relation from self." method_get_order]
+    [INPUTS]
+        <REF> self </REF>: Django model instance "The related model instance passed to get_forward_related_filter() to build the filtering arguments."
+        <REF> ordered_obj </REF>: Django model instance "The model instance whose metadata supplies order_with_respect_to and the primary key field name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet "Flat QuerySet of primary key values from ordered_obj.objects filtered by the forward relation to self."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the order_with_respect_to field from ordered_obj._meta and assign it to order_wrt. RESULT order_wrt]
+            [COMMAND Generate the filter keyword arguments by calling order_wrt.get_forward_related_filter(self) and assign them to filter_args. RESULT filter_args]
+            [COMMAND Retrieve the primary key field name from ordered_obj._meta.pk and assign it to pk_name. RESULT pk_name]
+            [COMMAND Return the result of ordered_obj.objects.filter(**filter_args).values_list(pk_name, flat=True). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: ordered_obj._meta.order_with_respect_to is None]
+        [LOG "Cannot call get_forward_related_filter() on None because order_wrt is None."]
+        [THROW AttributeError "AttributeError: 'NoneType' object has no attribute 'get_forward_related_filter'"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Dynamically installs get_<model_name>_order and set_<model_name>_order methods onto related_model, using partialmethod to bind model as a pre-bound argument to method_get_order and method_set_order." make_foreign_order_accessors]
+    [INPUTS]
+        <REF> model </REF>: class "Model class whose lowercased __name__ is used to build the generated attribute names and which is pre-bound into the generated methods."
+        <REF> related_model </REF>: class "Model class on which the generated get_<model_name_lower>_order and set_<model_name_lower>_order methods are set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct getter_attribute_name by concatenating 'get_', model.__name__.lower(), and '_order'. RESULT getter_attribute_name]
+            [COMMAND Create getter_descriptor by evaluating partialmethod(method_get_order, model), so the installed getter later invokes method_get_order(instance, model, ...). RESULT getter_descriptor]
+            [COMMAND Install getter_descriptor onto related_model under getter_attribute_name using setattr, overwriting any existing attribute with that name. RESULT related_model]
+            [COMMAND Construct setter_attribute_name by concatenating 'set_', model.__name__.lower(), and '_order'. RESULT setter_attribute_name]
+            [COMMAND Create setter_descriptor by evaluating partialmethod(method_set_order, model), so the installed setter later invokes method_set_order(instance, model, ...). RESULT setter_descriptor]
+            [COMMAND Install setter_descriptor onto related_model under setter_attribute_name using setattr, overwriting any existing attribute with that name. RESULT related_model]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Unpickles a deferred-field Django model subclass by resolving model_id into a model class and returning a new uninitialized instance via model.__new__(model)." model_unpickle]
+    [INPUTS]
+        <REF> model_id </REF>: tuple or Model class "Either a tuple of app_label and model_name accepted by apps.get_model, or a directly cached model class for backwards compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Model instance "A new uninitialized instance of the resolved model class created by model.__new__(model)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether model_id is a tuple using isinstance(model_id, tuple). RESULT is_tuple]
+            [COMMAND When is_tuple is true, resolve the model class by calling apps.get_model(*model_id) with the unpacked tuple elements as positional arguments and assign the returned model class to model. RESULT model]
+            [COMMAND After model has been assigned by either the tuple path or the backwards-compatibility path, return a new uninitialized instance of the resolved model class by calling model.__new__(model). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_tuple is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set model to model_id directly, preserving backwards compatibility because earlier versions cached the model class itself rather than a tuple reference. RESULT model]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

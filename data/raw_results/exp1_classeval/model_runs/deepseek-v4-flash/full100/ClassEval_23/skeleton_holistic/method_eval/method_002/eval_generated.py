@@ -1,0 +1,28 @@
+
+
+import unittest
+
+class CombinationCalculatorTestSelect(unittest.TestCase):
+    def test_select(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(4, 2), 6)
+
+    def test_select_2(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(5, 3), 10)
+
+    def test_select_3(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(6, 6), 1)
+
+    def test_select_4(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(6, 0), 1)
+
+    def test_select_5(self):
+        calc = CombinationCalculator(["A", "B", "C", "D"])
+        self.assertEqual(calc.count(6, 3), 20)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

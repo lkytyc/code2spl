@@ -1,0 +1,226 @@
+# FILE: sphinx/ext/viewcode.py
+[DEFINE_WORKER: "Resolve the full module name for a given module attribute, returning None with verbose diagnostics when lookup fails." _get_full_modname]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "Sphinx application object; accepted for compatibility but unused in this method."
+        <REF> modname </REF>: str "Module name to resolve."
+        <REF> attribute </REF>: str "Attribute name to resolve within the module."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Optional[str] "The resolved full module name, or None if resolution fails."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the try block, call get_full_modname(modname, attribute) to resolve the full module name. RESULT full_module_name]
+            [COMMAND Return full_module_name. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: An AttributeError is raised when resolving the full module name, indicating that sphinx.ext.viewcode cannot follow a class instance attribute.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the verbose message 'Didn't find {attribute} in {modname}'. RESULT verbose_log]
+            [COMMAND Return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Any other Exception is raised when resolving the full module name after following Python domain directives.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the verbose formatted traceback from traceback.format_exc().rstrip(). RESULT traceback_log]
+            [COMMAND Log the verbose message 'viewcode can't import {modname}, failed with error "{e}"'. RESULT import_error_log]
+            [COMMAND Return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Walks Python object signatures in a Sphinx doctree, resolves each signature's source module, and appends an HTML-only [source] link to every valid unique signature that has a known source tag." doctree_read]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "Sphinx application instance providing the builder, configuration, environment, and event system."
+        <REF> doctree </REF>: Node "Sphinx doctree node to traverse for Python description nodes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return </REF>: None "The method returns None; it mutates env._viewcode_modules and doctree signature nodes as side effects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign env = app.builder.env. RESULT env]
+            [COMMAND If env does not have attribute _viewcode_modules, set env._viewcode_modules = {}. RESULT env._viewcode_modules]
+            [COMMAND If app.builder.name is exactly 'singlehtml', return from doctree_read immediately. RESULT none]
+            [COMMAND If app.builder.name starts with 'epub' and env.config.viewcode_enable_epub is false, return from doctree_read immediately. RESULT none]
+            [COMMAND Define nested function has_tag(modname, fullname, docname, refname) that: reads entry = env._viewcode_modules.get(modname, None); if entry is False returns False; emits code_tags = app.emit_firstresult('viewcode-find-source', modname); if code_tags is None, runs ModuleAnalyzer.for_module(modname).find_tags() inside a try/except that catches Exception, sets env._viewcode_modules[modname] = False and returns False, then uses analyzer.code and analyzer.tags; otherwise unpacks code, tags from code_tags; if entry is None or entry[0] != code, sets entry = (code, tags, {}, refname) and stores env._viewcode_modules[modname] = entry; unpacks _, tags, used, _ from entry; if fullname in tags, sets used[fullname] = docname and returns True; otherwise returns False. RESULT has_tag]
+            [COMMAND For each objnode in doctree.traverse(addnodes.desc), if objnode.get('domain') != 'py', continue to the next objnode. RESULT objnode]
+            [COMMAND For each accepted Python objnode, create empty set names = set(). RESULT names]
+            [COMMAND For each signode in the current objnode, if signode is not an instance of addnodes.desc_signature, continue to the next signode. RESULT signode]
+            [COMMAND Within the inner signode loop, set modname = signode.get('module'), fullname = signode.get('fullname'), and refname = modname. RESULT modname_fullname_refname]
+            [COMMAND Within the inner signode loop, if env.config.viewcode_follow_imported_members is true, call new_modname = app.emit_firstresult('viewcode-follow-imported', modname, fullname); if new_modname is falsy, call new_modname = _get_full_modname(app, modname, fullname); then assign modname = new_modname while leaving refname as the original modname. RESULT modname]
+            [COMMAND Within the inner signode loop, if modname is falsy, continue to the next signode. RESULT none]
+            [COMMAND Within the inner signode loop, re-read fullname = signode.get('fullname') after possible module resolution changes. RESULT fullname]
+            [COMMAND Within the inner signode loop, if has_tag(modname, fullname, env.docname, refname) is false, continue to the next signode. RESULT has_tag_result]
+            [COMMAND Within the inner signode loop, if fullname is already in names, continue to the next signode to avoid duplicate links. RESULT none]
+            [COMMAND Within the inner signode loop, add fullname to names. RESULT names]
+            [COMMAND Within the inner signode loop, compute pagename = posixpath.join(OUTPUT_DIRNAME, modname.replace('.', '/')). RESULT pagename]
+            [COMMAND Within the inner signode loop, create inline = nodes.inline('', _('[source]'), classes=['viewcode-link']). RESULT inline]
+            [COMMAND Within the inner signode loop, create onlynode = addnodes.only(expr='html'). RESULT onlynode]
+            [COMMAND Within the inner signode loop, append addnodes.pending_xref('', inline, reftype='viewcode', refdomain='std', refexplicit=False, reftarget=pagename, refid=fullname, refdoc=env.docname) to onlynode. RESULT onlynode]
+            [COMMAND Within the inner signode loop, append onlynode to signode using signode += onlynode. RESULT signode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges viewcode module data from a secondary build environment into the primary build environment after ensuring the primary environment has a _viewcode_modules dictionary, and does nothing if the secondary environment lacks the attribute." env_merge_info]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "The Sphinx application instance; not used in this merge logic."
+        <REF> env </REF>: BuildEnvironment "The primary build environment whose _viewcode_modules attribute is initialized and updated."
+        <REF> docnames </REF>: Iterable[str] "Iterable of document names; not used in this merge logic."
+        <REF> other </REF>: BuildEnvironment "The secondary build environment whose _viewcode_modules entries are merged into env."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether other has an attribute named _viewcode_modules. RESULT other_has_viewcode_modules]
+            [COMMAND Since other has _viewcode_modules, if env does not have an attribute named _viewcode_modules, assign an empty dictionary to env._viewcode_modules. RESULT env_viewcode_modules_initialized]
+            [COMMAND Update env._viewcode_modules in-place with all key-value pairs from other._viewcode_modules, overwriting existing keys. RESULT env_viewcode_modules_updated]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: other does not have an attribute named _viewcode_modules]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without modifying env. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves missing reference nodes for 'viewcode' references by returning a newly created reference node, or None for all other reference types." missing_reference]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "The Sphinx application object, used to access the builder."
+        <REF> env </REF>: BuildEnvironment "The Sphinx build environment; not used in this method."
+        <REF> node </REF>: Element "The docutils element node being resolved, expected to have 'reftype', 'refdoc', 'reftarget', and 'refid' attributes."
+        <REF> contnode </REF>: Node "The continuation node to be included in the generated reference node."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Optional[Node] "A reference node if node['reftype'] is 'viewcode'; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether node['reftype'] is equal to 'viewcode'. RESULT is_viewcode_ref]
+            [COMMAND If is_viewcode_ref is false, return None as the function result. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_viewcode_ref is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call make_refnode(app.builder, node['refdoc'], node['reftarget'], node['refid'], contnode) and return its result. RESULT reference_node]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the module filename for the given module name by first checking Sphinx's viewcode-find-source event and then using ModuleAnalyzer, returning None when source_info is truthy or when retrieval fails." get_module_filename]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "Sphinx application instance used to emit the viewcode-find-source event."
+        <REF> modname </REF>: str "Name of the module whose filename is being looked up."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> filename </REF>: Optional[str] "Module filename if it can be obtained; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call app.emit_firstresult('viewcode-find-source', modname) and assign the first non-None result to source_info. RESULT source_info]
+            [COMMAND In the else branch when source_info is falsey, inside the try block, call ModuleAnalyzer.get_module_source(modname) and unpack the returned pair into filename and source. RESULT filename, source]
+            [COMMAND Return filename from the try block in the else branch as the module filename. RESULT filename]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: source_info is truthy after calling app.emit_firstresult.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately, skipping the module source lookup. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Inside the else branch, the try block raises an exception while calling ModuleAnalyzer.get_module_source or unpacking its result.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the exception and return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a module page needs to be generated by checking for a module filename and comparing source and generated page modification times." should_generate_module_page]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "Sphinx application instance providing the builder and output directory."
+        <REF> modname </REF>: str "Dotted module name to check."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the module page should be generated; False if the existing page is already up to date."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the module filename by calling get_module_filename(app, modname). RESULT module_filename]
+            [COMMAND Check whether module_filename is None; if it is, follow the early-return flow. RESULT module_filename_is_none]
+            [COMMAND Cast app.builder to StandaloneHTMLBuilder. RESULT builder]
+            [COMMAND Replace dots in modname with slashes and append builder.out_suffix to create the output basename. RESULT basename]
+            [COMMAND Join app.outdir, '_modules/', and basename to create the page filename. RESULT page_filename]
+            [COMMAND Within the try block, compare path.getmtime(module_filename) with path.getmtime(page_filename); if the module file mtime is less than or equal to the page file mtime, follow the up-to-date flow. RESULT mtime_comparison]
+            [COMMAND After the try/catch block, return True as the default outcome. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: module_filename is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return True because the module page must be regenerated when the module filename cannot be found. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: path.getmtime(module_filename) is less than or equal to path.getmtime(page_filename) and no IOError occurs]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False because the generated page is newer than or as new as the module file. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: path.getmtime(module_filename) or path.getmtime(page_filename) raises IOError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the IOError, pass, and fall through to the final return True. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers Sphinx configuration defaults and event handlers, declares custom events, and returns extension metadata." setup]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "The Sphinx application instance used to register configuration values, event handlers, and custom events."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> metadata </REF>: Dict[str, Any] "Extension metadata dictionary containing the Sphinx display version, environment version 1, and parallel_read_safe flag True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Register the configuration value 'viewcode_import' with default None and rebuild flag False on the Sphinx app. RESULT app]
+            [COMMAND Register the configuration value 'viewcode_enable_epub' with default False and rebuild flag False on the Sphinx app. RESULT app]
+            [COMMAND Register the configuration value 'viewcode_follow_imported_members' with default True and rebuild flag False on the Sphinx app. RESULT app]
+            [COMMAND Connect the handler doctree_read to the 'doctree-read' event on the Sphinx app. RESULT app]
+            [COMMAND Connect the handler env_merge_info to the 'env-merge-info' event on the Sphinx app. RESULT app]
+            [COMMAND Connect the handler collect_pages to the 'html-collect-pages' event on the Sphinx app. RESULT app]
+            [COMMAND Connect the handler missing_reference to the 'missing-reference' event on the Sphinx app. RESULT app]
+            [COMMAND Declare the custom event 'viewcode-find-source' on the Sphinx app. RESULT app]
+            [COMMAND Declare the custom event 'viewcode-follow-imported' on the Sphinx app. RESULT app]
+            [COMMAND Return a dictionary containing 'version' set to sphinx.__display_version__, 'env_version' set to 1, and 'parallel_read_safe' set to True. RESULT metadata]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

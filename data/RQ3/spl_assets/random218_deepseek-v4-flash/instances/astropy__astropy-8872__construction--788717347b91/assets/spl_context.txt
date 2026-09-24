@@ -1,0 +1,1324 @@
+# FILE: astropy/units/quantity.py
+# CLASS Conf
+
+# CLASS QuantityIterator
+
+[DEFINE_WORKER: "Initializes the object by storing a direct reference to q and creating a flat row-major iterator over q's NumPy view." __init__]
+    [INPUTS]
+        <REF> q </REF>: array-like with NumPy view support "The quantity to store on the instance and from which to create a flat iterator."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the input quantity q directly to the instance attribute self._quantity, preserving the same object reference. RESULT self._quantity]
+            [COMMAND Convert q to a standard NumPy array via q.view(np.ndarray), then assign its flat row-major iterator to self._dataiter. RESULT self._dataiter]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS QuantityInfoBase
+
+[DEFINE_WORKER: "Formats the value attribute of the supplied object as a string using the default format specifier and returns it." default_format]
+    [INPUTS]
+        <REF> val </REF>: object "Object that must expose a value attribute whose value is formatted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "String representation of val.value produced by applying default string formatting."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the value attribute of the val object, format that attribute value using the default string formatting, and return the resulting string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates and yields three callable formatters that apply the format built-in, new-style str.format, and old-style percent formatting to a value's underlying value." possible_string_format_functions]
+    [INPUTS]
+        <REF> format_ </REF>: str "Format specifier or format string used by the yielded formatters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: Iterator[Callable] "An iterator yielding three callables, each accepting format_ and val and returning a formatted representation of val.value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Because the method contains yield statements, return a generator object without executing the function body yet. RESULT generator]
+            [COMMAND On first iteration, yield a callable defined as lambda format_, val: format(val.value, format_), which uses the built-in format function with the supplied format_. RESULT first_formatter]
+            [COMMAND On second iteration, yield a callable defined as lambda format_, val: format_.format(val.value), which applies new-style string formatting. RESULT second_formatter]
+            [COMMAND On third iteration, yield a callable defined as lambda format_, val: format_ % val.value, which applies old-style percent formatting. RESULT third_formatter]
+            [COMMAND After the third yield, allow the generator to be exhausted by returning from the function body. RESULT done]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS QuantityInfo
+
+[DEFINE_WORKER: "Creates a new empty zero-filled Quantity instance consistent with the input columns, using merged metadata and attributes inherited from the last column." new_like]
+    [INPUTS]
+        <REF> cols </REF>: list "List of input columns used for merging attributes and inheriting class-specific attributes from the last column."
+        <REF> length </REF>: int "Number of rows for the new empty quantity."
+        <REF> metadata_conflicts </REF>: str "Metadata conflict handling mode: 'warn', 'error', or 'silent'; defaults to 'warn'."
+        <REF> name </REF>: str or None "Name for the output column; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> out </REF>: Quantity (or subclass) "Empty zero-filled instance of this class, consistent with cols and with remaining metadata attributes applied to out.info."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Merge column attributes from cols using metadata_conflicts and name, selecting only 'meta', 'format', and 'description', and store the resulting dictionary as attrs. RESULT attrs]
+            [COMMAND Compute the output shape by prepending length to the existing shape tuple removed from attrs, and store it as shape. RESULT shape]
+            [COMMAND Remove and capture the dtype entry from attrs. RESULT dtype]
+            [COMMAND Create a zero-filled NumPy array with the computed shape and dtype, using np.zeros to avoid validation problems for Quantity subclasses. RESULT data]
+            [COMMAND Build the reconstruction argument map by iterating over self._represent_as_dict_attrs, using data for the 'value' key and copying the corresponding attribute from the last input column for every other key. RESULT map]
+            [COMMAND Set the 'copy' key in map to False so the constructed object references the data array without copying it. RESULT map]
+            [COMMAND Construct the output object by calling self._construct_from_dict(map). RESULT out]
+            [COMMAND For each remaining metadata attribute and value in attrs, set that attribute on out.info using setattr. RESULT out]
+            [COMMAND Return the constructed output object out. RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Quantity
+
+[DEFINE_WORKER: "Converts result array(s) into Quantity object(s) by recursing on tuple inputs, creating a new unit view when no output is supplied, or setting the unit on a caller-provided output quantity." _result_as_quantity]
+    [INPUTS]
+        <REF> result </REF>: numpy.ndarray or tuple of numpy.ndarray "Array or tuple of arrays that need to be turned into quantities."
+        <REF> unit </REF>: astropy.units.Unit or tuple of astropy.units.Unit, or None "Unit for the returned quantities; a tuple if result is a tuple."
+        <REF> out </REF>: astropy.units.Quantity or tuple of astropy.units.Quantity, or None "Optional output quantity or tuple of quantities; None if no output container is supplied."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: astropy.units.Quantity or tuple of astropy.units.Quantity "Quantity object(s) with units set; tuple if result was a tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether result is a tuple; if it is, follow the tuple result alternative flow. RESULT is_tuple]
+            [COMMAND When result is not a tuple, check whether out is None; if it is, follow the no-output alternative flow. RESULT is_out_none]
+            [COMMAND For the case where result is not a tuple and out is provided, set the unit on the output quantity using out._set_unit(unit). RESULT out]
+            [COMMAND Return the output quantity with its unit set. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: result is a tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If out is None, initialize out to a tuple of None placeholders with the same length as result: out = (None,) * len(result). RESULT out]
+            [COMMAND Return a tuple constructed by recursively calling self._result_as_quantity(result_, unit_, out_) for each (result_, unit_, out_) in zip(result, unit, out). RESULT tuple_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: result is not a tuple, out is None, and unit is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return result unchanged because no unit conversion is needed. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: result is not a tuple, out is None, and unit is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new quantity view of result with the given unit using self._new_view(result, unit) and return it. RESULT quantity_view]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a Quantity view of an array-like input or of self, resolving the unit and Quantity subclass, setting the unit on the new view, and finalizing it before returning." _new_view]
+    [INPUTS]
+        <REF> obj </REF>: ndarray or scalar, optional "The array-like input to create a view of; if None, a view of self is used."
+        <REF> unit </REF>: UnitBase or value convertible to Unit, optional "The unit for the resulting object; if None, self.unit and self.__class__ are used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> view </REF>: Quantity subclass "The new Quantity subclass view with the resolved unit and finalized properties."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve unit and quantity_subclass by selecting exactly one branch. If unit is None, set unit = self.unit and quantity_subclass = self.__class__. Else if unit is self.unit and self.__class__ is exactly the Quantity class, set quantity_subclass = Quantity. Else set unit = Unit(unit), set quantity_subclass = getattr(unit, '_quantity_class', Quantity), and if isinstance(self, quantity_subclass), set quantity_subclass, subok = self.__quantity_subclass__(unit); if subok is true, set quantity_subclass = self.__class__, otherwise retain the unpacked quantity_subclass. RESULT unit, quantity_subclass]
+            [COMMAND Normalize obj to a plain NumPy array by selecting exactly one branch. If obj is None, set obj = self.view(np.ndarray); else set obj = np.array(obj, copy=False). RESULT obj]
+            [COMMAND Create view = obj.view(quantity_subclass). RESULT view]
+            [COMMAND Set the unit on view by calling view._set_unit(unit). RESULT view]
+            [COMMAND Propagate additional properties from self to view by calling view.__array_finalize__(self). RESULT view]
+            [COMMAND Return view. RESULT view]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes and assigns the unit to the instance's _unit attribute, accepting UnitBase instances directly and attempting string-based conversion otherwise." _set_unit]
+    [INPUTS]
+        <REF> unit </REF>: object "The unit value to assign to self._unit; if not already a UnitBase instance, it is converted by parsing Unit(str(unit), parse_strict='silent')."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine whether unit is already an instance of UnitBase. RESULT unit_is_base]
+            [COMMAND If unit is not an instance of UnitBase, convert unit by evaluating Unit(str(unit), parse_strict='silent') and assign the converted value back to unit. RESULT unit]
+            [COMMAND Determine whether unit is an instance of UnitBase after any attempted conversion. RESULT unit_is_base_after_conversion]
+            [COMMAND If unit is not an instance of UnitBase after conversion, trigger the UnitTypeError exception flow. RESULT unit_type_error]
+            [COMMAND Assign the validated unit to self._unit. RESULT self._unit]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: unit is not an instance of UnitBase after attempting conversion with Unit(str(unit), parse_strict='silent')]
+        [LOG "Raise UnitTypeError with message formatted as '{0} instances require {1} units, not {2} instances.' using type(self).__name__, UnitBase, and type(unit)."]
+        [THROW UnitTypeError "Indicates that the calling class requires UnitBase units but the supplied unit could not be converted to a UnitBase instance."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the underlying data, viewed as a numpy ndarray, from the current unit to the requested unit, defaulting equivalencies to self._equivalencies when the supplied equivalencies list is empty." _to_value]
+    [INPUTS]
+        <REF> unit </REF>: Unit "Target unit to convert the quantity to."
+        <REF> equivalencies </REF>: list "Optional conversion equivalencies used by the unit conversion; an empty list triggers the default instance equivalencies."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> converted_value </REF>: object "Result of converting the ndarray view from self.unit to the target unit using the resolved equivalencies."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the effective equivalencies: if equivalencies is exactly an empty list, set it to self._equivalencies; otherwise keep the caller-supplied equivalencies unchanged. RESULT resolved_equivalencies]
+            [COMMAND Obtain the current data as a numpy ndarray view by calling self.view(np.ndarray). RESULT data_view]
+            [COMMAND Convert data_view from self.unit to the target unit by calling self.unit.to(unit, data_view, equivalencies=resolved_equivalencies). RESULT converted_value]
+            [COMMAND Return converted_value to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the quantity to the requested unit, creating a new Quantity object in a separate view." to]
+    [INPUTS]
+        <REF> self </REF>: Quantity "The quantity instance on which the conversion is called."
+        <REF> unit </REF>: UnitBase or str "The target unit for the conversion."
+        <REF> equivalencies </REF>: list of equivalence pairs, optional "Equivalence pairs to use if direct conversion is not possible. An empty list uses class default equivalencies, while None applies no equivalencies."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Quantity "A new Quantity object with the converted value and requested unit."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the destination unit by assigning unit = Unit(unit) so it is a UnitBase instance. RESULT unit]
+            [COMMAND Convert the current quantity value to the target unit by evaluating self._to_value(unit, equivalencies) with the normalized unit and the exact equivalencies argument. RESULT conversion_value]
+            [COMMAND Construct and return a new Quantity copy by passing the converted numerical value and target unit to self._new_view(conversion_value, unit). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the numerical value of the quantity in the requested unit, using a view when the unit is unchanged or the conversion scale is effectively unity, scaling the view otherwise, and falling back to equivalency-based conversion when the direct unit conversion fails." to_value]
+    [INPUTS]
+        <REF> unit </REF>: UnitBase instance or str, optional "The unit in which the value should be given. If not given or None, the current unit is used."
+        <REF> equivalencies </REF>: list of equivalence pairs, optional "Equivalence pairs to try if the units are not directly convertible. If not provided or [], class default equivalencies are used; if None, no equivalencies are applied at all."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> value </REF>: numpy.ndarray or scalar "The value in the requested units. If no unit conversion was necessary, this is a view of the underlying data."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND After the initial identity check unit is None or unit is self.unit is false, convert the requested unit specification to a Unit object by evaluating Unit(unit). RESULT unit]
+            [COMMAND Attempt to compute the direct conversion scale by calling self.unit._to(unit); if this raises any Exception, follow the exception fallback alternative flow. RESULT scale]
+            [COMMAND If self.unit._to(unit) succeeds, assign self.view(np.ndarray) to value to obtain a view of the underlying data. RESULT value]
+            [COMMAND Within the successful direct conversion path, if not is_effectively_unity(scale) is true, multiply value by scale and assign the new result to value; the multiplication is not in-place. RESULT value]
+            [COMMAND Return value if self.shape is truthy; otherwise, if self.dtype.fields is truthy, return value[()]; otherwise return value.item(). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: unit is None or unit is self.unit, using identity comparison and short-circuiting on None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.view(np.ndarray) to value because no unit conversion is needed. RESULT value]
+            [COMMAND Return value if self.shape is truthy; otherwise, if self.dtype.fields is truthy, return value[()]; otherwise return value.item(). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.unit._to(unit) raises any Exception during the direct conversion attempt]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self._to_value(unit, equivalencies) to value as the fallback conversion path. RESULT value]
+            [COMMAND Return value if self.shape is truthy; otherwise, if self.dtype.fields is truthy, return value[()]; otherwise return value.item(). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the unit of this quantity as an astropy.units.UnitBase object." unit]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> unit </REF>: astropy.units.UnitBase "The unit of this quantity."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._unit as the unit of this quantity. RESULT unit]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the _equivalencies instance attribute, a list of equivalencies applied by default during unit conversions." equivalencies]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "The list of equivalencies stored in _equivalencies, returned directly to the caller."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a direct reference to the instance attribute _equivalencies without copying or transforming it. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a copy of the current Quantity expressed in SI units, with its numeric value scaled according to the SI unit's scale factor and the unit adjusted by the same factor." si]
+    [INPUTS]
+        <REF> self </REF>: Quantity "The Quantity instance on which the SI conversion is performed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Quantity "A new Quantity instance representing the original quantity in SI units."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the SI unit of the current quantity's unit and assign it to the local variable si_unit. RESULT si_unit]
+            [COMMAND Return the result of calling self._new_view with the value equal to self.value multiplied by si_unit.scale and the unit equal to si_unit divided by si_unit.scale. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new Quantity object representing the current quantity converted to CGS units, with its value scaled accordingly." cgs]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> converted_quantity </REF>: Quantity "A copy of the current Quantity expressed in CGS units with the value scaled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the CGS unit corresponding to self.unit and store it in cgs_unit. RESULT cgs_unit]
+            [COMMAND Compute the scaled value as self.value multiplied by cgs_unit.scale. RESULT scaled_value]
+            [COMMAND Compute the adjusted CGS unit as cgs_unit divided by cgs_unit.scale. RESULT adjusted_unit]
+            [COMMAND Return the result of self._new_view(scaled_value, adjusted_unit). RESULT converted_quantity]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True when self.shape is falsy, indicating that the quantity is scalar, and False when self.shape is truthy, indicating that the quantity is array-like." isscalar]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> is_scalar </REF>: boolean "True if the quantity has no shape or an empty/falsy shape, meaning it is scalar; False if it has a non-empty/truthy shape, meaning it is array-like."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the shape attribute on the current quantity object and evaluate its truthiness. RESULT shape_truthiness]
+            [COMMAND Return the boolean negation of shape_truthiness: True if shape is falsy, False if shape is truthy. RESULT is_scalar]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts self.unit to a string, using _UNIT_NOT_INITIALISED when self.unit is None and prefixing the result with a single space if it is non-empty." _unitstr]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> unitstr </REF>: string "String representation of self.unit with a leading space when non-empty; _UNIT_NOT_INITIALISED is used when self.unit is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.unit is None. RESULT self_unit_is_none]
+            [COMMAND If self.unit is None, assign _UNIT_NOT_INITIALISED to unitstr. RESULT unitstr]
+            [COMMAND If self.unit is not None, assign str(self.unit) to unitstr. RESULT unitstr]
+            [COMMAND Check whether unitstr is truthy. RESULT unitstr_is_truthy]
+            [COMMAND If unitstr is truthy, assign ' ' + unitstr to unitstr. RESULT unitstr]
+            [COMMAND If unitstr is falsy, leave unitstr unchanged. RESULT unitstr]
+            [COMMAND Return unitstr. RESULT unitstr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a Quantity to a string, optionally converting to a different unit and formatting as plain text or LaTeX with configurable precision and delimiters." to_string]
+    [INPUTS]
+        <REF> unit </REF>: UnitBase or None "Optional unit to which the quantity is converted before formatting; if None, the quantity's current unit is used."
+        <REF> precision </REF>: numeric or None "Decimal precision for formatted numbers; if None, NumPy's current print precision is used."
+        <REF> format </REF>: str or None "Output format; None returns a plain string, 'latex' returns a LaTeX-formatted string."
+        <REF> subfmt </REF>: str or None "LaTeX subformat: 'inline', 'display', or None, controlling the delimiter style."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "String representation of the Quantity, either plain or LaTeX-formatted."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether unit is not None and unit != self.unit; if so, perform the unit-conversion alternative and return its result; otherwise continue. RESULT unit_conversion_skipped]
+            [COMMAND Define the supported formats mapping: None maps to None, and 'latex' maps None and 'inline' to ('$', '$') and 'display' to ('$\displaystyle ', '$'). RESULT formats]
+            [COMMAND Check whether format is in formats; if not, raise the ValueError described in exception_flows; if format is None, follow the plain-string alternative and return its result; otherwise continue with LaTeX formatting. RESULT latex_format_selected]
+            [COMMAND Capture the current NumPy print options into pops and construct format_spec as '.{precision}g', using precision when precision is not None and pops['precision'] otherwise. RESULT format_spec]
+            [COMMAND Define float_formatter(value) to return Latex.format_exponential_notation(value, format_spec=format_spec). RESULT float_formatter]
+            [COMMAND Define complex_formatter(value) to return '({0}{1}i)'.format(Latex.format_exponential_notation(value.real, format_spec=format_spec), Latex.format_exponential_notation(value.imag, format_spec='+' + format_spec)). RESULT complex_formatter]
+            [COMMAND Within the try block, if conf.latex_array_threshold is greater than -1, set NumPy print options with threshold=conf.latex_array_threshold and formatter={'float_kind': float_formatter, 'complex_kind': complex_formatter}; then compute latex_value by calling np.array2string(self.view(np.ndarray), max_line_width=np.inf, separator=',~'), and when NUMPY_LT_1_14 is true pass style equal to float_formatter if self.dtype.kind == 'f', complex_formatter if self.dtype.kind == 'c', and repr otherwise; then replace '...' with r'\dots'. RESULT latex_value]
+            [COMMAND In the finally block, restore the original NumPy print options by calling np.set_printoptions(**pops). RESULT restored_print_options]
+            [COMMAND Build latex_unit as self.unit._repr_latex_()[1:-1] when self.unit is not None, otherwise as _UNIT_NOT_INITIALISED. RESULT latex_unit]
+            [COMMAND Unpack delimiter_left and delimiter_right from formats[format][subfmt]. RESULT delimiter_pair]
+            [COMMAND Return the formatted LaTeX string r'{left}{0} \; {1}{right}' using latex_value, latex_unit, delimiter_left, and delimiter_right. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: unit is not None and unit != self.unit]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert self to the requested unit with self.to(unit). RESULT converted_quantity]
+            [COMMAND Recursively call converted_quantity.to_string(unit=None, precision=precision, format=format, subfmt=subfmt) and return the result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: format is None after validation]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the plain string concatenation of self.value and self._unitstr using '{0}{1:s}'.format(self.value, self._unitstr). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: format is not in the formats mapping]
+        [LOG "Unknown format '{format}'"]
+        [THROW ValueError "Raised when the requested format is not a supported format."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates and returns a LaTeX string representation of this quantity and its unit by delegating to to_string with latex format and inline subformat." _repr_latex_]
+    [INPUTS]
+        <REF> self </REF>: Quantity "The Quantity instance for which the LaTeX representation is generated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> latex_string </REF>: str "LaTeX string representation of the quantity and its unit."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.to_string with format set to 'latex' and subfmt set to 'inline', and return the resulting LaTeX string. RESULT latex_string]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a new Quantity whose units are decomposed according to the specified bases by delegating to the internal _decompose method." decompose]
+    [INPUTS]
+        <REF> bases </REF>: sequence of UnitBase, optional "The units to decompose into; when not provided, decomposition proceeds down to irreducible units."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> newq </REF>: Quantity "A new object equal to this quantity with units decomposed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._decompose with the boolean literal False as the first positional argument and bases as the keyword argument bases, then return the resulting Quantity as newq. RESULT newq]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new Quantity equivalent to this one but with its units decomposed, folding any unit scale into the numeric value when scaled units are not allowed." _decompose]
+    [INPUTS]
+        <REF> allowscaledunits </REF>: bool "If True, the resulting Quantity may retain a scale factor in its unit. If False, any scaling in the unit is subsumed into the value. Defaults to False."
+        <REF> bases </REF>: sequence of UnitBase, optional "The bases to decompose into. Defaults to an empty list, meaning decomposition is down to irreducible units."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> newq </REF>: ~astropy.units.Quantity "A new object equal to this quantity with units decomposed according to the requested bases."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Decompose self.unit by calling self.unit.decompose(bases=bases) and store the resulting unit in new_unit. RESULT new_unit]
+            [COMMAND Evaluate the branch condition with short-circuit logic: first check whether allowscaledunits is falsy; only if it is falsy, check whether new_unit has a scale attribute. RESULT scale_condition]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: scale_condition is true (allowscaledunits is falsy and new_unit has a scale attribute)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute new_value by multiplying self.value by new_unit.scale. RESULT new_value]
+            [COMMAND Normalize new_unit by dividing it by new_unit.scale. RESULT new_unit]
+            [COMMAND Return self._new_view(new_value, new_unit) immediately, without modifying the original self. RESULT newq]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: scale_condition is false (allowscaledunits is truthy or new_unit does not have a scale attribute)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._new_view(self.copy(), new_unit), using a copy of self so the original value is not modified. RESULT newq]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: bases is provided but the unit cannot be decomposed into those bases]
+        [LOG "Failed to decompose the unit into the requested bases."]
+        [THROW UnitsError "Raised when the unit cannot be expressed in the specified bases."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Calls the superclass item method with the supplied positional arguments and wraps the resulting item in a new view before returning it." item]
+    [INPUTS]
+        <REF> self </REF>: object "Instance of the class whose superclass provides item() and which defines _new_view() to wrap items."
+        <REF> args </REF>: tuple "Positional arguments to be expanded and forwarded to the superclass item() method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "A new view produced by self._new_view() wrapping the value returned by super().item(*args)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Expand args and call super().item(*args), storing the returned raw item as raw_item. RESULT raw_item]
+            [COMMAND Pass raw_item to self._new_view(), storing the returned wrapped view as result_view. RESULT result_view]
+            [COMMAND Return result_view. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to indicate that a Quantity cannot be converted into a list, directing callers to use q.value.list() instead." tolist]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to convert this Quantity to a list. RESULT no_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When tolist() is called on a Quantity]
+        [LOG "cannot make a list of Quantities.  Get list of values with q.value.list()"]
+        [THROW NotImplementedError "Indicates that converting a Quantity to a list is not supported."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a value to this unit by delegating to to_value, falling back to Quantity conversion for non-Quantity inputs, and optionally raises TypeError when casting to self.dtype would lose precision." _to_own_unit]
+    [INPUTS]
+        <REF> value </REF>: numeric/array/object "Value to convert to this unit; may be a Quantity, a plain array, or an object with a unit attribute."
+        <REF> check_precision </REF>: bool "If true, validates that converting to self.dtype does not change any non-NaN value; defaults to true."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> _value </REF>: numeric/array "Converted value expressed in self.unit, validated against self.dtype when check_precision is true."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to convert value to this unit by evaluating value.to_value(self.unit); if this succeeds, assign the converted value to _value and continue to the shared precision-check block. RESULT _value]
+            [COMMAND If check_precision is true, convert _value to a NumPy array with np.array(_value, copy=False) and assign the result back to _value; if check_precision is false, skip directly to the return step. RESULT _value]
+            [COMMAND Within the check_precision block, compute can_cast = np.can_cast(_value.dtype, self.dtype). RESULT can_cast]
+            [COMMAND Within the check_precision block, if can_cast is false, create self_dtype_array = np.array(_value, self.dtype). RESULT self_dtype_array]
+            [COMMAND Within the check_precision block, if can_cast is false, compute precision_ok = np.all(np.logical_or(self_dtype_array == _value, np.isnan(_value))); if precision_ok is false, TypeError is raised as described in exception_flows. RESULT precision_ok]
+            [COMMAND Return _value. RESULT _value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value does not have a to_value method or calling value.to_value(self.unit) raises AttributeError.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create as_quantity = Quantity(value), treating plain arrays as dimensionless but honoring any unit attribute, and try to convert it by calling as_quantity.to_value(self.unit), assigning the result to _value. RESULT _value]
+            [COMMAND If UnitsError is raised during the Quantity conversion, check whether value has no unit attribute and can_have_arbitrary_unit(as_quantity.value) is true; the arbitrary-unit check accepts values consisting only of zeros, infinities, or NaNs. If both conditions are true, assign as_quantity.value to _value. RESULT _value]
+            [COMMAND If UnitsError is raised and the arbitrary-unit fallback does not apply, propagate the UnitsError; otherwise continue to the shared precision-check block and return. RESULT _value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: During the Quantity conversion fallback, UnitsError is raised and the arbitrary-unit fallback does not apply because value has a unit attribute or can_have_arbitrary_unit(as_quantity.value) is false.]
+        [LOG "UnitsError was raised by as_quantity.to_value(self.unit) and value could not be treated as having arbitrary unit."]
+        [THROW UnitsError "Re-raised to signal that the value cannot be converted to this unit."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Precision checking is enabled, np.can_cast(_value.dtype, self.dtype) is false, and some non-NaN element of _value is not equal to its self.dtype-cast representation.]
+        [LOG "cannot convert value type to array type without precision loss"]
+        [THROW TypeError "Raised when casting to self.dtype would lose precision for at least one non-NaN value."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets an element of the underlying array data, addressed through a NumPy ndarray view, to the last argument converted by _to_own_unit." itemset]
+    [INPUTS]
+        <REF> self </REF>: object "Object whose underlying array data is mutated through an ndarray view."
+        <REF> args </REF>: tuple "One or more arguments where all but the last are indices and the last is the value to store."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "The method returns None; it mutates the underlying array in-place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that len(args) is greater than 0; if len(args) == 0 the ValueError exception path is taken. RESULT validation_passed]
+            [COMMAND Convert the last argument to the target internal unit by calling self._to_own_unit(args[-1]). RESULT converted_value]
+            [COMMAND Build the itemset argument tuple from args[:-1] as index components plus converted_value as the final element. RESULT itemset_args]
+            [COMMAND Create a mutable ndarray view with self.view(np.ndarray) and call itemset(*itemset_args) to write converted_value into the selected array element. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: len(args) == 0]
+        [LOG "itemset must have at least one argument"]
+        [THROW ValueError "Raised when no arguments are provided to itemset."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to indicate that Quantity objects cannot be converted directly to strings, instructing callers to use the underlying array's value.tostring method instead." tostring]
+    [INPUTS]
+        <REF> order </REF>: str "Memory order parameter accepted by the method interface; unused because the method always raises NotImplementedError."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to convert the Quantity to a string; the method unconditionally raises NotImplementedError with a message directing the caller to write the array using q.value.tostring(...). RESULT not_implemented_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Every invocation of tostring reaches the unconditional raise statement.]
+        [LOG "cannot write Quantities to string.  Write array with q.value.tostring(...)."]
+        [THROW NotImplementedError "Indicates that converting a Quantity to a string is not supported."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Unconditionally raises NotImplementedError to indicate that Quantities cannot be written directly to a file; the caller should write q.value.tofile(...) instead." tofile]
+    [INPUTS]
+        <REF> fid </REF>: file-like object "Destination file or file-like object to which the array would be written."
+        <REF> sep </REF>: str "Separator placed between array elements; defaults to an empty string."
+        <REF> format </REF>: str "Format specifier used for each array element; defaults to '%s'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to write the Quantity array to fid using the given separator and format specifier. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The tofile method is invoked with any arguments.]
+        [LOG "cannot write Quantities to file.  Write array with q.value.tofile(...)"]
+        [THROW NotImplementedError "Indicates that direct file writing of Quantities is not supported; the underlying values must be written with q.value.tofile(...)."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError whenever called, indicating that Quantity objects cannot be dumped to a file and directing the caller to use q.value.dump() instead." dump]
+    [INPUTS]
+        <REF> file </REF>: file-like object "Destination file object for the dump operation; unused because the method unconditionally raises NotImplementedError."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'cannot dump Quantities to file.  Write array with q.value.dump()'. RESULT not_implemented_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Always, because the method body consists solely of an unconditional raise statement.]
+        [LOG "cannot dump Quantities to file.  Write array with q.value.dump()"]
+        [THROW NotImplementedError "Indicates that the dump operation is intentionally unsupported for Quantity objects."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to signal that Quantity objects cannot be dumped directly to a string, directing the caller to dump the underlying array values instead." dumps]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to dump the Quantity object to a string by raising NotImplementedError with the message about using q.value.dumps(). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Whenever the dumps method is called.]
+        [LOG "cannot dump Quantities to string.  Write array with q.value.dumps()"]
+        [THROW NotImplementedError "Indicates that dumping a Quantity directly to a string is not supported; the user must dump the underlying array instead."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fills all elements of the underlying array with the unit-converted value by mutating a numpy view of the array." fill]
+    [INPUTS]
+        <REF> value </REF>: Any "The scalar value to fill into the array; it is passed through self._to_own_unit before being written to the array view."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None; the fill operation mutates the underlying array in place through the created view."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create an ndarray view of self's underlying array by calling self.view(np.ndarray); the view refers to the same data buffer and does not copy it. RESULT array_view]
+            [COMMAND Convert the input value to the unit expected by self by calling self._to_own_unit(value). RESULT converted_value]
+            [COMMAND Fill array_view in place with converted_value using ndarray.fill(), writing the converted value into every element of the underlying array. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a 1-D iterator over the Quantity array by constructing and returning a QuantityIterator that wraps the current Quantity instance." flat]
+    [INPUTS]
+        <REF> self </REF>: Quantity "The Quantity instance to be exposed through the returned 1-D iterator."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuantityIterator "A QuantityIterator providing flat, 1-D iteration over the Quantity array."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a new QuantityIterator with self as its target and return it to the caller. RESULT quantity_iterator]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Flattens the array with ravel() and assigns value into the entire flattened result using in-place slice assignment, so the original array is modified only when the ravel result is a view of self." flat]
+    [INPUTS]
+        <REF> self </REF>: ndarray "The array whose flattened elements receive the assigned value; assignment propagates to self only if ravel() returns a view."
+        <REF> value </REF>: scalar or array-like "The value or array to broadcast into every element of the flattened array."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: NoneType "The method returns None; the effect is in-place mutation of y and, when y is a view, of self."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.ravel() to create a one-dimensional array y, noting that y may be a view sharing memory with self or a copy with independent memory. RESULT y]
+            [COMMAND Assign value into all elements of y with y[:] = value, broadcasting value across the entire flattened array and mutating y's data buffer in place. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.ravel() returns a view that shares memory with self]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND After y[:] = value executes, the assignment propagates back to self, modifying the original array's data. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.ravel() returns a copy rather than a view]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND After y[:] = value executes, only the temporary flattened copy y is modified and self remains unchanged. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Takes elements from a Quantity along the specified axis using the parent ndarray implementation, then wraps the result in a new Quantity view whenever it is not already the same type." take]
+    [INPUTS]
+        <REF> self </REF>: Quantity "Source Quantity instance from which elements are selected."
+        <REF> indices </REF>: array_like "Indices of elements to take along the given axis."
+        <REF> axis </REF>: int or None "Axis along which to take elements; if None, the array is treated as flattened."
+        <REF> out </REF>: Quantity, ndarray, or None "Optional output buffer into which the result is placed; if None, a new array is allocated."
+        <REF> mode </REF>: str "Out-of-bounds index handling mode: 'raise', 'wrap', or 'clip'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> out </REF>: Quantity "The selected elements as a Quantity; if an output buffer was provided, it is returned, possibly after being wrapped in a new Quantity view."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().take(indices, axis=axis, out=out, mode=mode) and assign the returned array to out. RESULT out]
+            [COMMAND If type(out) is not type(self), assign self._new_view(out) to out so that single-element scalar results are converted into a proper Quantity view. RESULT out]
+            [COMMAND Return out. RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Writes values converted to the array's internal unit into the underlying ndarray at specified flat indices using ndarray.put, mutating the array in place." put]
+    [INPUTS]
+        <REF> indices </REF>: int or array-like of int "Flat index positions in the array at which the converted values are written."
+        <REF> values </REF>: scalar or array-like "Source values to write; converted by self._to_own_unit before being placed into the array."
+        <REF> mode </REF>: str "Out-of-bounds handling mode for ndarray.put: 'raise', 'wrap', or 'clip'. Defaults to 'raise'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None; the mutation is applied directly to the calling array in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a temporary ndarray view of self by calling self.view(np.ndarray); the view shares the underlying memory with self without copying data. RESULT view]
+            [COMMAND Convert values to the internal expected unit or representation by calling self._to_own_unit(values). RESULT converted_values]
+            [COMMAND Use the view's put method to write converted_values into the flattened underlying data at the positions given by indices, using mode='raise' because that is the default behavior; if values is shorter than indices, repeat values as needed, if values is a scalar write it to every selected index, and if indices is empty perform no mutation. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: mode is 'wrap']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a temporary ndarray view of self by calling self.view(np.ndarray). RESULT view]
+            [COMMAND Convert values to the internal expected unit or representation by calling self._to_own_unit(values). RESULT converted_values]
+            [COMMAND Call view.put(indices, converted_values, mode='wrap') so out-of-bounds indices wrap around the flattened length of the array. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: mode is 'clip']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a temporary ndarray view of self by calling self.view(np.ndarray). RESULT view]
+            [COMMAND Convert values to the internal expected unit or representation by calling self._to_own_unit(values). RESULT converted_values]
+            [COMMAND Call view.put(indices, converted_values, mode='clip') so out-of-bounds indices are clipped to the valid index range. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: mode is not one of 'raise', 'wrap', or 'clip']
+        [LOG "ndarray.put rejected the unrecognized mode."]
+        [THROW ValueError "Raised when mode is not 'raise', 'wrap', or 'clip'."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: mode is 'raise' and any index in indices is outside the valid range for the flattened array length]
+        [LOG "ndarray.put raised an error because an index is out of bounds and mode is 'raise'."]
+        [THROW IndexError "Raised when an out-of-bounds flat index is supplied with mode='raise'."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defines choose as an unimplemented stub that always raises NotImplementedError, directing callers to use array with q.value.choose." choose]
+    [INPUTS]
+        <REF> choices </REF>: array-like "Candidate choices to select from; unused because this method is not implemented."
+        <REF> out </REF>: optional array-like "Optional output array; unused because this method is not implemented."
+        <REF> mode </REF>: str "Selection mode, defaulting to 'raise'; unused because this method is not implemented."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke choose on a quantity object and immediately enter the exception path because the method is unconditionally unimplemented. RESULT exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Any call to choose is made, since the method body always raises.]
+        [LOG "cannot choose based on quantity.  Choose using array with q.value.choose(...)"]
+        [THROW NotImplementedError "Signals that choosing by quantity is not supported and that callers should choose using array with q.value.choose."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the indices that would sort a NumPy array view of self along the specified axis using the given sort algorithm and, for structured arrays, field order." argsort]
+    [INPUTS]
+        <REF> self </REF>: array-like "The array-like object on which the method is invoked; it is viewed as a NumPy ndarray before sorting."
+        <REF> axis </REF>: int or tuple of int or None "Axis along which to sort; None flattens the array before sorting, and -1 (the default) uses the last axis."
+        <REF> kind </REF>: str "Sorting algorithm: 'quicksort' (default), 'mergesort', 'heapsort', or 'stable'."
+        <REF> order </REF>: str or list of str or None "Field name or list of field names used when sorting structured arrays; ignored for plain numeric arrays."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numpy.ndarray "Integer index array with the same shape as the input array along unsorted axes; applying it to the original array produces the sorted array."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a NumPy ndarray view of self without copying the underlying data. RESULT ndarray_view]
+            [COMMAND Call argsort on the ndarray view with axis, kind, and order as provided. RESULT sorted_indices]
+            [COMMAND Return the sorted_indices integer index array to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Searches for the insertion position of a value or values, converted to this object's unit system, in the NumPy array representation of this object using numpy.searchsorted while forwarding additional positional and keyword arguments." searchsorted]
+    [INPUTS]
+        <REF> self </REF>: object "The object whose array representation is treated as the sorted sequence to search in."
+        <REF> v </REF>: scalar or array-like "The value or values whose insertion positions are to be found, converted to this object's unit system before searching."
+        <REF> args </REF>: tuple "Additional positional arguments forwarded unchanged to numpy.searchsorted."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded unchanged to numpy.searchsorted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: int or numpy.ndarray "Insertion index or array of insertion indices where the converted values would maintain sorted order in the array representation of self."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert self to a NumPy array with np.array(self). RESULT array_a]
+            [COMMAND Convert v to this object's own unit system by calling self._to_own_unit(v, check_precision=False). RESULT converted_v]
+            [COMMAND Invoke np.searchsorted(array_a, converted_v, *args, **kwargs), forwarding all additional positional and keyword arguments unchanged, and return the resulting insertion indices. RESULT search_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compute the indices of the maximum values of a NumPy array by first viewing it as a plain ndarray and then calling argmax with the specified axis and optional output array." argmax]
+    [INPUTS]
+        <REF> self </REF>: ndarray or subclass "Input object on which to compute the maximum-value indices; must support the view() method."
+        <REF> axis </REF>: int or None "Axis along which to operate. If None, the array is flattened before computing the maximum index."
+        <REF> out </REF>: ndarray or None "Optional output array into which the result is written. It must have the same shape and dtype as the expected result."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: int or ndarray "The index or array of indices of the maximum values. If out is supplied, this is the same object as out."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a view of self as a plain numpy ndarray by calling self.view(np.ndarray). RESULT view]
+            [COMMAND Call argmax on the ndarray view with axis=axis and out=out, computing the indices of the maximum values along the specified axis, or over the flattened array if axis is None. RESULT argmax_result]
+            [COMMAND Return argmax_result; if out was provided, argmax_result is the same object as out. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts self to a NumPy ndarray view and returns the indices of the minimum values along the specified axis, optionally storing the result in out." argmin]
+    [INPUTS]
+        <REF> self </REF>: object "Object that provides a .view(np.ndarray) method to expose a NumPy ndarray view."
+        <REF> axis </REF>: int or tuple of int or None "Axis or axes along which to compute the minimum indices. If None, the array is flattened and the index of the global minimum is returned."
+        <REF> out </REF>: np.ndarray or None "Optional output array in which to place the result. If None, a new output array is allocated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: np.ndarray or scalar "Indices of the minimum values along the specified axis. If out is provided, the result is also written into out and the same values are returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a NumPy ndarray view of self by calling self.view(np.ndarray). RESULT ndarray_view]
+            [COMMAND Compute the indices of the minimum values along axis by calling ndarray_view.argmin(axis=axis, out=out); if axis is None, treat the view as flattened and return the index of the global minimum, and if ties occur, return the first occurrence. RESULT argmin_result]
+            [COMMAND Return argmin_result, which is also written into out when out is not None. RESULT returned_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Wraps a numpy function operating on a Quantity by unwrapping Quantity arguments to arrays and converting the function result back to a Quantity with the appropriate unit." _wrap_function]
+    [INPUTS]
+        <REF> self </REF>: Quantity "Quantity instance whose value is used as the first wrapped argument and whose unit is used as the default output unit."
+        <REF> function </REF>: callable "Numpy function to wrap."
+        <REF> args </REF>: tuple "Positional arguments to pass to the function after self."
+        <REF> unit </REF>: Unit or None "Unit of the output result; defaults to self.unit."
+        <REF> out </REF>: Quantity or None "Quantity instance in which to store the output, if provided."
+        <REF> kwargs </REF>: dict "Additional keyword arguments to pass to the wrapped function."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> out </REF>: Quantity "Result of the function call converted back to a Quantity with the proper unit."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If unit is None, set unit to self.unit so that the unit of this Quantity is used as the default output unit. RESULT unit]
+            [COMMAND Rebuild args as a tuple whose first element is self.value and whose following elements are the original args elements with Quantity instances replaced by their value and all other elements passed through unchanged. RESULT args]
+            [COMMAND If out is not None, collect the elements of args that are instances of np.ndarray into a tuple named arrays, call check_output(out, unit, arrays, function=function), and assign the returned output view to kwargs['out']. RESULT kwargs]
+            [COMMAND Call function with the rebuilt positional arguments and updated keyword arguments by executing function(*args, **kwargs), and store the returned value in result. RESULT result]
+            [COMMAND Return the Quantity produced by self._result_as_quantity(result, unit, out). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the trace of a 2-D slice of the wrapped array by forwarding the NumPy trace callable and all trace-specific parameters through self._wrap_function." trace]
+    [INPUTS]
+        <REF> offset </REF>: int "Offset of the diagonal from the main diagonal; 0 means the main diagonal."
+        <REF> axis1 </REF>: int "First axis of the 2-D slice used for the trace."
+        <REF> axis2 </REF>: int "Second axis of the 2-D slice used for the trace."
+        <REF> dtype </REF>: dtype or None "Optional output data type; None lets NumPy infer it."
+        <REF> out </REF>: ndarray or None "Optional array into which the result is written; None allocates a new array."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ndarray or scalar "The trace value computed by np.trace and returned by self._wrap_function, which may be the provided out array."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize the local parameters offset, axis1, axis2, dtype, and out to the values supplied to the trace method, applying defaults 0, 0, 1, None, and None respectively. RESULT parameters]
+            [COMMAND Call self._wrap_function(np.trace, offset, axis1, axis2, dtype, out=out), passing np.trace as the callable operation and forwarding all trace parameters unchanged. RESULT wrapped_result]
+            [COMMAND Return wrapped_result as the result of the trace method. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the variance of the data by delegating to numpy.var through the object's wrapper, passing the squared unit as the unit argument." var]
+    [INPUTS]
+        <REF> axis </REF>: int or tuple of int or None "Axis or axes along which the variance is computed; None means the flattened array is used."
+        <REF> dtype </REF>: data-type or None "The data type used for the variance computation; None means the natural dtype is used."
+        <REF> out </REF>: ndarray or None "Alternate output array in which to place the result; None means a new array is allocated."
+        <REF> ddof </REF>: int "Delta degrees of freedom for the variance calculation; default is 0."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The result returned by self._wrap_function, representing the variance."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the squared unit by raising self.unit to the power of 2. RESULT unit_squared]
+            [COMMAND Call self._wrap_function with np.var as the function to apply, forwarding axis, dtype, out, and ddof, and passing unit_squared as the unit argument. RESULT result]
+            [COMMAND Return result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the standard deviation by forwarding np.std and its axis, dtype, out, and ddof parameters to self._wrap_function, then returning the wrapped result." std]
+    [INPUTS]
+        <REF> axis </REF>: int, tuple of ints, or None "Axis or axes along which the standard deviation is computed; None means the flattened array is used."
+        <REF> dtype </REF>: data-type or None "Data type used for the standard deviation computation; None uses NumPy's default inference."
+        <REF> out </REF>: ndarray or None "Alternative output array to place the result; None allocates a new array."
+        <REF> ddof </REF>: int "Delta degrees of freedom; 0 divides by N, while 1 computes sample standard deviation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: scalar or ndarray "The standard deviation result returned by self._wrap_function after calling np.std."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._wrap_function with np.std as the target function, passing axis and dtype positionally and out=out, ddof=ddof as keyword arguments, using their current values with defaults None, None, None, and 0 respectively; then return the value produced by _wrap_function. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the mean of the array elements by forwarding axis, dtype, and out to numpy.mean through the object's _wrap_function helper and returning the wrapper's result." mean]
+    [INPUTS]
+        <REF> axis </REF>: int or tuple of ints, optional "Axis or axes along which the mean is computed. Defaults to None, which computes the mean over all elements."
+        <REF> dtype </REF>: data-type, optional "Data type used for the mean computation. Defaults to None, allowing numpy.mean to infer the computation dtype."
+        <REF> out </REF>: ndarray, optional "Alternative output array in which to place the result. Defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ndarray or scalar "Computed mean returned by self._wrap_function. If out is provided, the result is also written into out and out is returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._wrap_function with numpy.mean as the callable, axis and dtype as positional arguments, and out as a keyword argument, then return the wrapper's result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rounds the underlying data array to the specified number of decimal places by delegating to numpy.round through _wrap_function, optionally writing the result into a supplied output array." round]
+    [INPUTS]
+        <REF> decimals </REF>: int "Number of decimal places to round to; defaults to 0. Negative values round to powers of ten."
+        <REF> out </REF>: numpy.ndarray or None "Optional output array. When None, a new array is allocated; when provided, the rounded values are written into this array and it is returned."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rounded_result </REF>: numpy.ndarray "The rounded array, or out itself when an output array was supplied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self._wrap_function with np.round as the callable, decimals as the rounding precision, and out as the optional output destination, allowing the wrapper to allocate a new array when out is None or write into out when out is provided; store the returned array as rounded_result. RESULT rounded_result]
+            [COMMAND Return rounded_result to the caller. RESULT rounded_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the dot product of this object with b, propagating units and wrapping the result through self._wrap_function." dot]
+    [INPUTS]
+        <REF> b </REF>: object "The object or array to compute the dot product with; its unit attribute is used if present."
+        <REF> out </REF>: object or None "Optional output array where the result is written."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The result returned by self._wrap_function, representing the dot product with the computed unit."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute result_unit as self.unit multiplied by b.unit if b has a unit attribute; otherwise multiply self.unit by dimensionless_unscaled. RESULT result_unit]
+            [COMMAND Call self._wrap_function with np.dot, b, out, and unit set to result_unit, and return the resulting value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError whenever called, indicating that truth-value evaluation of quantities is not supported and advising the user to evaluate the array with q.value.all(...)." all]
+    [INPUTS]
+        <REF> axis </REF>: optional "Axis parameter accepted for interface compatibility; not used because the method always raises."
+        <REF> out </REF>: optional "Output parameter accepted for interface compatibility; not used because the method always raises."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'cannot evaluate truth value of quantities. Evaluate array with q.value.all(...)' RESULT exception_raised]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The all method is invoked]
+        [LOG "cannot evaluate truth value of quantities. Evaluate array with q.value.all(...)"]
+        [THROW NotImplementedError "Indicates that truth-value evaluation of quantities is unsupported."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError when called, preventing direct truth-value evaluation of a quantity and directing callers to evaluate the underlying array with q.value.any(...)." any]
+    [INPUTS]
+        <REF> self </REF>: quantity object "The quantity whose truth value is being tested."
+        <REF> axis </REF>: int, tuple of ints, or None "Unused axis parameter accepted for interface compatibility."
+        <REF> out </REF>: ndarray or None "Unused output parameter accepted for interface compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to evaluate the truth value of the quantity represented by self using any(). RESULT _no_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The any() method is called on a quantity.]
+        [LOG "cannot evaluate truth value of quantities. Evaluate array with q.value.any(...)"]
+        [THROW NotImplementedError "Indicates that truth-value evaluation of quantities is not supported; the caller should call q.value.any(...) on the underlying array."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Wraps numpy.diff with the specified difference order n and axis using self._wrap_function and returns the wrapped callable." diff]
+    [INPUTS]
+        <REF> self </REF>: object "Object instance supplying the _wrap_function method."
+        <REF> n </REF>: integer "Number of times values are differenced; defaults to 1."
+        <REF> axis </REF>: integer "Axis along which the difference is computed; defaults to -1."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "Wrapped callable produced by _wrap_function that applies numpy.diff with the given n and axis."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._wrap_function with np.diff, n defaulting to 1, and axis defaulting to -1, then return the resulting wrapped callable. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes consecutive differences across the flattened input masked array, optionally prepending to_begin and/or appending to_end, and returns the result as a masked array." ediff1d]
+    [INPUTS]
+        <REF> self </REF>: MaskedArray "Incoming masked array on which consecutive differences are computed."
+        <REF> to_end </REF>: array_like or scalar, optional "Value or values to append to the end of the difference result; default is None."
+        <REF> to_begin </REF>: array_like or scalar, optional "Value or values to prepend to the beginning of the difference result; default is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: MaskedArray "Masked array of consecutive differences, including any supplied boundary values, with mask propagation preserved."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._wrap_function(np.ediff1d, to_end, to_begin), forwarding to_end and to_begin to compute flattened consecutive differences; if to_begin is not None it is prepended, and if to_end is not None it is appended, then wrap the output as a masked array. RESULT wrapped_result]
+            [COMMAND Return wrapped_result as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the sum of array elements treating NaN as zero by delegating to the wrapped numpy nansum function with the provided axis, out, and keepdims." nansum]
+    [INPUTS]
+        <REF> axis </REF>: int, tuple of ints, or None "Axis or axes along which the sum is computed; None means reduce over all dimensions."
+        <REF> out </REF>: ndarray or None "Optional output array into which the result is written; None allocates a new array."
+        <REF> keepdims </REF>: bool "If True, reduced dimensions are kept with size 1 in the result."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ndarray or scalar "The sum of non-NaN elements computed by numpy.nansum through the wrapper."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._wrap_function with func=np.nansum, axis=axis, out=out, and keepdims=keepdims, capturing the returned value. RESULT wrapped_result]
+            [COMMAND Return wrapped_result as the method's result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Inserts values before the given indices along a specified axis into the quantity's underlying array and returns a new Quantity object with the inserted values." insert]
+    [INPUTS]
+        <REF> obj </REF>: int, slice, or sequence of ints "Index or indices before which values are inserted."
+        <REF> values </REF>: array-like "Values to insert, converted to the quantity's unit if needed; must be consistent with the quantity's unit."
+        <REF> axis </REF>: int or None "Axis along which to insert values; if None, the quantity array is flattened before insertion."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> out </REF>: astropy.units.Quantity "A new Quantity array with values inserted; the original quantity is not modified."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert values to the quantity's own unit using self._to_own_unit(values). RESULT converted_values]
+            [COMMAND Insert converted_values into self.value before obj along axis using numpy.insert; if axis is None, self.value is flattened before insertion. RESULT out_array]
+            [COMMAND Return a new Quantity view of out_array using self._new_view(out_array). RESULT out_quantity]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS SpecificTypeQuantity
+
+[DEFINE_WORKER: "Sets a unit on the instance after verifying it is not None and is equivalent to the required unit, raising UnitTypeError for invalid input and otherwise delegating to the parent _set_unit method." _set_unit]
+    [INPUTS]
+        <REF> unit </REF>: Optional[Unit] "The unit to set on this instance; may be None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether unit is None; if it is, short-circuit the validation condition to true and do not call unit.is_equivalent. RESULT unit_is_none]
+            [COMMAND Only when unit is not None, call unit.is_equivalent(self._equivalent_unit) to determine whether the supplied unit is equivalent to the required unit. RESULT is_equivalent]
+            [COMMAND If the validation fails because unit is None or is_equivalent is false, construct the UnitTypeError message with the instance class name, self._equivalent_unit, and the appropriate missing or incompatible suffix, then raise UnitTypeError. RESULT unit_type_error_raised]
+            [COMMAND If the validation succeeds, call super()._set_unit(unit) to delegate to the parent class unit assignment logic. RESULT parent_unit_set]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: unit is None (short-circuiting before equivalence check), or unit is not None and unit.is_equivalent(self._equivalent_unit) returns false]
+        [LOG "UnitTypeError raised with message: {type(self).__name__} instances require units equivalent to '{self._equivalent_unit}', plus suffix ', but no unit was given.' if unit is None, otherwise ', so cannot set it to {unit}.'"]
+        [THROW UnitTypeError "Indicates that the supplied unit is missing or not equivalent to the required unit stored in self._equivalent_unit."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compares two arrays element-wise for approximate equality, using the helper _unquantify_allclose_arguments to prepare positional arguments before delegating to numpy.isclose." isclose]
+    [INPUTS]
+        <REF> a </REF>: array-like or Quantity "First array or quantity to compare."
+        <REF> b </REF>: array-like or Quantity "Second array or quantity to compare."
+        <REF> rtol </REF>: float "Relative tolerance; defaults to 1.e-5."
+        <REF> atol </REF>: float or None "Absolute tolerance; defaults to None and is handled by the argument unquantification helper."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to numpy.isclose, such as equal_nan."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool or ndarray of bool "Element-wise result of numpy.isclose within the given tolerances."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _unquantify_allclose_arguments(a, b, rtol, atol) to convert quantity-aware inputs into positional arguments suitable for numpy.isclose. RESULT unquantified_args]
+            [COMMAND Return numpy.isclose(*unquantified_args, **kwargs), forwarding all additional keyword arguments unchanged. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compares two arrays element-wise within relative and absolute tolerances after normalizing potentially unitful arguments through a private helper, then delegates the comparison to numpy.allclose." allclose]
+    [INPUTS]
+        <REF> a </REF>: array_like or Quantity "First array or quantity to compare."
+        <REF> b </REF>: array_like or Quantity "Second array or quantity to compare."
+        <REF> rtol </REF>: float or Quantity "Relative tolerance parameter; default is 1e-5."
+        <REF> atol </REF>: float or Quantity or None "Absolute tolerance parameter; default is None."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to numpy.allclose, such as equal_nan."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the arrays are equal within the specified tolerances, otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _unquantify_allclose_arguments(a, b, rtol, atol) to normalize the potentially unitful comparison and tolerance arguments into a sequence of positional arguments for numpy.allclose. RESULT unquantified_args]
+            [COMMAND Call numpy.allclose(*unquantified_args, **kwargs) to determine whether the arrays are element-wise equal within the relative and absolute tolerances. RESULT comparison_result]
+            [COMMAND Return comparison_result immediately as the boolean result of allclose. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the allclose arguments into raw numeric magnitudes by wrapping actual, desired, rtol, and atol in Quantity, converting desired and atol to actual's unit, requiring rtol to be dimensionless, and returning their values." _unquantify_allclose_arguments]
+    [INPUTS]
+        <REF> actual </REF>: Quantity or numeric value "The actual quantity to compare; it is wrapped in Quantity and used as the reference unit."
+        <REF> desired </REF>: Quantity or numeric value "The desired quantity to compare; it is converted to actual.unit before its value is extracted."
+        <REF> rtol </REF>: Quantity or numeric value "Relative tolerance; it is wrapped in Quantity and must be convertible to dimensionless_unscaled."
+        <REF> atol </REF>: Quantity, numeric value, or None "Absolute tolerance; None becomes Quantity(0), otherwise it is converted to actual.unit."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple of scalar or array numeric values "Returns (actual.value, desired.value, rtol.value, atol.value) after unit normalization."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert actual to a Quantity using Quantity(actual, subok=True, copy=False). RESULT actual]
+            [COMMAND Convert desired to a Quantity using Quantity(desired, subok=True, copy=False). RESULT desired]
+            [COMMAND Convert desired to actual.unit by calling desired.to(actual.unit). RESULT desired]
+            [COMMAND Apply the atol normalization alternatives: if atol is None, use the 'atol is None' alternative; otherwise use the 'atol is not None' alternative, then assign the normalized value to atol. RESULT atol]
+            [COMMAND Convert rtol to a Quantity using Quantity(rtol, subok=True, copy=False). RESULT rtol]
+            [COMMAND Convert rtol to dimensionless_unscaled by calling rtol.to(dimensionless_unscaled). RESULT rtol]
+            [COMMAND Return the tuple (actual.value, desired.value, rtol.value, atol.value). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: atol is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set atol to Quantity(0), the default absolute tolerance of zero. RESULT atol]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: atol is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert atol to a Quantity using Quantity(atol, subok=True, copy=False). RESULT atol]
+            [COMMAND Convert atol to actual.unit by calling atol.to(actual.unit). RESULT atol]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: desired.to(actual.unit) raises UnitsError because the units of desired and actual are not convertible.]
+        [LOG "Units for 'desired' (desired.unit) and 'actual' (actual.unit) are not convertible"]
+        [THROW UnitsError "Raises a UnitsError stating that the units for 'desired' and 'actual' are not convertible."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: atol.to(actual.unit) raises UnitsError because the units of atol and actual are not convertible.]
+        [LOG "Units for 'atol' (atol.unit) and 'actual' (actual.unit) are not convertible"]
+        [THROW UnitsError "Raises a UnitsError stating that the units for 'atol' and 'actual' are not convertible."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: rtol.to(dimensionless_unscaled) raises any Exception, indicating that rtol is not dimensionless.]
+        [LOG "`rtol` should be dimensionless"]
+        [THROW UnitsError "Raises a UnitsError stating that rtol should be dimensionless."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

@@ -1,0 +1,104 @@
+class BigNumCalculator:
+    def add(self, num1: str, num2: str) -> str:
+        max_length = max(len(num1), len(num2))
+        num1 = num1.zfill(max_length)
+        num2 = num2.zfill(max_length)
+        carry = 0
+        result = []
+
+        for i in range(max_length - 1, -1, -1):
+            digit_sum = int(num1[i]) + int(num2[i]) + carry
+            carry = digit_sum // 10
+            digit = digit_sum % 10
+            result.insert(0, str(digit))
+
+        if carry > 0:
+            result.insert(0, str(carry))
+
+        return "".join(result)
+
+    def multiply(self, num1: str, num2: str) -> str:
+        len1 = len(num1)
+        len2 = len(num2)
+        result = [0] * (len1 + len2)
+
+        for i in range(len1 - 1, -1, -1):
+            for j in range(len2 - 1, -1, -1):
+                mul = int(num1[i]) * int(num2[j])
+                p1 = i + j
+                p2 = i + j + 1
+                total = mul + result[p2]
+                result[p1] += total // 10
+                result[p2] = total % 10
+
+        start = 0
+        while start < len(result) - 1 and result[start] == 0:
+            start += 1
+
+        return "".join(str(digit) for digit in result[start:])
+
+    def subtract(self, num1: str, num2: str) -> str:
+        negative = False
+
+        if len(num1) < len(num2):
+            num1, num2 = num2, num1
+            negative = True
+        elif len(num1) > len(num2):
+            negative = False
+        elif num1 < num2:
+            num1, num2 = num2, num1
+            negative = True
+        else:
+            negative = False
+
+        max_length = max(len(num1), len(num2))
+        num1 = num1.zfill(max_length)
+        num2 = num2.zfill(max_length)
+        borrow = 0
+        result = []
+
+        for i in range(max_length - 1, -1, -1):
+            digit_diff = int(num1[i]) - int(num2[i]) - borrow
+
+            if digit_diff < 0:
+                digit_diff += 10
+                borrow = 1
+            else:
+                borrow = 0
+
+            result.insert(0, str(digit_diff))
+
+        while len(result) > 1 and result[0] == "0":
+            result.pop(0)
+
+        if negative:
+            result.insert(0, "-")
+
+        return "".join(result)
+
+import unittest
+
+class BigNumCalculatorTestAdd(unittest.TestCase):
+    def test_add(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.add("12345678901234567890", "98765432109876543210"), "111111111011111111100")
+
+    def test_add_2(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.add("123456789012345678922", "98765432109876543210"), "222222221122222222132")
+
+    def test_add_3(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.add("123456789012345678934", "98765432109876543210"), "222222221122222222144")
+
+    def test_add_4(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.add("123456789012345678946", "98765432109876543210"), "222222221122222222156")
+
+    def test_add_5(self):
+        bigNum = BigNumCalculator()
+        self.assertEqual(bigNum.add("123456789012345678958", "98765432109876543210"), "222222221122222222168")
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

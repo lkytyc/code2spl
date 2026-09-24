@@ -1,0 +1,114 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: DiscountStrategy
+# Fields: __total, cart, promotion, customer
+# Calls: __init__→total, due→promotion
+
+## __init__(customer: object, cart: object)
+Summary: Initializes an order object by binding the customer, cart, and optional promotion to instance attributes, then immediately computes and caches the total price via self.total().
+#   customer: object — The customer associated with this order; no default, caller must supply a value or None
+#   cart: object — The cart containing line items and quantities for the order; no default, caller must supply a value or None
+1. Bind the customer parameter to self.customer → self.customer
+2. Bind the cart parameter to self.cart → self.cart
+3. Bind the promotion parameter to self.promotion → self.promotion
+4. Call self.total() — which reads self.cart and self.promotion already set above — and store the returned value in the name-mangled private attribute self.__total → self.__total
+   ? self.total() receives no active promotion and must compute and return the base cart total without applying any discount
+   ? self.total() may return 0, raise an exception, or produce undefined behavior depending on its implementation; callers should ensure cart is a valid non-empty object
+
+## BulkItemPromo(order: object) → float
+Summary: Calculates the total bulk-purchase discount for an order by summing 10% of the line total for every cart item whose quantity is at least 20.
+#   order: object — Order object containing a cart attribute, which is a list of item dictionaries each holding at minimum a quantity (numeric) and price (numeric) key
+#   → discount: float — Total discount amount accumulated across all qualifying cart items; returns 0 when no item meets the minimum quantity threshold
+1. Initialize local variable discount to the integer literal 0, establishing a safe default of no discount before any cart items are evaluated → discount
+2. Iterate over every item in order.cart in sequence; for each item evaluate whether item quantity is greater than or equal to 20 (inclusive boundary: quantity of exactly 20 qualifies, 19 does not) → item
+3. Within the for loop over order.cart, when the condition item['quantity'] >= 20 is true, compute the line discount as item['quantity'] multiplied by item['price'] multiplied by the constant 0.1 (representing exactly 10%), then accumulate the result into discount using an in-place addition; when the condition is false, skip the item entirely with no else branch and no contribution to discount → discount
+4. After all items in order.cart have been evaluated, return the final value of discount representing the total bulk discount earned across the entire cart → discount
+   ? The for loop body never executes or the if condition is never true; discount retains its initial value of 0 and is returned unchanged
+
+## FidelityPromo(order: object) → numeric
+Summary: Returns a 5% discount on the order total if the customer's fidelity score is at least 1000, otherwise returns zero.
+#   order: object — An order object exposing a total() method and a customer dictionary with a 'fidelity' key
+#   → discount: numeric — Either 5% of the order total as a float, or the integer 0 when the fidelity condition is not met
+1. Read order.customer['fidelity']; if the key is absent a KeyError is raised before any further evaluation → fidelity_score
+2. Evaluate whether fidelity_score is greater than or equal to 1000 (boundary is inclusive: exactly 1000 qualifies) → fidelity_qualifies
+3. If fidelity_qualifies is true, call order.total() and multiply the result by 0.05 to produce a 5% discount; order.total() is not called on the false branch → discount
+4. If fidelity_qualifies is false, set discount to the integer literal 0 without calling order.total() → discount
+5. Return discount directly to the caller without assigning it to an intermediate variable → return_value
+   ? Skip the order.total() call entirely and return the integer 0; any side effects of order.total() are not triggered
+   ! log: "Dictionary lookup order.customer['fidelity'] raises KeyError because the key is not present; no default fallback exists in this method"
+   ! raise: KeyError "Raised by Python when 'fidelity' is not a key in the order.customer dictionary"
+
+## LargeOrderPromo(order: object) → number
+Summary: Returns a 7% discount on the order total when the cart contains at least 10 distinct products, otherwise returns 0.
+#   order: object — An order object exposing a cart collection of item dicts (each with a 'product' key) and a total() method returning the monetary total
+#   → result: number — Discount amount equal to 7% of the order total when the distinct-product threshold is met, or 0 when it is not
+1. Iterate over order.cart and extract the 'product' value from each item dict, collecting results into a set so that duplicate product values are collapsed → unique_product_set
+2. Compute the count of distinct products by applying len() to unique_product_set → distinct_product_count
+3. Evaluate whether distinct_product_count is greater than or equal to 10 (inclusive boundary) → threshold_met
+4. If threshold_met is true, call order.total() and multiply the returned value by 0.07 to produce the discount amount; if threshold_met is false, short-circuit and produce 0 without calling order.total() → discount_amount
+5. Return discount_amount as the function result → result
+   ? Short-circuit the conditional: skip the call to order.total() and return 0 immediately
+   ? Short-circuit the conditional: skip the call to order.total() and return 0, because the threshold guards product variety, not cart line count
+
+## due() → numeric
+Summary: Computes the amount due by subtracting an optional promotion-based discount from the order total, where the discount is zero if no promotion is set or the result of calling the promotion strategy with the current order.
+#   → result: numeric — The final amount due: the order total minus the computed discount
+1. Check whether self.promotion is None → promotion_check
+2. If self.promotion is None, set discount to the integer constant 0 → discount
+3. If self.promotion is not None, call self.promotion(self) — treating the promotion attribute as a callable strategy function that receives the current order object — and assign its return value to discount → discount
+4. Subtract discount from self.__total and return the resulting value → result
+   ? Set discount to 0
+   ? Return self.__total minus 0, which equals self.__total
+   ? Invoke self.promotion(self) to compute a context-dependent discount amount based on the current order
+   ? Return self.__total minus the computed discount
+
+## total(self: object)
+Summary: Computes the cart total by summing the product of quantity and price for each item, assigns the result to the private instance attribute, and returns it.
+#   self: object — The instance owning the cart; must have a 'cart' attribute that is an iterable of dicts each containing 'quantity' and 'price' keys
+1. Iterate over every dict in self.cart using a generator expression, yielding the product of item['quantity'] and item['price'] for each element; pass the generator to sum() with no explicit start argument so the implicit start value is integer 0 → _cart_total
+2. Assign the accumulated sum returned by sum() to the name-mangled private attribute self.__total, unconditionally overwriting any previously stored value → self.__total
+3. Return self.__total to the caller → return_value
+   ? sum() receives an exhausted generator and returns its default start value of integer 0; assign 0 to self.__total and return 0
+   ? Python's numeric type coercion rules widen the product and the running sum to the broader type (float or Decimal); assign the widened result to self.__total and return it
+   ? The negative product is accumulated without any guard; self.__total may be negative; assign and return the result as normal
+   ! log: "AttributeError raised during iteration setup because self.cart is accessed before being defined on the instance"
+   ! raise: AttributeError "Raised implicitly by Python when self.cart is not present on the instance; the method does not catch or handle this error"
+   ! log: "KeyError raised during generator evaluation when dict lookup fails for a required key"
+   ! raise: KeyError "Raised implicitly by Python on dict key access failure; the method does not catch or handle this error"
+

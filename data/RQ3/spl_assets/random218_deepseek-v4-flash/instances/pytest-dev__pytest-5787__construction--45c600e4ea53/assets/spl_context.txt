@@ -1,0 +1,583 @@
+# FILE: src/_pytest/reports.py
+# CLASS BaseReport
+
+[DEFINE_WORKER: "Initializes an object by copying all supplied keyword arguments into the instance attribute dictionary, creating or overwriting attributes." __init__]
+    [INPUTS]
+        <REF> kw </REF>: dict "Keyword arguments collected into a dictionary; each key becomes a new or updated attribute on the instance."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Collect all keyword arguments passed to the constructor into the dictionary kw. RESULT kw]
+            [COMMAND Merge every key-value pair from kw into the instance attribute dictionary self.__dict__, creating new attributes and overwriting existing ones. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders an object's long-form failure/exception representation to a terminal writer, adding slave node information when available, delegating to a specialized toterminal renderer when present, and falling back to a direct line write with a Unicode safety placeholder." toterminal]
+    [INPUTS]
+        <REF> self </REF>: object "The object whose optional node attribute and longrepr attribute are rendered."
+        <REF> out </REF>: terminal_writer "The output stream or terminal object that provides a line() method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self has an attribute named 'node', call out.line(getslaveinfoline(self.node)). RESULT out]
+            [COMMAND Assign the value of self.longrepr to the local variable longrepr. RESULT longrepr]
+            [COMMAND If longrepr is None, return immediately without writing any further output. RESULT return]
+            [COMMAND If longrepr has an attribute named 'toterminal', call longrepr.toterminal(out). RESULT out]
+            [COMMAND If longrepr does not have an attribute named 'toterminal', call out.line(longrepr). RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: While calling out.line(longrepr) in the else branch, a UnicodeEncodeError is raised.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the UnicodeEncodeError and call out.line('<unprintable longrepr>') to write the fixed placeholder string instead. RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over self.sections and yields a (prefix, content) pair for each section whose name starts with the given prefix." get_sections]
+    [INPUTS]
+        <REF> self </REF>: object "The object containing the sections list of (name, content) pairs."
+        <REF> prefix </REF>: str "The string prefix used to filter section names."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator_result </REF>: Generator[Tuple[str, object], None, None] "Yields (prefix, content) for each matching section; the yielded first element is the original prefix, not the section name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each item in self.sections, unpacking the item into name and content. RESULT section_pair]
+            [COMMAND Within the loop over self.sections, determine whether name.startswith(prefix) is true, remembering that an empty prefix matches every name, a prefix longer than name never matches, and matching is case-sensitive. RESULT is_match]
+            [COMMAND Within the loop over self.sections, if is_match is true, yield the tuple (prefix, content), where the first element is the original prefix argument rather than name; then suspend generator execution and resume with the next item. RESULT yielded_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the full plain-text representation of longrepr by rendering it through an in-memory TerminalWriter with markup disabled and stripping surrounding whitespace." longreprtext]
+    [INPUTS]
+        <REF> self </REF>: object "The object that provides longrepr and the toterminal method used to render its representation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The stripped full string representation of longrepr."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a TerminalWriter instance configured with stringio=True so output is captured in memory, and assign it to tw. RESULT tw]
+            [COMMAND Disable markup on the TerminalWriter by setting tw.hasmarkup to False. RESULT tw.hasmarkup]
+            [COMMAND Write the longrepr representation into the writer by calling self.toterminal(tw). RESULT None]
+            [COMMAND Retrieve the complete captured text from tw.stringio using getvalue() and assign it to exc. RESULT exc]
+            [COMMAND Return exc.strip(), which is the full text with leading and trailing whitespace removed. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns captured log lines as a single string by joining the content values from the 'Captured log' sections while ignoring their prefixes." caplog]
+    [INPUTS]
+        <REF> self </REF>: object "Object providing get_sections method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Captured log content lines joined by newline characters; empty string when there are no captured log sections."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_sections("Captured log") to obtain an iterable of (prefix, content) tuples. RESULT sections]
+            [COMMAND Generate the sequence of content values from each (prefix, content) tuple in sections, ignoring prefix. RESULT contents]
+            [COMMAND Join the generated content values with a newline character as the separator. RESULT joined_log]
+            [COMMAND Return joined_log to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the combined text of all captured stdout sections by reading each section's content and joining it with an empty separator, producing an empty string when no captured stdout content exists." capstdout]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> captured_stdout_text </REF>: string "Concatenation of the content strings from every 'Captured stdout' section, in the order they are returned; empty string if there are no such sections."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_sections("Captured stdout") to obtain an iterable of (prefix, content) tuples for the section name "Captured stdout", preserving the order returned. RESULT sections]
+            [COMMAND Within the argument to "".join(...), iterate over sections, unpack each tuple into prefix and content, ignore prefix, and yield each content string in iteration order. RESULT content_strings]
+            [COMMAND Join content_strings with the empty separator "" to produce a single string; if no content strings are yielded, the result is the empty string. RESULT joined_text]
+            [COMMAND Return joined_text to the caller as the captured stdout text. RESULT captured_stdout_text]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the captured stderr text by concatenating the content parts from every tuple yielded by self.get_sections('Captured stderr') in iteration order." capstderr]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> captured_stderr_text </REF>: string "The concatenated content strings from all captured stderr sections, or an empty string if there are no such sections."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_sections("Captured stderr") to retrieve the iterable of (prefix, content) tuples from the captured stderr sections. RESULT sections]
+            [COMMAND Iterate over each (prefix, content) tuple in sections, unpacking the tuple and yielding only content while ignoring prefix. RESULT content_generator]
+            [COMMAND Join all yielded content strings in iteration order with an empty separator using "".join(content_generator). RESULT joined_content]
+            [COMMAND Return joined_content; if there are no captured stderr sections, content_generator yields nothing and the join returns an empty string. RESULT captured_stderr_text]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the first component of the nodeid string when split on the literal delimiter '::'." fspath]
+    [INPUTS]
+        <REF> self </REF>: object "The object instance exposing the nodeid string attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The first component of self.nodeid delimited by '::'; if the delimiter is absent, the entire nodeid string is returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the nodeid attribute of self. RESULT nodeid_value]
+            [COMMAND Split nodeid_value on the delimiter "::" and take the first substring. RESULT fspath_result]
+            [COMMAND Return fspath_result as the method result. RESULT fspath_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True to indicate that this report should be counted towards the summary totals displayed at the end of a test session." count_towards_summary]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "Always True, meaning the report contributes to the session summary totals such as '1 passed, 1 failure, etc'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean literal True from count_towards_summary, without using any input values. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the domain component of the report's location as the head line when a location is present, otherwise falls through and returns None." head_line]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> head_line_result </REF>: str or None "The domain component from self.location when location is not None; otherwise None by implicit fall-through."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.location is not None. RESULT location_is_set]
+            [COMMAND In the true branch, unpack self.location into fspath, lineno, and domain; fspath and lineno are unused. RESULT unpacked_location]
+            [COMMAND Return domain immediately, exiting head_line as an early return. RESULT head_line_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.location is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the unpack and return block, fall through past the if statement, and return None. RESULT head_line_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves the verbose test-status word by calling pytest_report_teststatus with the current report and config, then returns the verbose component of the unpacked result." _get_verbose_word]
+    [INPUTS]
+        <REF> self </REF>: object "The test report instance passed to the hook as the report argument."
+        <REF> config </REF>: object "The pytest configuration object whose hook system provides pytest_report_teststatus."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> verbose </REF>: string "The verbose status text returned by pytest_report_teststatus."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call config.hook.pytest_report_teststatus with keyword arguments report=self and config=config, and unpack its returned 3-element iterable into local variables _category, _short, and verbose. RESULT _category, _short, verbose]
+            [COMMAND Return the value of verbose as the method result. RESULT verbose]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Serializes the report instance's attribute dictionary by converting longrepr into a disassembled plain-data representation when possible, stringifying path-like values, and replacing a non-path-like result entry with None." _to_json]
+    [INPUTS]
+        <REF> self </REF>: object "The report instance whose __dict__ is serialized; must have longrepr and may contain path-like or result attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> d </REF>: dict "A shallow copy of self.__dict__ with longrepr serialized according to its attributes, path-like values converted to strings, and any non-path-like 'result' entry set to None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested helper function disassembled_report(rep) that copies rep.longrepr.reprtraceback.__dict__ and rep.longrepr.reprcrash.__dict__, converts each traceback entry in reprtraceback['reprentries'] into a dict with keys 'type' and 'data', recursively converts any data value that has a __dict__ into value.__dict__.copy(), stores the converted entries back in reprtraceback['reprentries'], and returns a dict containing 'reprcrash', 'reprtraceback', and 'sections'. RESULT disassembled_report]
+            [COMMAND Make a shallow copy of self.__dict__ and store it in d. RESULT d]
+            [COMMAND Choose the serialized value for d['longrepr'] based on the presence of toterminal, reprtraceback, and reprcrash on self.longrepr. RESULT d]
+            [COMMAND For each key name in d, if the value d[name] is an instance of py.path.local or Path, set d[name] to str(d[name]); otherwise, if name equals 'result', set d[name] to None. RESULT d]
+            [COMMAND Return d. RESULT d]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.longrepr has a toterminal attribute and has both reprtraceback and reprcrash attributes.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign disassembled_report(self) to d['longrepr']. RESULT d]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.longrepr has a toterminal attribute but does not have both reprtraceback and reprcrash attributes.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign str(self.longrepr) to d['longrepr']. RESULT d]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.longrepr does not have a toterminal attribute.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.longrepr to d['longrepr']. RESULT d]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deserializes a serialized longrepr dictionary into structured ReprExceptionInfo, ReprTraceback, ReprEntry, and ReprEntryNative objects and returns a TestReport or CollectReport instance via cls(**reportdict)." _from_json]
+    [INPUTS]
+        <REF> cls </REF>: class "The calling class used to construct the report; either TestReport or CollectReport."
+        <REF> reportdict </REF>: dict "Serialized report dictionary containing optional longrepr traceback/crash data and all constructor fields for cls."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: TestReport or CollectReport "A new report instance constructed from the deserialized reportdict."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether reportdict['longrepr'] is truthy. RESULT longrepr_present]
+            [COMMAND If reportdict['longrepr'] is truthy, evaluate whether both 'reprcrash' and 'reprtraceback' are keys in reportdict['longrepr']. RESULT longrepr_has_required_keys]
+            [COMMAND If the outer longrepr check and the key-presence check both pass, extract reprtraceback from reportdict['longrepr']['reprtraceback'] and reprcrash from reportdict['longrepr']['reprcrash']. RESULT reprtraceback_and_reprcrash]
+            [COMMAND In the same passing branch, initialize unserialized_entries to an empty list and reprentry to None. RESULT unserialized_entries_and_reprentry]
+            [COMMAND In the passing branch, for each entry_data in reprtraceback['reprentries'], extract data from entry_data['data'] and entry_type from entry_data['type']. RESULT data_and_entry_type]
+            [COMMAND Within the loop over reprentries, if entry_type equals 'ReprEntry', initialize reprfuncargs, reprfileloc, and reprlocals to None. RESULT optional_entry_fields]
+            [COMMAND Within the ReprEntry branch, if data['reprfuncargs'] is truthy, construct ReprFuncArgs(**data['reprfuncargs']) and assign it to reprfuncargs; otherwise leave reprfuncargs as None. RESULT reprfuncargs]
+            [COMMAND Within the ReprEntry branch, if data['reprfileloc'] is truthy, construct ReprFileLocation(**data['reprfileloc']) and assign it to reprfileloc; otherwise leave reprfileloc as None. RESULT reprfileloc]
+            [COMMAND Within the ReprEntry branch, if data['reprlocals'] is truthy, construct ReprLocals(data['reprlocals']['lines']) and assign it to reprlocals; otherwise leave reprlocals as None. RESULT reprlocals]
+            [COMMAND Within the ReprEntry branch, construct reprentry as ReprEntry(lines=data['lines'], reprfuncargs=reprfuncargs, reprlocals=reprlocals, filelocrepr=reprfileloc, style=data['style']). RESULT reprentry]
+            [COMMAND Within the loop over reprentries, if entry_type equals 'ReprEntryNative', construct reprentry as ReprEntryNative(data['lines']). RESULT reprentry]
+            [COMMAND Within the loop over reprentries, if entry_type is neither 'ReprEntry' nor 'ReprEntryNative', call _report_unserialization_failure(entry_type, cls, reportdict). RESULT failure_reported]
+            [COMMAND Within the loop over reprentries, after the if/elif/else dispatch, append reprentry to unserialized_entries. RESULT unserialized_entries]
+            [COMMAND After finishing the loop over reprentries, assign unserialized_entries to reprtraceback['reprentries']. RESULT reprtraceback]
+            [COMMAND In the same passing branch, construct exception_info as ReprExceptionInfo(reprtraceback=ReprTraceback(**reprtraceback), reprcrash=ReprFileLocation(**reprcrash)). RESULT exception_info]
+            [COMMAND In the same passing branch, for each section in reportdict['longrepr']['sections'], call exception_info.addsection(*section). RESULT exception_info]
+            [COMMAND In the same passing branch, set reportdict['longrepr'] to exception_info. RESULT reportdict]
+            [COMMAND Return cls(**reportdict) whether or not the longrepr conversion branch was entered. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS TestReport
+
+[DEFINE_WORKER: "Initializes a report object by assigning test metadata, shallow-copying user_properties and sections into lists, and merging extra keyword arguments into the instance dictionary." __init__]
+    [INPUTS]
+        <REF> nodeid </REF>: string "Normalized collection node id identifying the test item."
+        <REF> location </REF>: tuple "Tuple of (filesystem path, line number, domain info) indicating the actual location of the test item."
+        <REF> keywords </REF>: dict "Dictionary mapping names to keywords and markers associated with the test invocation."
+        <REF> outcome </REF>: string "Test outcome, one of 'passed', 'failed', or 'skipped'."
+        <REF> longrepr </REF>: object "None or a failure representation."
+        <REF> when </REF>: string "Run phase, one of 'setup', 'call', or 'teardown'."
+        <REF> sections </REF>: iterable "Iterable of (str, str) pairs of extra marshallable information; defaults to an empty tuple."
+        <REF> duration </REF>: number "Time in seconds it took to run the test; defaults to 0."
+        <REF> user_properties </REF>: iterable_or_none "Iterable of (name, value) pairs, or None; defaults to None."
+        <REF> extra </REF>: dict "Additional keyword arguments to store as instance attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the nodeid parameter to self.nodeid. RESULT self.nodeid]
+            [COMMAND Assign the location parameter to self.location. RESULT self.location]
+            [COMMAND Assign the keywords parameter to self.keywords. RESULT self.keywords]
+            [COMMAND Assign the outcome parameter to self.outcome. RESULT self.outcome]
+            [COMMAND Assign the longrepr parameter to self.longrepr. RESULT self.longrepr]
+            [COMMAND Assign the when parameter to self.when. RESULT self.when]
+            [COMMAND If user_properties is truthy, create a new list from it; otherwise use an empty list. Assign that list to self.user_properties. RESULT self.user_properties]
+            [COMMAND Create a new list by iterating over sections and assign it to self.sections. RESULT self.sections]
+            [COMMAND Assign the duration parameter to self.duration. RESULT self.duration]
+            [COMMAND Update self.__dict__ with the extra keyword arguments, overwriting any existing instance attributes with the same keys. RESULT self.__dict__]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Factory method that creates a TestReport from a test item and call info, classifying the result as passed, failed, or skipped and capturing duration, keywords, exception representation, and captured sections." from_item_and_call]
+    [INPUTS]
+        <REF> cls </REF>: class "The TestReport class used to construct the new report instance via this classmethod."
+        <REF> item </REF>: test item object "The test item providing nodeid, location, keywords, user_properties, config, and failure reporting methods."
+        <REF> call </REF>: CallInfo object "The call result providing when, start, stop, excinfo, and phase information."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> report </REF>: TestReport instance "A new TestReport populated with the standard item and call information."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set when to call.when RESULT when]
+            [COMMAND Set duration to call.stop minus call.start RESULT duration]
+            [COMMAND Build keywords as a dictionary mapping each key x in item.keywords to the constant 1 RESULT keywords]
+            [COMMAND Set excinfo to call.excinfo RESULT excinfo]
+            [COMMAND Initialize sections as an empty list RESULT sections]
+            [COMMAND Classify outcome and longrepr: if call.excinfo is falsy, set outcome to 'passed' and longrepr to None; otherwise use the matching exception classification alternative flow RESULT outcome_longrepr]
+            [COMMAND For each rwhen, key, content in item._report_sections, append the tuple ('Captured {} {}'.format(key, rwhen), content) to sections RESULT sections]
+            [COMMAND Return a new instance of cls with item.nodeid, item.location, keywords, outcome, longrepr, when, sections, duration, and user_properties equal to item.user_properties RESULT report]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: call.excinfo is truthy and excinfo is not an instance of ExceptionInfo]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set outcome to 'failed' RESULT outcome]
+            [COMMAND Set longrepr to excinfo RESULT longrepr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: call.excinfo is truthy, excinfo is an instance of ExceptionInfo, and excinfo.errisinstance(skip.Exception) is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set outcome to 'skipped' RESULT outcome]
+            [COMMAND Set r to excinfo._getreprcrash() RESULT r]
+            [COMMAND Set longrepr to (str(r.path), r.lineno, r.message) RESULT longrepr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: call.excinfo is truthy, excinfo is an instance of ExceptionInfo, excinfo is not a skip.Exception, and call.when equals 'call']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set outcome to 'failed' RESULT outcome]
+            [COMMAND Set longrepr to item.repr_failure(excinfo) RESULT longrepr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: call.excinfo is truthy, excinfo is an instance of ExceptionInfo, excinfo is not a skip.Exception, and call.when does not equal 'call' (setup or teardown phase)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set outcome to 'failed' RESULT outcome]
+            [COMMAND Set longrepr to item._repr_failure_py(excinfo, style=item.config.getoption('tbstyle', 'auto')) RESULT longrepr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS CollectReport
+
+[DEFINE_WORKER: "Initializes a test result object by storing the provided nodeid, outcome, longrepr, and result, converting sections to a list, and adding extra keyword arguments as instance attributes." __init__]
+    [INPUTS]
+        <REF> nodeid </REF>: Any "Identifier for the test node."
+        <REF> outcome </REF>: str "Outcome category of the test."
+        <REF> longrepr </REF>: Any "Long-form representation of the test outcome or failure details."
+        <REF> result </REF>: Any "Test result payload; if falsy, it is replaced by a fresh empty list."
+        <REF> sections </REF>: Iterable[Any] "Iterable of section items; converted to a list with list(sections). Defaults to ()."
+        <REF> extra </REF>: Dict[str, Any] "Additional keyword arguments stored as extra instance attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.nodeid to the nodeid parameter. RESULT self.nodeid]
+            [COMMAND Assign self.outcome to the outcome parameter. RESULT self.outcome]
+            [COMMAND Assign self.longrepr to the longrepr parameter. RESULT self.longrepr]
+            [COMMAND Evaluate result using Python truthiness; if result is truthy, set self.result to result, otherwise set self.result to a fresh empty list []. RESULT self.result]
+            [COMMAND Convert sections to a new list using list(sections), creating a shallow copy when sections is already a list, and assign the result to self.sections. RESULT self.sections]
+            [COMMAND Update self.__dict__ with the extra keyword arguments so each extra key becomes an instance attribute. RESULT self.__dict__]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: sections is None or is not iterable]
+        [LOG "Failed to convert sections to a list because the supplied sections value is not iterable."]
+        [THROW TypeError "Raised by list(sections) when sections does not support iteration."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a three-element tuple containing the current fspath, None, and the same fspath object reference." location]
+    [INPUTS]
+        <REF> self </REF>: object "Object instance that must provide an fspath attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> location_result </REF>: tuple "Tuple (self.fspath, None, self.fspath); positions 0 and 2 reference the same fspath object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a tuple with self.fspath at index 0, None at index 1, and self.fspath at index 2, then return it. RESULT location_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS CollectErrorRepr
+
+[DEFINE_WORKER: "Initializes a new instance by storing the supplied msg value directly in the longrepr instance attribute." __init__]
+    [INPUTS]
+        <REF> msg </REF>: object "Value to be assigned to self.longrepr; can be any object, including None or a string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the msg parameter to the longrepr attribute of the current object. RESULT self.longrepr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Writes the long representation to the terminal output object using the red color style." toterminal]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing the longrepr attribute to be displayed."
+        <REF> out </REF>: object "Output terminal object with a line method that accepts a string and a red keyword argument."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke the line method on out, passing self.longrepr as the first positional argument and True for the keyword argument red, then discard the return value. RESULT out]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a cached or newly computed slave information line for a node, containing id, platform, Python version, and executable path." getslaveinfoline]
+    [INPUTS]
+        <REF> node </REF>: object "Node object containing a 'slaveinfo' dictionary and an optional '_slaveinfocache' cache attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Slave info line in format '[id] sysplatform -- Python x.y.z executable'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to return node._slaveinfocache; if it exists, terminate immediately with that cached string as the result. RESULT cached_line]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Accessing node._slaveinfocache raises AttributeError because the cache has not been set yet.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read node.slaveinfo into local variable d. RESULT d]
+            [COMMAND Extract the first three elements of d['version_info'] and format them as '%s.%s.%s' to produce ver. RESULT ver]
+            [COMMAND Create s by formatting '[{}] {} -- Python {} {}' with d['id'], d['sysplatform'], ver, and d['executable']. RESULT s]
+            [COMMAND Assign s to node._slaveinfocache and return s. RESULT s]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reports an internal unserialization failure by writing a formatted error report to an in-memory text stream and raising RuntimeError with the accumulated report contents." _report_unserialization_failure]
+    [INPUTS]
+        <REF> type_name </REF>: str "The unknown entry type name returned by the unserialization process."
+        <REF> report_class </REF>: type "The report class associated with the unserialization failure."
+        <REF> reportdict </REF>: dict "The dictionary containing serialized report data that could not be unserialized."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set url to the constant string 'https://github.com/pytest-dev/pytest/issues'. RESULT url]
+            [COMMAND Create a new in-memory text stream using py.io.TextIO() and assign it to stream. RESULT stream]
+            [COMMAND Using pprint with stream=stream, write the string '-' repeated 100 times to stream. RESULT none]
+            [COMMAND Using pprint with stream=stream, write 'INTERNALERROR: Unknown entry type returned: %s' formatted with type_name to stream. RESULT none]
+            [COMMAND Using pprint with stream=stream, write 'report_name: %s' formatted with report_class to stream. RESULT none]
+            [COMMAND Using pprint with stream=stream, write reportdict to stream. RESULT none]
+            [COMMAND Using pprint with stream=stream, write 'Please report this bug at %s' formatted with url to stream. RESULT none]
+            [COMMAND Using pprint with stream=stream, write the string '-' repeated 100 times to stream. RESULT none]
+            [COMMAND Retrieve the complete text from stream by calling stream.getvalue() and store it as exception_message. RESULT exception_message]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Always, after exception_message has been obtained from the stream.]
+        [LOG "Raising RuntimeError with exception_message, which contains the formatted internal report details."]
+        [THROW RuntimeError "RuntimeError raised with exception_message to report an internal pytest unserialization failure and request a bug report."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Serializes a TestReport or CollectReport instance into a JSON-compatible dictionary with an added '_report_type' key, and returns None for other report types." pytest_report_to_serializable]
+    [INPUTS]
+        <REF> report </REF>: pytest report object (TestReport or CollectReport) "The report object to serialize; only TestReport and CollectReport instances are processed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> data </REF>: dict "Serialized report data with an added '_report_type' key, returned only for TestReport or CollectReport instances."
+        <REF> None </REF>: NoneType "Implicit return value when report is not a TestReport or CollectReport."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Receive the incoming report object. RESULT report]
+            [COMMAND Check whether report is an instance of TestReport or CollectReport using isinstance. RESULT is_report_type]
+            [COMMAND If is_report_type is true, inside the if branch, call report._to_json() to serialize the report into a dictionary-like object. RESULT data]
+            [COMMAND Inside the same if branch, set data["_report_type"] to report.__class__.__name__. RESULT data]
+            [COMMAND Inside the if branch, return data immediately. RESULT data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If is_report_type is false (report is not a TestReport or CollectReport)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the if branch body, continue after the if block, and since there are no further statements return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deserializes a serialized report dictionary into a TestReport or CollectReport based on the value of its '_report_type' key, returning None when the key is absent and raising an AssertionError for unknown report types." pytest_report_from_serializable]
+    [INPUTS]
+        <REF> data </REF>: dict "Serialized report data expected to contain a '_report_type' key whose value determines which report class is used for deserialization."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> report </REF>: TestReport | CollectReport | None "The deserialized TestReport or CollectReport instance; None if '_report_type' is missing from data."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether data contains the key '_report_type'. If absent, skip the dispatch block and let the function return None. RESULT has_report_type]
+            [COMMAND Within the outer if block, check whether data['_report_type'] equals 'TestReport'. If true, return TestReport._from_json(data) immediately. RESULT test_report]
+            [COMMAND Within the outer if block, when the TestReport condition is false, check whether data['_report_type'] equals 'CollectReport'. If true, return CollectReport._from_json(data) immediately. RESULT collect_report]
+            [COMMAND Within the outer if block, when data['_report_type'] is neither 'TestReport' nor 'CollectReport', execute the assert False statement, which raises an AssertionError with the formatted unknown-report message. RESULT assertion_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Under normal execution, data contains '_report_type' and its value is not 'TestReport' or 'CollectReport'.]
+        [LOG "Unknown report_type unserialize data: {data['_report_type']}"]
+        [THROW AssertionError "Raised to signal that the serialized report has an unrecognized _report_type value."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

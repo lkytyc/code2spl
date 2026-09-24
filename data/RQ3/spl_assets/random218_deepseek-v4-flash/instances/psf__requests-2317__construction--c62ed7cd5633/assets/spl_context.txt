@@ -1,0 +1,578 @@
+# FILE: requests/sessions.py
+# CLASS SessionRedirectMixin
+
+[DEFINE_WORKER: "Follows HTTP redirects starting from an initial Response, rebuilding the PreparedRequest's URL, method, body, cookies, proxies, and auth for each hop, yielding every new Response, and raising TooManyRedirects if the redirect limit is reached." resolve_redirects]
+    [INPUTS]
+        <REF> self </REF>: Session "The session providing redirect cache, cookie jar, max_redirects, and request-sending/rebuilding methods."
+        <REF> resp </REF>: Response "The initial HTTP response whose is_redirect flag controls the redirect loop."
+        <REF> req </REF>: PreparedRequest "The prepared request corresponding to the initial response; copied and updated for each redirect."
+        <REF> stream </REF>: bool "Whether to stream response bodies; forwarded to self.send."
+        <REF> timeout </REF>: float or tuple or None "Timeout for each request; forwarded to self.send."
+        <REF> verify </REF>: bool or str "Whether to verify TLS certificates or provide a CA bundle path; forwarded to self.send."
+        <REF> cert </REF>: str or tuple or None "Client certificate or certificate/key pair; forwarded to self.send."
+        <REF> proxies </REF>: dict or None "Proxy configuration; rebuilt via self.rebuild_proxies for each redirect."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: Generator[Response, None, None] "A generator that yields each Response obtained while following redirects, ending when a non-redirect Response is produced."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize redirect counter i to 0. RESULT i]
+            [COMMAND Initialize hist as an empty list to track redirect history. RESULT hist]
+            [COMMAND Enter a while loop that continues while resp.is_redirect is true; when it becomes false, stop following redirects. RESULT resp]
+            [COMMAND Within the while loop, create a copy of the original request and assign it to prepared_request. RESULT prepared_request]
+            [COMMAND Within the while loop, if i > 0, append the current resp to hist, copy hist to new_hist, and assign new_hist to resp.history. RESULT resp.history]
+            [COMMAND Within the while loop, access resp.content to consume the socket; if this raises ChunkedEncodingError, ContentDecodingError, or RuntimeError, read resp.raw with decode_content=False instead. RESULT resp]
+            [COMMAND Within the while loop, if i >= self.max_redirects, raise TooManyRedirects. RESULT i]
+            [COMMAND Within the while loop, close resp to release the connection back to the pool. RESULT resp]
+            [COMMAND Within the while loop, set url to resp.headers['location']. RESULT url]
+            [COMMAND Within the while loop, set method to req.method. RESULT method]
+            [COMMAND Within the while loop, if url starts with '//', parse resp.url to obtain the scheme and prefix the scheme to url. RESULT url]
+            [COMMAND Within the while loop, parse url with urlparse(url) and set url to parsed.geturl(). RESULT url]
+            [COMMAND Within the while loop, if urlparse(url).netloc is empty, set url to urljoin(resp.url, requote_uri(url)); otherwise set url to requote_uri(url). RESULT url]
+            [COMMAND Within the while loop, assign prepared_request.url to to_native_string(url). RESULT prepared_request]
+            [COMMAND Within the while loop, if resp.is_permanent_redirect is true and req.url differs from prepared_request.url, cache prepared_request.url under self.redirect_cache[req.url]. RESULT self.redirect_cache]
+            [COMMAND Within the while loop, if resp.status_code equals codes.see_other and method is not HEAD, set method to GET. RESULT method]
+            [COMMAND Within the while loop, if resp.status_code equals codes.found and method is not HEAD, set method to GET. RESULT method]
+            [COMMAND Within the while loop, if resp.status_code equals codes.moved and method equals POST, set method to GET. RESULT method]
+            [COMMAND Within the while loop, assign prepared_request.method to method. RESULT prepared_request]
+            [COMMAND Within the while loop, if resp.status_code is neither codes.temporary_redirect nor codes.permanent_redirect, delete the Content-Length header from prepared_request.headers if present and set prepared_request.body to None. RESULT prepared_request]
+            [COMMAND Within the while loop, set headers to prepared_request.headers. RESULT headers]
+            [COMMAND Within the while loop, delete headers['Cookie']; if KeyError is raised, ignore it. RESULT headers]
+            [COMMAND Within the while loop, call extract_cookies_to_jar(prepared_request._cookies, prepared_request, resp.raw) to carry cookies into the new request jar. RESULT prepared_request._cookies]
+            [COMMAND Within the while loop, update prepared_request._cookies with self.cookies. RESULT prepared_request._cookies]
+            [COMMAND Within the while loop, call prepared_request.prepare_cookies(prepared_request._cookies) to finalize cookies on prepared_request. RESULT prepared_request]
+            [COMMAND Within the while loop, set proxies to the result of self.rebuild_proxies(prepared_request, proxies). RESULT proxies]
+            [COMMAND Within the while loop, call self.rebuild_auth(prepared_request, resp) to rebuild authentication. RESULT prepared_request]
+            [COMMAND Within the while loop, reassign req to prepared_request. RESULT req]
+            [COMMAND Within the while loop, send the new request by calling self.send(req, stream=stream, timeout=timeout, verify=verify, cert=cert, proxies=proxies, allow_redirects=False), and assign the result to resp. RESULT resp]
+            [COMMAND Within the while loop, call extract_cookies_to_jar(self.cookies, prepared_request, resp.raw) to update the session cookies. RESULT self.cookies]
+            [COMMAND Within the while loop, increment i by 1. RESULT i]
+            [COMMAND Within the while loop, yield resp as the next value from the generator. RESULT resp]
+            [COMMAND After the yield, when the generator is resumed, re-evaluate the while condition; if the new resp is no longer a redirect, exit the loop and end the generator. RESULT resp]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Within the while loop, i >= self.max_redirects.]
+        [LOG "Exceeded self.max_redirects redirects."]
+        [THROW TooManyRedirects "Raised when the redirect counter reaches or exceeds the configured maximum number of redirects."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rebuilds authentication on a prepared request during redirects by stripping the Authorization header when the target host differs from the original host, then applying netrc authentication if environment trust is enabled." rebuild_auth]
+    [INPUTS]
+        <REF> self </REF>: object "The request session instance providing the trust_env configuration flag."
+        <REF> prepared_request </REF>: PreparedRequest "The prepared request whose headers and authentication may be modified in place."
+        <REF> response </REF>: Response "The redirect response containing the original request URL for hostname comparison."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "The method returns None; any changes are applied to prepared_request in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the headers attribute from prepared_request and store it in headers. RESULT headers]
+            [COMMAND Read the url attribute from prepared_request and store it in url. RESULT url]
+            [COMMAND Check whether 'Authorization' is present in headers. RESULT authorization_present]
+            [COMMAND If authorization_present is true, parse response.request.url with urlparse and store the parsed result in original_parsed. RESULT original_parsed]
+            [COMMAND If authorization_present is true, parse url with urlparse and store the parsed result in redirect_parsed. RESULT redirect_parsed]
+            [COMMAND If authorization_present is true and original_parsed.hostname differs from redirect_parsed.hostname, delete the 'Authorization' key from headers. RESULT headers]
+            [COMMAND If self.trust_env is truthy, compute new_auth as get_netrc_auth(url); otherwise set new_auth to None. RESULT new_auth]
+            [COMMAND If new_auth is not None, call prepared_request.prepare_auth(new_auth) to apply the new authentication credentials. RESULT prepared_request]
+            [COMMAND Return None. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Re-evaluates the proxy mapping for a prepared request using environment proxies, removes any existing Proxy-Authorization header, and re-adds it only when credentials are available." rebuild_proxies]
+    [INPUTS]
+        <REF> prepared_request </REF>: PreparedRequest "The prepared request whose headers and URL are used to rebuild proxy settings."
+        <REF> proxies </REF>: dict or None "Existing proxy mapping to be reused; None means no initial proxies."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> new_proxies </REF>: dict "The rebuilt proxy mapping, with environment proxies merged in when applicable."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read headers as an alias to prepared_request.headers; changes made through headers also change prepared_request.headers. RESULT headers]
+            [COMMAND Read url from prepared_request.url. RESULT url]
+            [COMMAND Compute scheme as urlparse(url).scheme; if url has no scheme, scheme is an empty string. RESULT scheme]
+            [COMMAND Initialize new_proxies as a shallow copy of proxies when proxies is not None; otherwise initialize new_proxies as an empty dictionary. RESULT new_proxies]
+            [COMMAND If self.trust_env is truthy and should_bypass_proxies(url) returns False, with short-circuit evaluation so should_bypass_proxies is not called when self.trust_env is falsy, retrieve environ_proxies from get_environ_proxies(url), read proxy = environ_proxies.get(scheme), and if proxy is truthy call new_proxies.setdefault(scheme, environ_proxies[scheme]) only when scheme is not already present in new_proxies. RESULT new_proxies]
+            [COMMAND If 'Proxy-Authorization' is a key in headers, delete that key from headers. RESULT headers]
+            [COMMAND Attempt to read username and password by calling get_auth_from_url(new_proxies[scheme]). RESULT username, password]
+            [COMMAND If username and password are both truthy, set headers['Proxy-Authorization'] to _basic_auth_str(username, password). RESULT headers]
+            [COMMAND Return new_proxies. RESULT new_proxies]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When new_proxies[scheme] is accessed as the argument to get_auth_from_url, a KeyError is raised because the scheme key is absent.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set username to None and password to None. RESULT username, password]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS Session
+
+[DEFINE_WORKER: "Initializes a new Session instance with default headers and hooks, empty auth/proxies/params/cookies/adapters, default redirect/stream/verification/trust settings, and mounted HTTP and HTTPS adapters." Session.__init__]
+    [INPUTS]
+        <REF> self </REF>: Session "The Session instance being initialized."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.headers to the result of default_headers(), creating a new case-insensitive dictionary of default headers. RESULT self.headers]
+            [COMMAND Set self.auth to None. RESULT self.auth]
+            [COMMAND Set self.proxies to a new empty dictionary. RESULT self.proxies]
+            [COMMAND Set self.hooks to the result of default_hooks(), creating a new dictionary of event-handling hooks. RESULT self.hooks]
+            [COMMAND Set self.params to a new empty dictionary for querystring data. RESULT self.params]
+            [COMMAND Set self.stream to False. RESULT self.stream]
+            [COMMAND Set self.verify to True. RESULT self.verify]
+            [COMMAND Set self.cert to None. RESULT self.cert]
+            [COMMAND Set self.max_redirects to DEFAULT_REDIRECT_LIMIT. RESULT self.max_redirects]
+            [COMMAND Set self.trust_env to True. RESULT self.trust_env]
+            [COMMAND Set self.cookies to cookiejar_from_dict({}), creating a new empty cookie jar. RESULT self.cookies]
+            [COMMAND Set self.adapters to a new OrderedDict. RESULT self.adapters]
+            [COMMAND Mount an HTTPAdapter for the https:// scheme on self.adapters. RESULT self.adapters]
+            [COMMAND Mount an HTTPAdapter for the http:// scheme on self.adapters. RESULT self.adapters]
+            [COMMAND Set self.redirect_cache to a new empty dictionary. RESULT self.redirect_cache]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares a Request by normalizing cookies, merging session-level cookies/auth/headers/params/hooks, and constructing a PreparedRequest." prepare_request]
+    [INPUTS]
+        <REF> self </REF>: Session "Session instance whose cookies, auth, headers, params, and hooks provide defaults for the prepared request."
+        <REF> request </REF>: Request "Request instance to prepare, containing method, URL, files, data, JSON, headers, params, auth, cookies, and hooks."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: PreparedRequest "PreparedRequest instance with all settings merged and normalized, ready for transmission."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate request.cookies; if it is truthy use it, otherwise use a new empty dictionary, and assign the result to cookies. RESULT cookies]
+            [COMMAND If cookies is not a cookielib.CookieJar, convert it by calling cookiejar_from_dict(cookies) and assign the converted CookieJar back to cookies. RESULT cookies]
+            [COMMAND Create a new RequestsCookieJar, merge self.cookies into it, then merge the request-level cookies into the result, and assign the final merged cookie jar to merged_cookies. RESULT merged_cookies]
+            [COMMAND Set auth to request.auth. RESULT auth]
+            [COMMAND If self.trust_env is true, auth is falsy, and self.auth is falsy, set auth to the authentication obtained from get_netrc_auth(request.url) using short-circuit evaluation. RESULT auth]
+            [COMMAND Create a new PreparedRequest instance and assign it to p. RESULT p]
+            [COMMAND Call p.prepare with method set to request.method.upper(), url set to request.url, files set to request.files, data set to request.data, json set to request.json, headers set to merge_setting(request.headers, self.headers, dict_class=CaseInsensitiveDict), params set to merge_setting(request.params, self.params), auth set to merge_setting(auth, self.auth), cookies set to merged_cookies, and hooks set to merge_hooks(request.hooks, self.hooks), mutating p with the configured values. RESULT p]
+            [COMMAND Return p as the prepared request. RESULT p]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a Request from the supplied options, prepares it, merges environment settings into the send options, sends the prepared request, and returns the resulting Response." request]
+    [INPUTS]
+        <REF> method </REF>: str | bytes "HTTP method for the new Request object; converted to a native string by builtin_str."
+        <REF> url </REF>: str "URL for the new Request object."
+        <REF> params </REF>: dict | bytes | None "Optional dictionary or bytes to be sent in the query string for the Request."
+        <REF> data </REF>: dict | bytes | file-like | None "Optional dictionary, bytes, or file-like object to send in the body of the Request."
+        <REF> headers </REF>: dict | None "Optional dictionary of HTTP Headers to send with the Request."
+        <REF> cookies </REF>: dict | CookieJar | None "Optional dict or CookieJar object to send with the Request."
+        <REF> files </REF>: dict | None "Optional dictionary of filename to file-like objects for multipart encoding upload."
+        <REF> auth </REF>: tuple | callable | None "Optional auth tuple or callable to enable Basic, Digest, or Custom HTTP Auth."
+        <REF> timeout </REF>: float | tuple | None "Optional timeout as a float or a (connect timeout, read timeout) tuple."
+        <REF> allow_redirects </REF>: bool "Whether to allow redirects for the request; defaults to True."
+        <REF> proxies </REF>: dict | None "Optional dictionary mapping protocol to the URL of the proxy."
+        <REF> hooks </REF>: dict | None "Optional dictionary of hook callables for the Request."
+        <REF> stream </REF>: bool | None "Optional flag for whether to immediately download the response content."
+        <REF> verify </REF>: bool | str | None "Optional flag or CA_BUNDLE path used to verify the SSL certificate."
+        <REF> cert </REF>: str | tuple | None "Optional path to an SSL client cert file (.pem), or a ('cert', 'key') tuple."
+        <REF> json </REF>: JSON-serializable object | None "Optional JSON value to send in the body of the Request."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> resp </REF>: Response "The Response object returned by self.send after the prepared request is sent."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert method to a native string using builtin_str and rebind method to the converted value. RESULT method]
+            [COMMAND Construct a Request object with method.upper() as the method, the provided url, headers, files, json, auth, cookies, and hooks, and using an empty dict for data if data is falsy and an empty dict for params if params is falsy. RESULT req]
+            [COMMAND Prepare the request by calling self.prepare_request(req). RESULT prep]
+            [COMMAND Normalize proxies to an empty dict if proxies is falsy. RESULT proxies]
+            [COMMAND Merge environment settings by calling self.merge_environment_settings with prep.url, proxies, stream, verify, and cert. RESULT settings]
+            [COMMAND Create send_kwargs dict containing timeout and allow_redirects. RESULT send_kwargs]
+            [COMMAND Update send_kwargs with settings so environment-derived options are included. RESULT send_kwargs]
+            [COMMAND Send the prepared request by calling self.send(prep, **send_kwargs). RESULT resp]
+            [COMMAND Return resp. RESULT resp]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends an HTTP GET request to the given URL by forwarding the url and any caller-provided keyword arguments to self.request, ensuring allow_redirects defaults to True unless already specified." get]
+    [INPUTS]
+        <REF> url </REF>: str "URL for the new Request object."
+        <REF> kwargs </REF>: dict "Optional arguments accepted by self.request, such as headers, params, auth, timeout, and allow_redirects."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Response "The Response object returned by self.request."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In kwargs, set the key 'allow_redirects' to True only if it is not already present; preserve any existing value if the caller supplied it. RESULT kwargs]
+            [COMMAND Call self.request('GET', url, **kwargs) so all keyword arguments, including the ensured allow_redirects, are forwarded; then return the resulting Response object. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends an HTTP OPTIONS request for the given URL, ensuring allow_redirects defaults to True, and returns the resulting Response." options]
+    [INPUTS]
+        <REF> url </REF>: string "URL for the new Request object."
+        <REF> **kwargs </REF>: dict "Optional arguments that request takes; may include allow_redirects and other request options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Response "The Response object returned by the OPTIONS request."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ensure the allow_redirects key in kwargs is set to True only if it is not already present, preserving an explicit caller-provided value. RESULT kwargs]
+            [COMMAND Invoke self.request with method 'OPTIONS', the provided url, and the updated kwargs expanded as keyword arguments, returning the method's result. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends a HEAD request by defaulting allow_redirects to False and delegating to self.request with method 'HEAD', the provided URL, and any additional keyword arguments, returning the resulting Response." head]
+    [INPUTS]
+        <REF> url </REF>: str "URL for the new Request object."
+        <REF> kwargs </REF>: dict "Optional arguments that request takes; if 'allow_redirects' is not supplied, it defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Response "The Response object returned by self.request."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ensure kwargs has key 'allow_redirects' set to False; if the key already exists, leave its existing value unchanged. RESULT kwargs]
+            [COMMAND Invoke self.request('HEAD', url, **kwargs) and return its result. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends a POST request by delegating to the internal request method with the HTTP method 'POST' and the caller-provided url, data, json, and extra keyword arguments, then returns the resulting Response object." post]
+    [INPUTS]
+        <REF> url </REF>: str "URL for the new Request object."
+        <REF> data </REF>: dict|bytes|file-like "Optional dictionary, bytes, or file-like object to send in the body of the Request."
+        <REF> json </REF>: object "Optional JSON payload to send in the body of the Request."
+        <REF> kwargs </REF>: dict "Optional keyword arguments that the underlying request method accepts."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: Response "Response object returned by the underlying request method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self.request with the literal HTTP method 'POST', the provided url as the second positional argument, and pass data=data, json=json, and all extra keyword arguments from kwargs. RESULT request_result]
+            [COMMAND Return request_result to the caller as the method's response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends a PUT request to the given URL by forwarding the optional data and extra keyword arguments to the internal request method and returning its Response object." put]
+    [INPUTS]
+        <REF> url </REF>: str "URL for the new Request object."
+        <REF> data </REF>: object "Optional dictionary, bytes, or file-like object to send in the body of the Request; defaults to None."
+        <REF> kwargs </REF>: dict "Optional keyword arguments that the internal request method accepts."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: Response "The Response object returned by the internal request method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.request with HTTP method 'PUT', the given url, data=data, and unpacked **kwargs, then immediately return the result to the caller. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends an HTTP PATCH request to the given URL by forwarding url, data, and kwargs to self.request and returning the Response object." patch]
+    [INPUTS]
+        <REF> url </REF>: str "URL for the new Request object."
+        <REF> data </REF>: object "Optional dictionary, bytes, or file-like object to send in the body of the Request."
+        <REF> kwargs </REF>: dict "Optional keyword arguments that request accepts."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: Response "The Response object returned by self.request."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.request('PATCH', url, data=data, **kwargs) and return the result immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends a DELETE request to the given URL by delegating to the internal request method with the HTTP method 'DELETE' and the supplied keyword arguments." delete]
+    [INPUTS]
+        <REF> url </REF>: str "URL for the new Request object."
+        <REF> kwargs </REF>: dict "Optional arguments that request takes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: Response "Response object returned by the underlying request method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.request with the literal HTTP method 'DELETE', the provided url, and the keyword arguments expanded from kwargs, then return the result. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends a PreparedRequest through the appropriate transport adapter, applies response hooks, persists cookies, resolves optional redirects, and returns the final Response." send]
+    [INPUTS]
+        <REF> request </REF>: PreparedRequest "The prepared request object to send."
+        <REF> kwargs </REF>: dict "Optional keyword arguments that override defaults and are forwarded to the adapter; may include stream, verify, cert, proxies, timeout, and allow_redirects."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Response "The final response after sending, response hooks, cookie extraction, and optional redirect history processing."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each of 'stream', 'verify', 'cert', and 'proxies', call kwargs.setdefault(key, corresponding self attribute) so the value is present only if not already supplied. RESULT kwargs]
+            [COMMAND Validate that request is an instance of PreparedRequest; if it is not, this step is an explicit failure path. RESULT request]
+            [COMMAND Initialize checked_urls as a new empty set. RESULT checked_urls]
+            [COMMAND While request.url is a key in self.redirect_cache, add request.url to checked_urls, retrieve new_url = self.redirect_cache.get(request.url), and if new_url is already in checked_urls break out of the loop; otherwise assign request.url = new_url. RESULT request]
+            [COMMAND Pop 'allow_redirects' from kwargs with default True, removing that key from kwargs and assigning the value to allow_redirects. RESULT allow_redirects]
+            [COMMAND Read stream = kwargs.get('stream'). RESULT stream]
+            [COMMAND Read timeout = kwargs.get('timeout'). RESULT timeout]
+            [COMMAND Read verify = kwargs.get('verify'). RESULT verify]
+            [COMMAND Read cert = kwargs.get('cert'). RESULT cert]
+            [COMMAND Read proxies = kwargs.get('proxies'). RESULT proxies]
+            [COMMAND Set hooks to request.hooks. RESULT hooks]
+            [COMMAND Select the adapter by calling self.get_adapter(url=request.url). RESULT adapter]
+            [COMMAND Record start = datetime.utcnow(). RESULT start]
+            [COMMAND Send the request by calling adapter.send(request, **kwargs), forwarding the remaining kwargs because allow_redirects has already been removed. RESULT r]
+            [COMMAND Set r.elapsed = datetime.utcnow() - start. RESULT r]
+            [COMMAND Apply response hooks by assigning r = dispatch_hook('response', hooks, r, **kwargs). RESULT r]
+            [COMMAND If r.history is truthy, for each resp in r.history call extract_cookies_to_jar(self.cookies, resp.request, resp.raw). RESULT self.cookies]
+            [COMMAND Call extract_cookies_to_jar(self.cookies, request, r.raw). RESULT self.cookies]
+            [COMMAND Create a lazy generator gen by calling self.resolve_redirects(r, request, stream=stream, timeout=timeout, verify=verify, cert=cert, proxies=proxies). RESULT gen]
+            [COMMAND If allow_redirects is truthy, set history to a list of all responses yielded by gen; otherwise set history to an empty list without consuming gen. RESULT history]
+            [COMMAND If history is truthy, insert r at position 0, pop the last element of history and assign it to r, then set r.history to the modified history. RESULT r]
+            [COMMAND If stream is falsy, access r.content to force the response body to be consumed. RESULT r]
+            [COMMAND Return r. RESULT r]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: request is not an instance of PreparedRequest]
+        [LOG "Rejected send attempt because only PreparedRequest instances can be sent."]
+        [THROW ValueError "You can only send PreparedRequests."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reads environment proxy and CA-bundle defaults when trust_env is enabled, then merges the incoming per-request settings with session-level settings and returns the effective verify, proxies, stream, and cert values." merge_environment_settings]
+    [INPUTS]
+        <REF> url </REF>: string "URL used to resolve environment-specific proxy settings."
+        <REF> proxies </REF>: dict "Request proxy mapping; if trust_env is enabled and environment proxies exist, it must support setdefault and existing keys take precedence over environment defaults."
+        <REF> stream </REF>: bool or None "Request-level stream setting to merge with the session stream setting."
+        <REF> verify </REF>: bool, string, or None "Request-level SSL verification setting; if exactly True or None, it may be replaced by the CA bundle from the environment when trust_env is true."
+        <REF> cert </REF>: string, tuple, or None "Request-level client certificate setting to merge with the session certificate setting."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Dictionary of effective per-request settings with keys verify, proxies, stream, and cert."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.trust_env is truthy; this controls the environment setup block. RESULT _]
+            [COMMAND Within the true branch of self.trust_env: call get_environ_proxies(url) and assign env_proxies to the result, or to an empty dict if the result is falsy. RESULT env_proxies]
+            [COMMAND Within the same true branch of self.trust_env: for each key-value pair (k, v) in env_proxies.items(), call proxies.setdefault(k, v), which adds environment proxy entries only for keys that are not already present in proxies. RESULT proxies]
+            [COMMAND Still in the true branch of self.trust_env, after the proxy loop: if verify is exactly True or exactly None, set verify to the first non-empty value from os.environ.get('REQUESTS_CA_BUNDLE') and os.environ.get('CURL_CA_BUNDLE'); if both environment variables are unset or empty, verify becomes None. RESULT verify]
+            [COMMAND After the self.trust_env conditional block, apply the merge_setting(request_value, session_value) semantics: if request_value is None return session_value; if session_value is None return request_value; if both are mappings, merge them with session values as the base and request values as overrides; otherwise return request_value. RESULT _]
+            [COMMAND Set proxies to merge_setting(proxies, self.proxies). RESULT proxies]
+            [COMMAND Set stream to merge_setting(stream, self.stream). RESULT stream]
+            [COMMAND Set verify to merge_setting(verify, self.verify). RESULT verify]
+            [COMMAND Set cert to merge_setting(cert, self.cert). RESULT cert]
+            [COMMAND Return a dictionary containing the effective settings with keys 'verify', 'proxies', 'stream', and 'cert' set to the corresponding local values. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the first adapter whose registered URL prefix matches the beginning of the given URL, or raises InvalidSchema when no prefix matches." get_adapter]
+    [INPUTS]
+        <REF> self </REF>: object "Object instance exposing the adapters dictionary that maps URL prefixes to adapter objects."
+        <REF> url </REF>: str "The URL for which to find a connection adapter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> adapter </REF>: object "The adapter associated with the first URL prefix that matches the start of the lowercased URL."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each (prefix, adapter) pair in self.adapters.items() in insertion order. RESULT current_pair]
+            [COMMAND Within the loop over self.adapters.items(), check whether url.lower().startswith(prefix) is true, treating the URL as lowercased and the prefix as exact. RESULT prefix_matches]
+            [COMMAND Within the same loop, if prefix_matches is true, return adapter immediately and stop all further iteration; otherwise continue with the next (prefix, adapter) pair. RESULT adapter]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The loop over self.adapters.items() completes without any prefix matching the start of the lowercased URL.]
+        [LOG "No connection adapters were found for '%s'"]
+        [THROW InvalidSchema "Indicates that no connection adapter is configured for the given URL."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Closes all adapters in self.adapters by iterating over their values and calling close() on each one." close]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate self.adapters.values() to obtain the insertion-ordered view of adapter values; if self.adapters is empty, the view is empty and the loop body will be skipped. RESULT adapter_values]
+            [COMMAND Within the for loop over adapter_values, for each value v, call v.close() exactly once; if self.adapters is mutated during the iteration, a RuntimeError may be raised, and if v.close() raises an exception, stop iterating and propagate that exception. RESULT adapter_closed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers the given adapter under the prefix, then reorders shorter-key entries to the end to maintain descending prefix-length order." mount]
+    [INPUTS]
+        <REF> prefix </REF>: str "The connection prefix key under which the adapter is registered; used as the length threshold for reordering."
+        <REF> adapter </REF>: object "The connection adapter object stored for the given prefix."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Register or update the adapter by assigning self.adapters[prefix] = adapter. RESULT self.adapters]
+            [COMMAND After the insertion, create keys_to_move as a snapshot list of existing keys k in self.adapters for which len(k) is strictly less than len(prefix), excluding the newly inserted prefix. RESULT keys_to_move]
+            [COMMAND For each key in keys_to_move in snapshot order, pop self.adapters[key] and assign the popped value back to self.adapters[key], moving that entry to the end of the dictionary while preserving the key-value association. RESULT self.adapters]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges request and session settings, giving request values precedence, removing keys whose request value is None, and returning a plain dictionary when both inputs are mappings." merge_setting]
+    [INPUTS]
+        <REF> request_setting </REF>: object (Mapping or None or other) "Explicit setting from the request; may be a mapping, None, or another type."
+        <REF> session_setting </REF>: object (Mapping or None or other) "Session setting used as the base; may be a mapping, None, or another type."
+        <REF> dict_class </REF>: type "Dictionary class used to construct the initial merged mapping; defaults to OrderedDict."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Returned setting: request_setting, session_setting, or merged plain dictionary depending on the input path."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize merged_setting as dict_class(to_key_val_list(session_setting)), preserving session_setting order as the base. RESULT merged_setting]
+            [COMMAND Update merged_setting with to_key_val_list(request_setting) so request_setting values override session_setting values. RESULT merged_setting]
+            [COMMAND For each key-value pair (k, v) in request_setting.items(), if v is None, delete merged_setting[k]. RESULT merged_setting]
+            [COMMAND Rebuild merged_setting as dict((k, v) for (k, v) in merged_setting.items() if v is not None), removing any remaining entries whose value is None. RESULT merged_setting]
+            [COMMAND Return merged_setting. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: session_setting is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return request_setting immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: request_setting is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return session_setting immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Either session_setting or request_setting is not a Mapping instance.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Bypass merging and return request_setting immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges request and session hook mappings, returning either original mapping unchanged when the other side has no response hooks, and otherwise appending session hook values to request hook values using the provided dictionary class." merge_hooks]
+    [INPUTS]
+        <REF> request_hooks </REF>: dict or None "Existing request hook mapping; may be None or contain a 'response' key mapped to an exact empty list."
+        <REF> session_hooks </REF>: dict or None "Session hook mapping; may be None or contain a 'response' key mapped to an exact empty list."
+        <REF> dict_class </REF>: type "Dictionary class used to build the merged result; defaults to OrderedDict."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> merged_hooks </REF>: dict "The merged hook mapping, or request_hooks when session_hooks has no response hooks, or session_hooks when request_hooks has no response hooks."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the first early-return guard: check whether session_hooks is None or session_hooks.get('response') == [] using short-circuit OR so the .get() call is skipped when session_hooks is None. RESULT session_hooks_guard]
+            [COMMAND If session_hooks_guard is false, evaluate the second early-return guard: check whether request_hooks is None or request_hooks.get('response') == [] using short-circuit OR so the .get() call is skipped when request_hooks is None. RESULT request_hooks_guard]
+            [COMMAND If both guards are false, return merge_setting(request_hooks, session_hooks, dict_class), which copies request_hooks into a new dict_class mapping and extends each existing list with the corresponding session_hooks list, adding session-only keys to the result. RESULT merged_hooks]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: session_hooks_guard is true, meaning session_hooks is None or session_hooks.get('response') == []]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return request_hooks immediately as the final result. RESULT request_hooks]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: session_hooks_guard is false and request_hooks_guard is true, meaning request_hooks is None or request_hooks.get('response') == []]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return session_hooks immediately as the final result. RESULT session_hooks]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new Session instance for use as a context manager." session]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> session </REF>: Session "A newly created Session instance intended for context management."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new Session instance by calling Session() and return it immediately. RESULT session_instance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

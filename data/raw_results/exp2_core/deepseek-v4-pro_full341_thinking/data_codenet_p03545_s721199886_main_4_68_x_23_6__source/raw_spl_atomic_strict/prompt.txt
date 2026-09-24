@@ -1,0 +1,464 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include <stdio.h>
+2   int sum(int a,int b);
+3   int sub(int a,int b);
+4   int main(void){
+5   	int i,n,a,b,c,d,x,op1,op2,op3,cnt=0;
+6   	char op[2]={'+','-'};
+7   	scanf("%d",&n);
+8   	a=(n/1000)%10;
+9   	b=(n/100)%10;
+10  	c=(n/10)%10;
+11  	d=n%10;
+12  	for(;;){
+13  		x=0;
+14  		op1=0;
+15  		op2=0;
+16  		op3=0;
+17  		for(i=0;i<3;i++){
+18  			if((cnt<3)||(cnt==4)){
+19  				x=sum(a,b);
+20  				if(cnt<2){
+21  					x=sum(x,c);
+22  					if(cnt==0){
+23  						x=sum(x,d);
+24  					}else{
+25  						x=sub(x,d);
+26  						op3=1;
+27  					}
+28  				}else{
+29  					x=sub(x,c);
+30  					op2=1;
+31  					if(cnt==2){
+32  						x=sum(x,d);
+33  					}else{
+34  						x=sub(x,d);
+35  						op3=1;
+36  					}
+37  				}
+38  			}else{
+39  				x=sub(a,b);
+40  				op1=1;
+41  				if((cnt==3)||(cnt==6)){
+42  					x=sum(x,c);
+43  					if(cnt==3){
+44  						x=sum(x,d);
+45  					}else{
+46  						x=sub(x,d);
+47  						op3=1;
+48  					}
+49  				}else{
+50  					x=sub(x,c);
+51  					op2=1;
+52  					if(cnt==5){
+53  						x=sum(x,d);
+54  					}else{
+55  						x=sub(x,d);
+56  						op3=1;
+57  					}
+58  				}
+59  			}
+60  		}
+61  		if(x==7){
+62  			break;
+63  		}
+64  		cnt++;
+65  	}
+66  	printf("%d%c%d%c%d%c%d=7",a,op[op1],b,op[op2],c,op[op3],d);
+67  	return 0;
+68  }
+69  int sum(int a,int b){
+70  	return a+b;
+71  }
+72  int sub(int a,int b){
+73  	return a-b;
+74  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(x,23)` in function `main`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: main
+Target source anchor: variable=x, line=23
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Declare integer variables i, n, a, b, c, d, x, op1, op2, op3 with cnt initialized to 0, and initialize char array op with op[0]='+' and op[1]='-'. RESULT state]
+- [COMMAND Enter an infinite outer loop. At the start of each outer iteration, reset x=0, op1=0, op2=0, op3=0. RESULT outer_loop]
+- [COMMAND Within the outer loop and the effective inner-loop body, if cnt is less than 3 or cnt equals 4, set x=sum(a,b) and leave op1=0; otherwise set x=sub(a,b) and set op1=1. RESULT x_after_first_operator]
+- [COMMAND Within the same context, if cnt is less than 2 or cnt equals 3 or cnt equals 6, set x=sum(x,c) and leave op2=0; otherwise set x=sub(x,c) and set op2=1. RESULT x_after_second_operator]
+- [COMMAND Read an integer from standard input into n using scanf("%d", &n). RESULT n]
+- [COMMAND Extract the last four decimal digits of n: a=(n/1000)%10, b=(n/100)%10, c=(n/10)%10, d=n%10. RESULT digits_a_b_c_d]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 8: a=(n/1000)%10;
+- line 9: b=(n/100)%10;
+- line 10: c=(n/10)%10;
+- line 11: d=n%10;
+- line 13: x=0;
+- line 19: x=sum(a,b);
+- line 21: x=sum(x,c);
+- line 23: x=sum(x,d);
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 8, "position": "before_target", "reason": "a", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 9, "position": "before_target", "reason": "b", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["b", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 10, "position": "before_target", "reason": "c", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["c", "n"]}
+- {"definitions": ["d"], "disposition": "inspect_against_official_dependence_definition", "line": 11, "position": "before_target", "reason": "d", "relevant_identifiers": ["d"], "roles": ["definition"], "source_identifiers": ["d", "n"]}
+- {"definitions": ["x"], "disposition": "inspect_against_official_dependence_definition", "line": 13, "position": "before_target", "reason": "x", "relevant_identifiers": ["x"], "roles": ["definition"], "source_identifiers": ["x"]}
+- {"definitions": ["x"], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "before_target", "reason": "x", "relevant_identifiers": ["x", "sum"], "roles": ["definition", "use"], "source_identifiers": ["a", "b", "sum", "x"]}
+- {"definitions": ["x"], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "x", "relevant_identifiers": ["x", "sum"], "roles": ["definition", "use"], "source_identifiers": ["c", "sum", "x"]}
+- {"definitions": ["x"], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "target", "reason": "x", "relevant_identifiers": ["x", "sum", "d"], "roles": ["definition", "use"], "source_identifiers": ["d", "sum", "x"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 4-68
+- source signature: `int main(void){`
+- source content hash: `a77c8dabe2f6128c048479c40725632c801390519d005afda92cd602e553021c`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```cpp
+   4  int main(void){
+   5   int i,n,a,b,c,d,x,op1,op2,op3,cnt=0;
+   6   char op[2]={'+','-'};
+   7   scanf("%d",&n);
+   8   a=(n/1000)%10;
+   9   b=(n/100)%10;
+  10   c=(n/10)%10;
+  11   d=n%10;
+  12   for(;;){
+  13    x=0;
+  14    op1=0;
+  15    op2=0;
+  16    op3=0;
+  17    for(i=0;i<3;i++){
+  18     if((cnt<3)||(cnt==4)){
+  19      x=sum(a,b);
+  20      if(cnt<2){
+  21       x=sum(x,c);
+  22       if(cnt==0){
+  23        x=sum(x,d);
+  24       }else{
+  25        x=sub(x,d);
+  26        op3=1;
+  27       }
+  28      }else{
+  29       x=sub(x,c);
+  30       op2=1;
+  31       if(cnt==2){
+  32        x=sum(x,d);
+  33       }else{
+  34        x=sub(x,d);
+  35        op3=1;
+  36       }
+  37      }
+  38     }else{
+  39      x=sub(a,b);
+  40      op1=1;
+  41      if((cnt==3)||(cnt==6)){
+  42       x=sum(x,c);
+  43       if(cnt==3){
+  44        x=sum(x,d);
+  45       }else{
+  46        x=sub(x,d);
+  47        op3=1;
+  48       }
+  49      }else{
+  50       x=sub(x,c);
+  51       op2=1;
+  52       if(cnt==5){
+  53        x=sum(x,d);
+  54       }else{
+  55        x=sub(x,d);
+  56        op3=1;
+  57       }
+  58      }
+  59     }
+  60    }
+  61    if(x==7){
+  62     break;
+  63    }
+  64    cnt++;
+  65   }
+  66   printf("%d%c%d%c%d%c%d=7",a,op[op1],b,op[op2],c,op[op3],d);
+  67   return 0;
+  68  }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads an integer, extracts its last four decimal digits, searches the eight plus/minus operator combinations between them for the first expression equal to 7, prints that expression followed by =7, and returns 0." main]
+    [INPUTS]
+        <REF> n </REF>: int "Integer read from standard input; only its last four decimal digits are used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> printed_expression </REF>: string "The first found expression of the form a op1 b op2 c op3 d = 7 printed to standard output."
+        <REF> return_code </REF>: int "The value returned by main; always 0."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare integer variables i, n, a, b, c, d, x, op1, op2, op3 with cnt initialized to 0, and initialize char array op with op[0]='+' and op[1]='-'. RESULT state]
+            [COMMAND Read an integer from standard input into n using scanf("%d", &n). RESULT n]
+            [COMMAND Extract the last four decimal digits of n: a=(n/1000)%10, b=(n/100)%10, c=(n/10)%10, d=n%10. RESULT digits_a_b_c_d]
+            [COMMAND Enter an infinite outer loop. At the start of each outer iteration, reset x=0, op1=0, op2=0, op3=0. RESULT outer_loop]
+            [COMMAND Run the inner loop for i=0 to i<3. The body evaluates the operator combination selected by cnt and recomputes x from scratch each pass; because i is unused and no state carries between passes, the final state is equivalent to one body execution. RESULT inner_loop]
+            [COMMAND Within the outer loop and the effective inner-loop body, if cnt is less than 3 or cnt equals 4, set x=sum(a,b) and leave op1=0; otherwise set x=sub(a,b) and set op1=1. RESULT x_after_first_operator]
+            [COMMAND Within the same context, if cnt is less than 2 or cnt equals 3 or cnt equals 6, set x=sum(x,c) and leave op2=0; otherwise set x=sub(x,c) and set op2=1. RESULT x_after_second_operator]
+            [COMMAND Within the same context, if cnt equals 0, 2, 3, or 5, set x=sum(x,d) and leave op3=0; otherwise set x=sub(x,d) and set op3=1. RESULT x_after_third_operator]
+            [COMMAND After the inner loop completes, if x equals 7, break out of the infinite outer loop immediately, before cnt is incremented. RESULT break_success]
+            [COMMAND If x does not equal 7, increment cnt and continue the outer loop. For cnt values 8 and above, all special-case checks fail, so the expression remains the same as cnt=7, ((a-b)-c)-d; if that value is not 7, the outer loop repeats forever. RESULT next_attempt_or_infinite_loop]
+            [COMMAND After the loop exits, print the successful expression using printf("%d%c%d%c%d%c%d=7", a, op[op1], b, op[op2], c, op[op3], d). RESULT printed_expression]
+            [COMMAND Return 0 from main. RESULT return_code]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

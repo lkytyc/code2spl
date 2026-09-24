@@ -1,0 +1,61 @@
+class BalancedBrackets:
+    def __init__(self, expr):
+        self.expr = expr
+        self.stack = []
+        self.opening_brackets = ['(', '{', '[']
+        self.closing_brackets = [')', '}', ']']
+        self.pairs = {')': '(', '}': '{', ']': '['}
+
+    def clear_expr(self):
+        self.expr = ''.join(ch for ch in self.expr if ch in self.opening_brackets or ch in self.closing_brackets)
+
+    def check_balanced_brackets(self):
+        self.clear_expr()
+        self.stack = []
+
+        for ch in self.expr:
+            if ch in self.opening_brackets:
+                self.stack.append(ch)
+            elif ch in self.closing_brackets:
+                if not self.stack:
+                    return False
+                last_open = self.stack.pop()
+                if self.pairs[ch] != last_open:
+                    return False
+
+        return len(self.stack) == 0
+
+import unittest
+
+class BalancedBracketsTestCheckBalancedBrackets(unittest.TestCase):
+    def test_check_balanced_brackets(self):
+        b = BalancedBrackets("a(b)c")
+        self.assertEqual(b.check_balanced_brackets(), True)
+
+    def test_check_balanced_brackets_2(self):
+        b = BalancedBrackets("a(b){c}")
+        self.assertEqual(b.check_balanced_brackets(), True)
+
+    def test_check_balanced_brackets_3(self):
+        b = BalancedBrackets("[a](b){c}")
+        self.assertEqual(b.check_balanced_brackets(), True)
+
+    def test_check_balanced_brackets_4(self):
+        b = BalancedBrackets("[a(b){c}")
+        self.assertEqual(b.check_balanced_brackets(), False)
+
+    def test_check_balanced_brackets_5(self):
+        b = BalancedBrackets("a(b{c}]")
+        self.assertEqual(b.check_balanced_brackets(), False)
+
+    def test_check_balanced_brackets_6(self):
+        b = BalancedBrackets("a(b{c]]")
+        self.assertEqual(b.check_balanced_brackets(), False)
+
+    def test_check_balanced_brackets_7(self):
+        b = BalancedBrackets("[a)(b){c}")
+        self.assertEqual(b.check_balanced_brackets(), False)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

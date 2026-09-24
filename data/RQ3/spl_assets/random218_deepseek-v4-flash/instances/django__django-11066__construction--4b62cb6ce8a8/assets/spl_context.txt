@@ -1,0 +1,231 @@
+# FILE: django/contrib/contenttypes/management/__init__.py
+# CLASS RenameContentType
+
+[DEFINE_WORKER: "Initializes a rename-model operation by storing the app label and old/new model names as instance attributes and invoking the parent initializer with rename forward and backward callables." __init__]
+    [INPUTS]
+        <REF> app_label </REF>: str "The label of the application containing the model."
+        <REF> old_model </REF>: str "The current model name before renaming."
+        <REF> new_model </REF>: str "The new model name after renaming."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the app_label parameter to the instance attribute self.app_label. RESULT self.app_label]
+            [COMMAND Assign the old_model parameter to the instance attribute self.old_model. RESULT self.old_model]
+            [COMMAND Assign the new_model parameter to the instance attribute self.new_model. RESULT self.new_model]
+            [COMMAND Call the parent class __init__ method with self.rename_forward and self.rename_backward as arguments and discard the return value. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renames a ContentType row's model field from old_model to new_model on the selected database, restoring old_model if the new name causes an IntegrityError, and clears the ContentType cache after a successful save." _rename]
+    [INPUTS]
+        <REF> self </REF>: object "The migration operation instance; provides app_label for the natural-key lookup."
+        <REF> apps </REF>: ApplicationRegistry "The Django application registry used to resolve the ContentType model."
+        <REF> schema_editor </REF>: SchemaEditor "The schema editor for the migration; its connection.alias supplies the target database alias."
+        <REF> old_model </REF>: str "The current lowercased model name associated with the ContentType to rename."
+        <REF> new_model </REF>: str "The new lowercased model name to assign to the ContentType."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return </REF>: None "Always returns None; the method performs its work through database state and cache side effects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the ContentType model class by calling apps.get_model('contenttypes', 'ContentType') and assign it to variable ContentType. RESULT ContentType]
+            [COMMAND Read schema_editor.connection.alias and assign the database alias string to variable db. RESULT db]
+            [COMMAND Call router.allow_migrate_model(db, ContentType) and if it returns False, return immediately without making any changes. RESULT None]
+            [COMMAND Attempt to load the ContentType instance by natural key with ContentType.objects.db_manager(db).get_by_natural_key(self.app_label, old_model) and assign it to variable content_type. RESULT content_type]
+            [COMMAND If the lookup succeeds and no ContentType.DoesNotExist is raised, enter the else branch and set content_type.model to new_model. RESULT content_type]
+            [COMMAND Inside transaction.atomic(using=db), save the modified content_type by calling content_type.save(update_fields={'model'}). RESULT content_type]
+            [COMMAND If the save succeeds without IntegrityError, call ContentType.objects.clear_cache() because get_by_natural_key cached the old model name. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: ContentType.DoesNotExist is raised while retrieving the content type by natural key.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do nothing and exit the method normally because there is no existing ContentType to rename. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: IntegrityError is raised by content_type.save(update_fields={'model'}) inside the transaction.atomic(using=db) block because the new model name conflicts with a stale content type.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Restore content_type.model to old_model as a graceful fallback; remove_stale_contenttypes will later ask the user how to resolve the conflict. RESULT content_type]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the forward rename migration operation to the internal _rename helper using the stored old and new model values." rename_forward]
+    [INPUTS]
+        <REF> apps </REF>: object "The historical app registry used during the migration."
+        <REF> schema_editor </REF>: object "The database schema editor used to apply the schema change."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the _rename method, passing apps, schema_editor, self.old_model, and self.new_model to perform the forward rename. RESULT _rename_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the backward model rename operation to self._rename, using new_model as the source model and old_model as the destination model." rename_backward]
+    [INPUTS]
+        <REF> apps </REF>: StateApps "Application state registry used to access historical model states."
+        <REF> schema_editor </REF>: SchemaEditor "Database schema editor used to execute the rename operation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> none </REF>: None "This method does not return a value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._rename with positional arguments apps, schema_editor, self.new_model, and self.old_model, then discard the return value. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Inserts a RenameContentType operation immediately after every RenameModel operation in a migration plan once the ContentType model is available, stopping early when the initial contenttypes migration is encountered during a backward migration." inject_rename_contenttypes_operations]
+    [INPUTS]
+        <REF> plan </REF>: list of (migration, backward) tuples or None "Migration plan to process. Each tuple contains a migration object and a boolean backward flag. If None, the function returns immediately."
+        <REF> apps </REF>: application registry "Application registry used to retrieve the ContentType model. Defaults to global_apps."
+        <REF> using </REF>: str "Database alias used for router migration checks. Defaults to DEFAULT_DB_ALIAS."
+        <REF> kwargs </REF>: dict "Unused additional keyword arguments accepted for API compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the ContentType model by calling apps.get_model('contenttypes', 'ContentType'). RESULT ContentType]
+            [COMMAND If ContentType is retrieved successfully and router.allow_migrate_model(using, ContentType) returns True, set available to True. RESULT available]
+            [COMMAND Iterate over each (migration, backward) pair in plan. RESULT None]
+            [COMMAND Inside the outer plan loop, for a migration that is processed because available is True, initialize an empty list named inserts. RESULT inserts]
+            [COMMAND Inside the same processed migration, for each (index, operation) in enumerate(migration.operations), if operation is an instance of migrations.RenameModel, construct RenameContentType(migration.app_label, operation.old_name_lower, operation.new_name_lower) and append (index + 1, operation) to inserts, leaving the original RenameModel operation in place. RESULT inserts]
+            [COMMAND Inside the same processed migration, after scanning all operations, for each (inserted, (index, operation)) in enumerate(inserts), insert the operation into migration.operations at position inserted + index so the RenameContentType appears immediately after the original RenameModel operation. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: plan is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately without modifying any migration operations. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: apps.get_model('contenttypes', 'ContentType') raises LookupError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set available to False and continue with the outer plan loop; all non-special migrations will be skipped until available becomes True. RESULT available]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: ContentType model is retrieved successfully but router.allow_migrate_model(using, ContentType) returns False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately without modifying any migration operations. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: During the outer plan loop, (migration.app_label, migration.name) equals ('contenttypes', '0001_initial') and backward is True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Break out of the outer plan loop, stopping all further processing. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: During the outer plan loop, (migration.app_label, migration.name) equals ('contenttypes', '0001_initial') and backward is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set available to True for the remainder of the plan and continue to the next migration, skipping the current migration's operations. RESULT available]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: During the outer plan loop, available is False after the contenttypes.0001_initial special case check]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Continue to the next migration without processing the current migration's operations. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns dictionaries mapping lowercase model names to ContentType instances and model classes for an app under a database alias, while returning (None, None) if migration is not allowed for ContentType on that database." get_contenttypes_and_models]
+    [INPUTS]
+        <REF> app_config </REF>: AppConfig "Django application configuration object providing the app label and registered model classes."
+        <REF> using </REF>: str "Database alias used for the migration routing check and for querying ContentType objects."
+        <REF> ContentType </REF>: Model "Django ContentType model whose cache is cleared and whose queryset supplies the content type instances."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "Returns (content_types, app_models), where content_types maps model name strings from ContentType rows to ContentType instances and app_models maps model._meta.model_name to model classes; returns (None, None) when the router disallows the migration."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate router.allow_migrate_model(using, ContentType); continue with the main path only when it returns True. RESULT guard_passed]
+            [COMMAND Clear the ContentType.objects cache. RESULT cache_cleared]
+            [COMMAND Build content_types by iterating over ContentType.objects.using(using).filter(app_label=app_config.label) and mapping each ct.model key to the ct instance. RESULT content_types]
+            [COMMAND Build app_models by iterating over app_config.get_models() and mapping each model._meta.model_name key to the model class. RESULT app_models]
+            [COMMAND Return the tuple (content_types, app_models). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: router.allow_migrate_model(using, ContentType) returns False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return (None, None) immediately. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates ContentType records for models in the specified app that are not yet registered, persists them through bulk_create, and logs each created content type when verbosity is at least 2." create_contenttypes]
+    [INPUTS]
+        <REF> app_config </REF>: AppConfig "Application configuration whose models_module determines whether content types can be created and whose label identifies the app."
+        <REF> verbosity </REF>: int "Verbosity level; if >= 2, prints each created content type."
+        <REF> interactive </REF>: bool "Compatibility flag; not used by this method."
+        <REF> using </REF>: str "Database alias used for the ContentType query and bulk_create; defaults to DEFAULT_DB_ALIAS."
+        <REF> apps </REF>: AppConfig registry "Application registry used to resolve the app config and ContentType model; defaults to global_apps."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted for compatibility; not used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return </REF>: None "Returns None directly in early-exit paths and implicitly after completion."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read app_label from app_config.label. RESULT app_label]
+            [COMMAND Try to resolve app_config via apps.get_app_config(app_label) and load ContentType via apps.get_model('contenttypes', 'ContentType'). RESULT app_config, ContentType]
+            [COMMAND Call get_contenttypes_and_models(app_config, using, ContentType) and unpack its two-element return value into content_types and app_models. RESULT content_types, app_models]
+            [COMMAND Build cts by iterating app_models.items() in natural order; for each (model_name, model) pair where model_name is not already present in content_types, create ContentType(app_label=app_label, model=model_name), ignoring the model value. RESULT cts]
+            [COMMAND Persist the new content types by calling ContentType.objects.using(using).bulk_create(cts). RESULT None]
+            [COMMAND If verbosity >= 2, within that if branch iterate over each ct in cts and print "Adding content type '%s | %s'" using ct.app_label and ct.model. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: app_config.models_module is falsy at method entry]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without creating content types. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: LookupError is raised while resolving app_config or ContentType]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: app_models is empty after unpacking get_contenttypes_and_models]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

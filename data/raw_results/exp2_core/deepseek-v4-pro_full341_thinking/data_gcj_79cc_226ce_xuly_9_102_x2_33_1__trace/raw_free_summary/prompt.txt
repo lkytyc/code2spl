@@ -1,0 +1,345 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.*;
+2   import java.util.*;
+3   public class Solution {
+4       private static Scanner in;
+5       public static double roundToDecimals(double value, int places) {
+6           double scale = Math.pow(10, places);
+7           return Math.round(value * scale) / scale;
+8       }
+9       public static void xuly(){
+10          double a = in.nextDouble();
+11          double[] centerX = {0.5,0,0};
+12          double[] centerY = {0,0.5,0};
+13          double[] centerZ = {0,0,0.5};
+14          double[] x0 = {0.5, 0.5, 0.5, 0.5,-0.5,-0.5,-0.5,-0.5};
+15          double[] y0 = {0.5, 0.5,-0.5,-0.5, 0.5, 0.5,-0.5,-0.5};
+16          double[] z0 = {0.5,-0.5,-0.5, 0.5,-0.5, 0.5,-0.5, 0.5};
+17          double i = 0;
+18          boolean isFound = false;
+19          while (i<=45){
+20              isFound = false;
+21              double rad = Math.toRadians(i);
+22              double[] xr = new double[8];
+23              double[] yr = new double[8];
+24              double[] zr = new double[8];
+25              for (int j = 0; j < 8; j++) {
+26                  xr[j] = x0[j] * Math.cos(rad) - y0[j]* Math.sin(rad);
+27                  yr[j] = x0[j] * Math.sin(rad) + y0[j]* Math.cos(rad);
+28                  zr[j] = z0[j];
+29              }
+30              double x1 = 1,y1 = 1,x2 = -1,y2 = -1;
+31              for (int j = 0; j < 8; j++) {
+32                  x1 = Math.min(x1,xr[j]);
+33                  x2 = Math.max(x2,xr[j]);
+34                  y1 = Math.min(y1,zr[j]);
+35                  y2 = Math.max(y2,zr[j]);
+36              }
+37              double dt = (x2-x1) * (y2-y1) ;
+38              double diff = Math.abs(a - dt);
+39              double[] cX = new double[3];
+40              double[] cY = new double[3];
+41              double[] cZ = new double[3];
+42              for (int j = 0; j < 3; j++) {
+43                  cX[j] = centerX[j] * Math.cos(rad) - centerY[j] * Math.sin(rad);
+44                  cY[j] = centerX[j] * Math.sin(rad) + centerY[j] * Math.cos(rad);
+45                  cZ[j] = centerZ[j];
+46              }
+47              if (diff <= 0.000001) {
+48                  for (int j = 0; j < 3; j++) {
+49                      System.out.println(cX[j] + " " + cY[j] + " " + cZ[j]);
+50                  }
+51                  break;
+52              }
+53              else{
+54                  double[] xr0 = new double[8];
+55                  double[] yr0 = new double[8];
+56                  double[] zr0 = new double[8];
+57                  for (int j = 0; j < 8; j++) {
+58                      xr0[j] = xr[j];
+59                      yr0[j] = yr[j];
+60                      zr0[j] = zr[j];
+61                  }
+62                  double ii = 0;
+63                  while (ii<=45) {
+64                      isFound = false;
+65                      double rad0 = Math.toRadians(ii);
+66                      for (int j = 0; j < 8; j++) {
+67                          xr[j] = xr0[j];
+68                          zr[j] = yr0[j] * Math.sin(rad0) + zr0[j] * Math.cos(rad0);
+69                      }
+70                      x1 = 1;
+71                      y1 = 1;
+72                      x2 = -1;
+73                      y2 = -1;
+74                      for (int j = 0; j < 8; j++) {
+75                          x1 = Math.min(x1, xr[j]);
+76                          x2 = Math.max(x2, xr[j]);
+77                          y1 = Math.min(y1, zr[j]);
+78                          y2 = Math.max(y2, zr[j]);
+79                      }
+80                      dt = (x2 - x1) * (y2 - y1);
+81                      diff = Math.abs(a - dt);
+82                      if (diff <= 0.000001) {
+83                          double[] cXn = new double[3];
+84                          double[] cYn = new double[3];
+85                          double[] cZn = new double[3];
+86                          for (int j = 0; j < 3; j++) {
+87                              cXn[j] = cX[j];
+88                              cYn[j] = cY[j] * Math.cos(rad0) - cZ[j] * Math.sin(rad0);
+89                              cZn[j] = cY[j] * Math.sin(rad0) + cZ[j] * Math.cos(rad0);
+90                              System.out.println(cXn[j] + " " + cYn[j] + " " + cZn[j]);
+91                          }
+92                          isFound = true;
+93                          break;
+94                      }
+95                      ii=roundToDecimals(ii+0.1,6);
+96                  }
+97              }
+98              if (isFound) break;
+99              i=roundToDecimals(i+0.1,6);
+100          }
+101          System.out.flush();
+102      }
+103      public static void main(String[] args) throws IOException {
+104          in = new Scanner(new BufferedReader(new InputStreamReader(System.in)));
+105          int numCases = in.nextInt();
+106          for (int test = 1; test <= numCases; test++) {
+107              System.out.print("Case #" + test + ": ");
+108              xuly();
+109          }
+110      }
+111  }
+```
+
+
+**Question**: Does `(rad,21)` have data dependence over `(x2,33)` in function `xuly`? If so, provide a trace.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+The code reads a target area value, then searches through rotations of a cube (first around the z-axis, then around the x-axis) to find an orientation where the projected area of the cube matches the target within a small tolerance. When found, it outputs the coordinates of three rotated center points.
+

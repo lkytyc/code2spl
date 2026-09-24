@@ -1,0 +1,316 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   import sys
+2   def Q(n,N):
+3       n = int(n)
+4       if (n<=N and str(n)<=str(N)) or (n>N and str(n)>str(N)):
+5           return "Y"
+6       else:
+7           return "N"
+8   def main():
+9       ans = ""
+10      print("? "+"1"+"0"*10)
+11      sys.stdout.flush()
+12      A = input()
+13      if A=="Y":
+14          n = 1
+15          print("? "+"9"*n)
+16          sys.stdout.flush()
+17          A = input()
+18          while A == "N":
+19              n+=1
+20              print("? "+"9"*n)
+21              sys.stdout.flush()
+22              A = input()
+23          print("! "+str(10**(n-1)))
+24      else:
+25          l = 0
+26          r = 10
+27          S = [""]*11
+28          S[0] ="Y"
+29          S[10] ="N"
+30          while 1:
+31              m = (l+r)//2
+32              print("? "+str(10**m))
+33              sys.stdout.flush()
+34              A = input()
+35              if A=="Y":
+36                  if S[m+1]=="N":
+37                      K = m+1
+38                      break
+39                  S[m] = "Y"
+40                  l = m
+41              else:
+42                  if S[m-1]=="Y":
+43                      K = m
+44                      break
+45                  S[m] = "N"
+46                  r = m
+47          l = 1
+48          r = 9
+49          S = [""]*10
+50          S[9] ="Y"
+51          ashi = "9"*10
+52          print("? "+ans + str(1) + ashi)
+53          sys.stdout.flush()
+54          A = input()
+55          if A=="Y":
+56              ans += "1"
+57          else:
+58              S[1] = "N"
+59              while 1:
+60                  m = (l+r)//2
+61                  print("? "+ans + str(m) + ashi)
+62                  sys.stdout.flush()
+63                  A = input()
+64                  if A=="Y":
+65                      if S[m-1]=="N":
+66                          ans += str(m)
+67                          break
+68                      S[m] = "Y"
+69                      r = m
+70                  else:
+71                      if S[m+1]=="Y":
+72                          ans += str(m+1)
+73                          break
+74                      S[m] = "N"
+75                      l = m
+76          for i in range(K-1):
+77              l = 0
+78              r = 9
+79              S = [""]*10
+80              S[9]= "Y"
+81              print("? " + ans + str(0) + ashi)
+82              sys.stdout.flush()
+83              A = input()
+84              if A=="Y":
+85                  ans += "0"
+86              else:
+87                  S[0] = "N"
+88                  while 1:
+89                      m = (l+r)//2
+90                      print("? " + ans + str(m) + ashi)
+91                      sys.stdout.flush()
+92                      A = input()
+93                      if A=="Y":
+94                          if S[m-1]=="N":
+95                              ans += str(m)
+96                              break
+97                          S[m] = "Y"
+98                          r = m
+99                      else:
+100                          if S[m+1]=="Y":
+101                              ans += str(m+1)
+102                              break
+103                          S[m] = "N"
+104                          l = m
+105          print("! " + ans)
+106  main()
+```
+
+
+**Question**: Which variable instances have data dependence over `(m,89)` in function `main`? List all such variables.
+
+**Output**:

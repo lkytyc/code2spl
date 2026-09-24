@@ -1,0 +1,1284 @@
+# FILE: django/db/models/sql/compiler.py
+# CLASS SQLCompiler
+
+[DEFINE_WORKER: "Initializes the compiler state by storing the supplied query, database connection, and using alias, and by setting placeholder attributes for select, annotation_col_map, klass_info, and _meta_ordering." __init__]
+    [INPUTS]
+        <REF> query </REF>: Query "The query object to be compiled or executed."
+        <REF> connection </REF>: BaseDatabaseWrapper "The database connection used for query execution."
+        <REF> using </REF>: str "The database alias/name used to select the connection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the supplied query object to self.query. RESULT self.query]
+            [COMMAND Assign the supplied database connection to self.connection. RESULT self.connection]
+            [COMMAND Assign the supplied database alias to self.using. RESULT self.using]
+            [COMMAND Initialize self.quote_cache with the constant dictionary {'*': '*'}. RESULT self.quote_cache]
+            [COMMAND Initialize self.select to None as a placeholder; it will be populated later as a side-effect of executing the query, and it does not include extra select columns used only for grammatical correctness. RESULT self.select]
+            [COMMAND Initialize self.annotation_col_map to None as a placeholder for annotation column mappings. RESULT self.annotation_col_map]
+            [COMMAND Initialize self.klass_info to None as a placeholder used by QuerySet.iterator(). RESULT self.klass_info]
+            [COMMAND Initialize self._meta_ordering to None to store metadata ordering information. RESULT self._meta_ordering]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes the query alias when no aliases are referenced, then unpacks the selected column information and stores the selected column count." setup_query]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Using the short-circuiting all() test, if every alias a in self.query.alias_map has self.query.alias_refcount[a] == 0 (vacuously true when alias_map is empty), call self.query.get_initial_alias(). RESULT self.query]
+            [COMMAND Unpack the exactly three-element return value of self.get_select() into self.select, self.klass_info, and self.annotation_col_map. RESULT self.select, self.klass_info, self.annotation_col_map]
+            [COMMAND Set self.col_count to len(self.select). RESULT self.col_count]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares a Django ORM query before SQL generation by ensuring the query is set up, computing ordering, splitting WHERE and HAVING clauses, deriving extra select fields, marking whether extra selects exist, and computing group-by expressions." pre_sql_setup]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple containing extra_select, order_by, and group_by."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.setup_query() to perform any required setup immediately before SQL generation. RESULT None]
+            [COMMAND Call self.get_order_by() to determine the ordering for the query. RESULT order_by]
+            [COMMAND Call self.query.where.split_having() and unpack its two components into self.where and self.having. RESULT self.where, self.having]
+            [COMMAND Call self.get_extra_select(order_by, self.select) to compute extra select expressions. RESULT extra_select]
+            [COMMAND Set self.has_extra_select to the boolean truthiness of extra_select. RESULT self.has_extra_select]
+            [COMMAND Concatenate self.select and extra_select, then call self.get_group_by(self.select + extra_select, order_by) to compute group-by expressions. RESULT group_by]
+            [COMMAND Return the tuple (extra_select, order_by, group_by). RESULT extra_select, order_by, group_by]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and compiles the GROUP BY clause for an ORM query by combining explicit group_by settings with select, order-by, and having columns, collapsing equivalent expressions, and deduplicating the resulting SQL/parameter pairs." get_group_by]
+    [INPUTS]
+        <REF> select </REF>: iterable of 3-tuples "Select clause entries, each as (expr, sql, params), used to add required GROUP BY columns."
+        <REF> order_by </REF>: iterable of 2-tuples "Order-by entries, each as (expr, (sql, params, is_ref)); non-reference expressions contribute to GROUP BY."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list of 2-tuples (sql, params) "Compiled GROUP BY clause as deduplicated (sql, params) pairs in generation order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check if self.query.group_by is None; if true, immediately return an empty list. RESULT empty_result]
+            [COMMAND Initialize expressions as an empty list to accumulate group-by expressions. RESULT expressions]
+            [COMMAND If self.query.group_by is not True, iterate over each expr in self.query.group_by; if expr does not have the attribute as_sql, resolve it with self.query.resolve_ref(expr) and append the resolved expression, otherwise append expr unchanged. RESULT expressions]
+            [COMMAND Build ref_sources as a set containing expr.source for every expr in expressions that is an instance of Ref. RESULT ref_sources]
+            [COMMAND For each select tuple unpacked as expr, _, _, if expr is not in ref_sources, retrieve cols = expr.get_group_by_cols() and append each col from cols to expressions. RESULT expressions]
+            [COMMAND For each order_by tuple unpacked as expr, (sql, params, is_ref), if is_ref is false, extend expressions with expr.get_group_by_cols(). RESULT expressions]
+            [COMMAND Set having_group_by to self.having.get_group_by_cols() if self.having is truthy, otherwise set it to (). RESULT having_group_by]
+            [COMMAND Append each expr in having_group_by to expressions. RESULT expressions]
+            [COMMAND Initialize result as an empty list and seen as an empty set, then reassign expressions to self.collapse_group_by(expressions, having_group_by). RESULT expressions_result_seen]
+            [COMMAND For each expr in expressions after collapse, compile it via self.compile(expr) to get sql and params, apply expr.select_format(self, sql, params) to get formatted sql and params, compute params_hash = make_hashable(params), and if (sql, params_hash) is not in seen, append (sql, params) to result and add (sql, params_hash) to seen. RESULT result]
+            [COMMAND Return result, the final list of (sql, params) tuples. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collapses the GROUP BY expression list by prioritizing or removing primary-key columns based on the database's grouping capabilities." collapse_group_by]
+    [INPUTS]
+        <REF> expressions </REF>: list "The list of GROUP BY expressions to be collapsed."
+        <REF> having </REF>: list "The list of HAVING expressions used to preserve expressions that appear in the HAVING clause."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> expressions </REF>: list "The final GROUP BY expression list, possibly the same list when no transformation applies."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Branch to the appropriate alternative flow based on the database feature flags. If self.connection.features.allows_group_by_pk is true, follow the allows_group_by_pk flow; otherwise, if self.connection.features.allows_group_by_selected_pks is true, follow the selected-pks flow; otherwise, follow the no-change flow. RESULT path_choice]
+            [COMMAND Return the final expressions list after the selected alternative flow has produced it. RESULT expressions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.connection.features.allows_group_by_pk is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize pk to None. RESULT pk]
+            [COMMAND Iterate over the original expressions and find the first expression for which getattr(expr, 'target', None) equals self.query.model._meta.pk and getattr(expr, 'alias', None) equals self.query.base_table; assign that expression to pk and break out of the loop. RESULT pk]
+            [COMMAND If pk is not None, build pk_aliases as the set containing expr.alias for every expression in the original expressions that has a target attribute whose target.primary_key is true. RESULT pk_aliases]
+            [COMMAND If pk is not None, reassign expressions to a new list beginning with pk and then containing, in their original order, every expression from the original expressions that is present in having or that has a non-None alias not present in pk_aliases. RESULT expressions]
+            [COMMAND If pk is None, leave expressions unchanged. RESULT expressions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.connection.features.allows_group_by_pk is false and self.connection.features.allows_group_by_selected_pks is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build pks as the set of expressions in the original expressions for which all of the following are true: hasattr(expr, 'target') is true, expr.target.primary_key is true, and self.connection.features.allows_group_by_selected_pks_on_model(expr.target.model) is true. RESULT pks]
+            [COMMAND Build aliases as the set of expr.alias values for the expressions in pks. RESULT aliases]
+            [COMMAND Reassign expressions to the list of expressions from the original expressions that are in pks or whose getattr(expr, 'alias', None) value is not in aliases. RESULT expressions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.connection.features.allows_group_by_pk is false and self.connection.features.allows_group_by_selected_pks is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave expressions unchanged. RESULT expressions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the SELECT output for a query by combining extra raw SQL selections, default or explicit columns, and annotation selects, compiling each into SQL/params, merging related-model select fields, and returning the select triples, klass_info, and annotations mapping." get_select]
+    [INPUTS]
+        <REF> self </REF>: object "The query object exposing query metadata and helper methods such as get_default_columns, get_related_selections, and compile."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> select_data </REF>: tuple "A 3-tuple (ret, klass_info, annotations) where ret is a list of (expression, (sql, params), alias) tuples, klass_info is a model-selection dictionary, and annotations maps alias names to select positions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize select to an empty list, klass_info to None, annotations to an empty dictionary, and select_idx to 0. RESULT state_vars]
+            [COMMAND For each alias and (sql, params) in self.query.extra_select.items(), store annotations[alias] = select_idx, append (RawSQL(sql, params), alias) to select, then increment select_idx by 1. RESULT extra_select_processed]
+            [COMMAND Assert that self.query.select and self.query.default_cols are not both truthy; if both are truthy, raise AssertionError. RESULT assertion_checked]
+            [COMMAND If self.query.default_cols is truthy, set cols to self.get_default_columns(); otherwise set cols to self.query.select. RESULT cols_selected]
+            [COMMAND If cols is truthy, initialize select_list to an empty list; for each col in cols, append select_idx to select_list, append (col, None) to select, and increment select_idx; afterward set klass_info to {'model': self.query.model, 'select_fields': select_list}. RESULT base_columns_processed]
+            [COMMAND For each alias and annotation in self.query.annotation_select.items(), store annotations[alias] = select_idx, append (annotation, alias) to select, then increment select_idx by 1. RESULT annotations_processed]
+            [COMMAND If self.query.select_related is truthy, set related_klass_infos to self.get_related_selections(select) and assign klass_info['related_klass_infos'] = related_klass_infos. RESULT related_selections_fetched]
+            [COMMAND If self.query.select_related is truthy, recursively process the related klass tree: for each ki in klass_info['related_klass_infos'], if ki['from_parent'] is truthy set ki['select_fields'] = klass_info['select_fields'] + ki['select_fields']; then unconditionally recurse into ki. RESULT related_selections_merged]
+            [COMMAND Initialize ret to an empty list. RESULT ret_initialized]
+            [COMMAND For each (col, alias) in select, try to compile col with self.compile(col) to obtain sql and params. RESULT compiled_select]
+            [COMMAND Within the same for loop over select, if compile raises EmptyResultSet, set sql to '0' and params to (); otherwise set sql and params to col.select_format(self, sql, params). RESULT select_formatted_or_fallback]
+            [COMMAND Within the same for loop over select, append (col, (sql, params), alias) to ret. RESULT ret_populated]
+            [COMMAND Return ret, klass_info, and annotations. RESULT return_values]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.query.select and self.query.default_cols are both truthy]
+        [LOG "Assertion failed in get_select: the query cannot have both explicit select columns and default columns enabled."]
+        [THROW AssertionError "The query state is invalid because self.query.select and self.query.default_cols cannot both be truthy."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the ORDER BY clause for the current query as a list of (resolved_expression, (sql, params, is_ref)) tuples by selecting the ordering source, normalizing each ordering term, relabeling combined-query columns when necessary, and de-duplicating ordering terms." get_order_by]
+    [INPUTS]
+        <REF> self </REF>: object "The Query instance on which the ORDER BY clause is built; exposes query state, select list, compile method, ordering_parts, and related helpers."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of 2-tuples (expr, (sql, params, is_ref)) representing the final ORDER BY expressions, where expr is the resolved expression, sql is its compiled SQL, params are the SQL parameters, and is_ref indicates whether the term references a SELECT-clause expression."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Select the ordering source by evaluating the priority chain: if self.query.extra_order_by is truthy, use self.query.extra_order_by; otherwise, if self.query.default_ordering is false, use self.query.order_by; otherwise, if self.query.order_by is truthy, use self.query.order_by; otherwise, if self.query.get_meta().ordering is truthy, use it and set self._meta_ordering to that value; otherwise, use an empty list. Store the chosen source as ordering. RESULT ordering]
+            [COMMAND If self.query.standard_ordering is truthy, unpack ORDER_DIR['ASC'] into asc and desc; otherwise unpack ORDER_DIR['DESC'] into asc and desc. RESULT asc_desc]
+            [COMMAND Initialize order_by to an empty list. RESULT order_by]
+            [COMMAND For each field in ordering, if field has a resolve_expression attribute: when field is a Value, replace it with Cast(field, field.output_field); when field is not an OrderBy, replace it with field.asc(); when self.query.standard_ordering is false, replace it with field.copy() and reverse the ordering on the copy; then append (field, False) to order_by and continue to the next field. RESULT order_by]
+            [COMMAND Still inside the loop over ordering, if field equals the literal '?', append (OrderBy(Random()), False) to order_by and continue to the next field. RESULT order_by]
+            [COMMAND Still inside the loop over ordering, for remaining fields call get_order_dir(field, asc) to obtain col and order, and set descending to the boolean result of order == 'DESC'. RESULT col_order_descending]
+            [COMMAND Still inside the loop over ordering, if col is present in self.query.annotation_select, append (OrderBy(Ref(col, self.query.annotation_select[col]), descending=descending), True) to order_by and continue to the next field. RESULT order_by]
+            [COMMAND Still inside the loop over ordering, if col is present in self.query.annotations: when self.query.combinator and self.select are both truthy, set expr to F(col); otherwise set expr to self.query.annotations[col] and, if expr is a Value, replace it with Cast(expr, expr.output_field); append (OrderBy(expr, descending=descending), False) to order_by and continue to the next field. RESULT order_by]
+            [COMMAND Still inside the loop over ordering, if the original field contains a '.', split col into table and col on the first dot; append (OrderBy(RawSQL('%s.%s' % (self.quote_name_unless_alias(table), col), []), descending=descending), False) to order_by and continue to the next field. RESULT order_by]
+            [COMMAND Still inside the loop over ordering, for col not handled above: if self.query.extra is falsy or col is not in self.query.extra, extend order_by with the result of self.find_ordering_name(field, self.query.get_meta(), default_order=asc); otherwise, if col is not in self.query.extra_select, append (OrderBy(RawSQL(*self.query.extra[col]), descending=descending), False) to order_by; otherwise append (OrderBy(Ref(col, RawSQL(*self.query.extra[col])), descending=descending), True) to order_by. RESULT order_by]
+            [COMMAND Initialize result to an empty list. RESULT result]
+            [COMMAND Initialize seen to an empty set. RESULT seen]
+            [COMMAND For each (expr, is_ref) in order_by, resolve expr against the query by calling expr.resolve_expression(self.query, allow_joins=True, reuse=None), storing the resolved expression as resolved. RESULT resolved]
+            [COMMAND Within the same loop over order_by, if self.query.combinator and self.select are both truthy, relabel the ORDER BY source for combined queries: set src to resolved.get_source_expressions()[0] and expr_src to expr.get_source_expressions()[0]; iterate over enumerate(self.select) as (idx, (sel_expr, _, col_alias)); inside that iteration, if is_ref and col_alias equals src.refs, set src to src.source; otherwise if col_alias is truthy and the condition (isinstance(expr_src, F) and col_alias equals expr_src.name) is false, continue to the next selected column; when src equals sel_expr, set resolved's source expressions to [RawSQL('%d' % (idx + 1), ())] and break out of the inner loop. If the inner loop finishes without a break and col_alias is truthy, raise DatabaseError('ORDER BY term does not match any column in the result set.'); otherwise set order_by_idx to len(self.query.select) + 1, set col_name to f'__orderbycol{order_by_idx}', add expr_src as an annotation named col_name to every query in self.query.combined_queries, add resolved as a select column named col_name with self.query.add_select_col(resolved, col_name), and set resolved's source expressions to [RawSQL(f'{order_by_idx}', ())]. RESULT resolved]
+            [COMMAND Still within the loop over order_by, compile the resolved expression with self.compile(resolved), assigning sql and params; compute without_ordering as self.ordering_parts.search(sql)[1] so the ordering direction is stripped for duplicate detection; compute params_hash as make_hashable(params); if (without_ordering, params_hash) is already in seen, continue to the next order_by entry; otherwise add this pair to seen and append (resolved, (sql, params, is_ref)) to result. RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During combined-query relabeling, the inner loop over self.select completes without a break and the last col_alias is truthy.]
+        [LOG "ORDER BY term does not match any column in the result set."]
+        [THROW DatabaseError "Raised when an ORDER BY term with a column alias cannot be matched to any column in the combined query result set."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "When a DISTINCT query has no explicit distinct_fields, this method collects ORDER BY expressions that are not direct references and are not already present in the SELECT list, returning them as extra select entries." get_extra_select]
+    [INPUTS]
+        <REF> self </REF>: object "Query object exposing query.distinct, query.distinct_fields, and ordering_parts."
+        <REF> order_by </REF>: iterable of tuples "Each tuple is (expr, (sql, params, is_ref)), where expr is the ordering expression, sql is the ordering SQL text, params are bound parameters, and is_ref indicates whether the expression is a direct column reference."
+        <REF> select </REF>: iterable of tuples "Each tuple contains a select expression; the second element t[1] is the SQL text used for comparison."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> extra_select </REF>: list of tuples "Each tuple is (expr, (without_ordering, params), None), containing the original ordering expression and the stripped SQL/parameter pair."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize extra_select as an empty list. RESULT extra_select]
+            [COMMAND Evaluate the outer condition: self.query.distinct is truthy and self.query.distinct_fields is falsy, using short-circuit evaluation; if it is false, follow the alternative flow for the skipped if block. RESULT outer_condition_met]
+            [COMMAND Within the outer if block, build select_sql as a list containing the second element t[1] for each tuple t in select. RESULT select_sql]
+            [COMMAND Within the outer if block, iterate over each tuple (expr, (sql, params, is_ref)) in order_by. RESULT order_by_item]
+            [COMMAND Within the for loop over order_by, compute without_ordering as the second element from the result of self.ordering_parts.search(sql). RESULT without_ordering]
+            [COMMAND Within the for loop over order_by, check whether is_ref is false and the pair (without_ordering, params) is not already present in select_sql; if both conditions are true, append (expr, (without_ordering, params), None) to extra_select. RESULT extra_select]
+            [COMMAND After the for loop finishes, return extra_select. RESULT extra_select]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.query.distinct is falsy or self.query.distinct_fields is truthy, so the outer if block is skipped.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip building select_sql and skip iterating over order_by. RESULT extra_select]
+            [COMMAND Return extra_select as the empty list initialized at the start of the method. RESULT extra_select]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the cached or database-backend-quoted identifier for a table name, except when the name is a known alias or extra-select name, in which case it is returned unquoted." quote_name_unless_alias]
+    [INPUTS]
+        <REF> name </REF>: string "Table name or alias to be quoted, unless it is already cached or recognized as an alias."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The cached value, the unquoted alias, or the database-specific quoted form of name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check if name is present in self.quote_cache. If it is not present, continue to the alias check. RESULT cache_lookup]
+            [COMMAND Evaluate the alias condition: (name in self.query.alias_map and name not in self.query.table_map) OR name in self.query.extra_select OR (self.query.external_aliases.get(name) and name not in self.query.table_map). If false, continue to the normal quoting path. RESULT is_alias]
+            [COMMAND Call self.connection.ops.quote_name(name) to compute the database-specific quoted identifier and assign the result to r. RESULT r]
+            [COMMAND Store r in self.quote_cache under the key name. RESULT quote_cache_updated]
+            [COMMAND Return r. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: name is present in self.quote_cache]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.quote_cache[name] immediately. RESULT cached_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: name is a known alias or extra select: (name in self.query.alias_map and name not in self.query.table_map) OR name in self.query.extra_select OR (self.query.external_aliases.get(name) and name not in self.query.table_map)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.quote_cache[name] = name and return name immediately. RESULT alias_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compiles a SQL node by preferring the connection vendor-specific as_<vendor> method on the node and falling back to node.as_sql, then returning the generated SQL and parameters." compile]
+    [INPUTS]
+        <REF> self </REF>: object "The compiler instance whose connection.vendor determines the vendor-specific attribute name."
+        <REF> node </REF>: object "The SQL node to compile; it may expose a vendor-specific as_<vendor> attribute or a default as_sql method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A (sql, params) tuple returned by the selected SQL compilation method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up vendor_impl by getting the attribute named 'as_' + self.connection.vendor from node, defaulting to None if the attribute is absent. RESULT vendor_impl]
+            [COMMAND If vendor_impl is truthy, call vendor_impl(self, self.connection) and unpack the returned tuple into sql and params. RESULT sql, params]
+            [COMMAND Return the tuple (sql, params). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: vendor_impl is falsy (the vendor-specific attribute is absent, None, or otherwise false).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call node.as_sql(self, self.connection) and unpack the returned tuple into sql and params. RESULT sql, params]
+            [COMMAND Return the tuple (sql, params). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a compound SQL statement from non-empty combined queries, applying backend feature validation and SQL wrapping, then returns the joined SQL string list and flattened parameters." get_combinator_sql]
+    [INPUTS]
+        <REF> combinator </REF>: string "Set operation key (for example 'union' or 'difference') used to select the SQL set operator."
+        <REF> all </REF>: bool "Whether to append 'ALL' to the SQL operator when the combinator is 'union'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list of string "Single-element list containing the fully joined compound SQL statement."
+        <REF> params </REF>: list "Flattened list of SQL parameters from all component query parts, preserving part order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.connection.features and assign it to features. RESULT features]
+            [COMMAND Build the compilers list by iterating over self.query.combined_queries, keeping only queries where query.is_empty() is False, and calling query.get_compiler(self.using, self.connection) for each kept query. RESULT compilers]
+            [COMMAND If features.supports_slicing_ordering_in_compound is False, iterate over zip(self.query.combined_queries, compilers); for each query and compiler pair, if either query.low_mark or query.high_mark is truthy, raise DatabaseError, and if compiler.get_order_by() returns a non-empty ordering, raise DatabaseError. RESULT validation_passed]
+            [COMMAND Initialize parts as an empty tuple. RESULT parts]
+            [COMMAND For each compiler in compilers, within a try block, if the compiler query has no values_select and self.query.values_select is set, clone compiler.query and set its values to the concatenation of self.query.extra_select, self.query.values_select, and self.query.annotation_select. RESULT compiler_query_prepared]
+            [COMMAND For the current compiler, call compiler.as_sql() and unpack the result into part_sql and part_args. RESULT part_sql, part_args]
+            [COMMAND If compiler.query.combinator is truthy and features.supports_parentheses_in_compound is False, set part_sql to 'SELECT * FROM ({})'.format(part_sql); otherwise, if compiler.query.combinator is truthy and features.supports_slicing_ordering_in_compound is False, set part_sql to '({})'.format(part_sql). RESULT part_sql]
+            [COMMAND Append the tuple (part_sql, part_args) to parts using tuple concatenation. RESULT parts]
+            [COMMAND If EmptyResultSet is raised for the current compiler and (combinator is 'union' or (combinator is 'difference' and parts is non-empty)), continue to the next compiler; otherwise re-raise the caught EmptyResultSet. RESULT exception_handling_done]
+            [COMMAND After the loop, if parts is empty, raise EmptyResultSet. RESULT parts_non_empty]
+            [COMMAND Look up self.connection.ops.set_operators[combinator] and assign the resulting SQL operator text to combinator_sql. RESULT combinator_sql]
+            [COMMAND If all is True and combinator is 'union', append ' ALL' to combinator_sql. RESULT combinator_sql]
+            [COMMAND Set braces to '({})' if features.supports_slicing_ordering_in_compound is True, otherwise set braces to '{}'. RESULT braces]
+            [COMMAND For each (sql, args) pair in parts, format sql with braces and pair it with args, then transpose the resulting pairs into sql_parts and args_parts. RESULT sql_parts, args_parts]
+            [COMMAND Build result as a single-element list containing ' {} '.format(combinator_sql).join(sql_parts). RESULT result]
+            [COMMAND Initialize params as an empty list. RESULT params]
+            [COMMAND For each part in args_parts, extend params with every element of part. RESULT params]
+            [COMMAND Return the tuple (result, params). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: features.supports_slicing_ordering_in_compound is False and (query.low_mark or query.high_mark) is truthy for a combined query being validated.]
+        [LOG "LIMIT/OFFSET not allowed in subqueries of compound statements."]
+        [THROW DatabaseError "Raised when a combined query has LIMIT/OFFSET slicing in a backend that does not support slicing or ordering in compound statements."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: features.supports_slicing_ordering_in_compound is False and compiler.get_order_by() returns a non-empty ordering for a combined query being validated.]
+        [LOG "ORDER BY not allowed in subqueries of compound statements."]
+        [THROW DatabaseError "Raised when a combined query has ORDER BY in a backend that does not support slicing or ordering in compound statements."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: EmptyResultSet is raised inside the compiler loop and it is not skipped because combinator is 'union' or (combinator is 'difference' and parts is non-empty).]
+        [LOG "EmptyResultSet re-raised because the empty queryset cannot be omitted for this compound operation."]
+        [THROW EmptyResultSet "Re-raises the caught EmptyResultSet to propagate the empty compound query condition."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: After the compiler loop, parts is empty.]
+        [LOG "EmptyResultSet raised because no parts remain to combine."]
+        [THROW EmptyResultSet "Raised when all combinable parts are absent, so no compound SQL can be constructed."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the default list of column expressions for selecting every concrete field of the base model, joining related models when needed and skipping deferred fields or already loaded parent data." get_default_columns]
+    [INPUTS]
+        <REF> start_alias </REF>: str or None "Initial alias for the root model traversal; if falsy, the query's initial alias is used."
+        <REF> opts </REF>: Options or None "Model options for the base model; if None, the method obtains them from self.query.get_meta()."
+        <REF> from_parent </REF>: Model or None "Parent model used to avoid reloading data for already loaded parents during select_related traversal."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "List of column expressions for the default columns, one per concrete field that should be loaded."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize result as an empty list. RESULT result]
+            [COMMAND If opts is None, assign opts = self.query.get_meta(). RESULT opts]
+            [COMMAND Compute only_load = self.deferred_to_columns(). RESULT only_load]
+            [COMMAND Resolve start_alias with short-circuit logic: keep start_alias if it is truthy, otherwise set start_alias = self.query.get_initial_alias(). RESULT start_alias]
+            [COMMAND Initialize seen_models as a dictionary with the single entry None mapped to the resolved start_alias. RESULT seen_models]
+            [COMMAND For each field in opts.concrete_fields, compute model = field.model._meta.concrete_model. RESULT field]
+            [COMMAND Within the for loop over opts.concrete_fields, if model == opts.model, set model = None. RESULT model]
+            [COMMAND Within the for loop over opts.concrete_fields, if from_parent is truthy and model is not None and issubclass(from_parent._meta.concrete_model, model._meta.concrete_model), continue to the next field. RESULT skip_field]
+            [COMMAND Within the for loop over opts.concrete_fields, if field.model is in only_load and field.attname is not in only_load[field.model], continue to the next field. RESULT skip_field]
+            [COMMAND Within the for loop over opts.concrete_fields, compute alias = self.query.join_parent_model(opts, model, start_alias, seen_models). RESULT alias]
+            [COMMAND Within the for loop over opts.concrete_fields, compute column = field.get_col(alias). RESULT column]
+            [COMMAND Within the for loop over opts.concrete_fields, append column to result. RESULT result]
+            [COMMAND After the loop completes, return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compiles the DISTINCT ON field list by resolving each distinct field to database targets, appending annotation names directly, and compiling non-annotation targets into SQL expressions and parameters." get_distinct]
+    [INPUTS]
+        <REF> self </REF>: object "Compiler instance providing self.query, self._setup_joins, and self.compile."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "List of compiled DISTINCT ON expressions or annotation field names."
+        <REF> params </REF>: list "List of SQL parameter values or parameter lists gathered from compiling non-annotation distinct field targets."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize result and params as empty lists. RESULT result, params]
+            [COMMAND Set opts to self.query.get_meta(). RESULT opts]
+            [COMMAND In the outer loop over each name in self.query.distinct_fields, split name by LOOKUP_SEP into parts. RESULT parts]
+            [COMMAND In the outer loop, call self._setup_joins(parts, opts, None) and unpack targets, alias, joins, path, and transform_function, discarding the first and sixth returned values. RESULT targets, alias, joins, path, transform_function]
+            [COMMAND In the outer loop, call self.query.trim_joins(targets, joins, path) and keep the new targets and alias returned by the call. RESULT targets, alias]
+            [COMMAND In the inner loop over each target in targets, if name is in self.query.annotation_select, append name to result. RESULT result]
+            [COMMAND In the inner loop over each target in targets, when name is not in self.query.annotation_select, call transform_function(target, alias), pass the returned expression to self.compile, append the compiled expression to result, and append the parameter to params. RESULT result, params]
+            [COMMAND After all loops finish, return result and params. RESULT result, params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves an ordering field path into a list of OrderBy expressions, recursively expanding a related model's default ordering when necessary and guarding against infinite recursion." find_ordering_name]
+    [INPUTS]
+        <REF> name </REF>: str "Ordering field path in the form 'field1__field2__...__fieldN'."
+        <REF> opts </REF>: object "Model options object containing model ordering metadata; passed to _setup_joins and used for recursive ordering."
+        <REF> alias </REF>: str or None "Table alias to use initially; defaults to None."
+        <REF> default_order </REF>: str "Default sort direction, usually 'ASC' or 'DESC', used when the name has no explicit order suffix."
+        <REF> already_seen </REF>: set or None "Set of join tuples already visited during recursive ordering resolution; used to detect infinite loops."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list of tuples "List of (OrderBy, False) tuples representing the resolved ordering expressions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the ordering direction by calling get_order_dir(name, default_order), assigning the first returned value to name and the second returned value to order. RESULT name_and_order]
+            [COMMAND Set descending to true only when order equals 'DESC'. RESULT descending]
+            [COMMAND Split the normalized name into pieces using LOOKUP_SEP as the separator. RESULT pieces]
+            [COMMAND Call self._setup_joins(pieces, opts, alias) with the current opts and alias, then unpack the returned values into field, targets, alias, joins, path, opts, and transform_function; note that opts and alias are reassigned after the call. RESULT resolved_joins]
+            [COMMAND Evaluate the relational-ordering condition with short-circuit and; if field.is_relation, opts.ordering, getattr(field, 'attname', None) != pieces[-1], and name != 'pk' are all true, enter the alternative flow for recursive default ordering. RESULT relational_ordering_condition]
+            [COMMAND In the fall-through path when the relational-ordering condition is false, call self.query.trim_joins(targets, joins, path), assigning the first returned value to targets and the second returned value to alias; the third returned value is discarded. RESULT targets_and_alias]
+            [COMMAND After trimming joins, for each target t in targets, construct (OrderBy(transform_function(t, alias), descending=descending), False), and return the resulting list. RESULT final_ordering_terms]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: All four subconditions are true, evaluated with short-circuit and: field.is_relation is true; opts.ordering is truthy; getattr(field, 'attname', None) != pieces[-1]; name != 'pk'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize already_seen as a new set if it is falsy, including when it is None or an empty set. RESULT already_seen]
+            [COMMAND Build join_tuple by collecting tuple(getattr(self.query.alias_map[j], 'join_cols', None) for each join identifier j in joins). RESULT join_tuple]
+            [COMMAND Check whether join_tuple is already present in already_seen; if it is, trigger the FieldError exception flow, otherwise add join_tuple to already_seen. RESULT cycle_checked]
+            [COMMAND Initialize results as an empty list. RESULT results]
+            [COMMAND Within the outer relational-ordering branch, for each item in opts.ordering, if item has resolve_expression and is not an OrderBy, convert it using item.desc() when descending is true or item.asc() when descending is false. RESULT item]
+            [COMMAND Within the same for loop over opts.ordering, if item is an OrderBy, append (item, False) to results and continue to the next item without recursing. RESULT results]
+            [COMMAND Within the same for loop over opts.ordering, for items that are not OrderBy, recursively call self.find_ordering_name(item, opts, alias, order, already_seen) and extend results with the returned list. RESULT results]
+            [COMMAND After the for loop completes, return results from the relational-ordering branch. RESULT results]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within the relational-ordering branch, join_tuple is already contained in already_seen.]
+        [LOG "Infinite loop caused by ordering."]
+        [THROW FieldError "Raised to prevent infinite recursion when the same join tuple is encountered more than once while resolving model ordering."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Helper for get_order_by() and get_distinct() that resolves the effective alias, calls self.query.setup_joins to build join metadata, resets alias to the last join, and returns the seven-tuple (field, targets, alias, joins, path, opts, transform_function)." _setup_joins]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose query attribute is used for join processing."
+        <REF> pieces </REF>: object "The join path pieces passed through to self.query.setup_joins."
+        <REF> opts </REF>: object "Options passed to self.query.setup_joins; the original value is read before being overwritten by the returned opts."
+        <REF> alias </REF>: string or null "Initial alias; if falsy, it is replaced by self.query.get_initial_alias()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "Seven-tuple (field, targets, alias, joins, path, opts, transform_function) returned to the caller."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If the incoming alias is truthy, keep it as the effective alias; otherwise, call self.query.get_initial_alias() and assign the returned value to alias. RESULT alias]
+            [COMMAND Before reassigning opts, call self.query.setup_joins(pieces, opts, alias) using the existing opts value, then unpack the returned 6-tuple in order into field, targets, opts, joins, path, transform_function. RESULT field, targets, opts, joins, path, transform_function]
+            [COMMAND Set alias to the last element of joins (joins[-1]), allowing the implicit IndexError to propagate when joins is empty. RESULT alias]
+            [COMMAND Return the tuple (field, targets, alias, joins, path, opts, transform_function). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the FROM clause by compiling all active aliases and adding extra tables, returning the compiled SQL fragments and their bound parameters." get_from_clause]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list[str] "SQL FROM-clause fragments for active aliases and extra tables."
+        <REF> params </REF>: list "Bound parameter values accumulated while compiling aliases."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize result to an empty list and params to an empty list. RESULT result, params]
+            [COMMAND For each alias in the snapshot tuple(self.query.alias_map), if self.query.alias_refcount[alias] is falsy, continue to the next alias; otherwise attempt to retrieve from_clause = self.query.alias_map[alias]. If a KeyError occurs, continue to the next alias; otherwise call self.compile(from_clause), append clause_sql to result, and extend params with clause_params. RESULT clause_sql, clause_params]
+            [COMMAND For each t in self.query.extra_tables, call self.query.table_alias(t) to obtain alias and discard the second value. If alias is not in self.query.alias_map or, when it is present, self.query.alias_refcount[alias] == 1 due to short-circuit evaluation, append ', %s' % self.quote_name_unless_alias(alias) to result. RESULT result]
+            [COMMAND Return result and params as the final pair. RESULT result, params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Recursively builds select_related information by walking forward and reverse relations, appending selected columns and klass_info metadata, validating requested relation names, and applying depth restrictions." get_related_selections]
+    [INPUTS]
+        <REF> select </REF>: list "Mutable list of selected (column, None) pairs; updated with columns for each related model encountered."
+        <REF> opts </REF>: Options|None "Model options for the current model; if falsy, loaded from self.query.get_meta()."
+        <REF> root_alias </REF>: str|None "Alias of the root model in the query, used as the starting point for join setup."
+        <REF> cur_depth </REF>: int "Current distance from the root model; direct relations start at 1."
+        <REF> requested </REF>: dict|None "Nested select_related field requests; when None, initialized from self.query.select_related if it is a dict."
+        <REF> restricted </REF>: bool|None "Whether the selection is restricted to the requested fields; initialized from isinstance(self.query.select_related, dict) when requested is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> related_klass_infos </REF>: list "List of klass_info dictionaries describing selected related models, including select_fields and nested related_klass_infos."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested function _get_field_choices that returns chain(direct_choices, reverse_choices, self.query._filtered_relations), where direct_choices are names of relation fields in opts.fields and reverse_choices are related_query_name values for unique reverse fields. RESULT _get_field_choices]
+            [COMMAND Initialize related_klass_infos to an empty list. RESULT related_klass_infos]
+            [COMMAND If not restricted and cur_depth is strictly greater than self.query.max_depth, return the current related_klass_infos immediately as the recursion depth cutoff. RESULT related_klass_infos]
+            [COMMAND If opts is not truthy, assign opts = self.query.get_meta() and root_alias = self.query.get_initial_alias(). RESULT opts, root_alias]
+            [COMMAND Set only_load = self.query.get_loaded_field_names() and initialize fields_found as an empty set. RESULT only_load, fields_found]
+            [COMMAND If requested is None, set restricted = isinstance(self.query.select_related, dict); if restricted is true, set requested = self.query.select_related. RESULT restricted, requested]
+            [COMMAND Define the nested helper get_related_klass_infos(klass_info, related_klass_infos) that assigns klass_info['related_klass_infos'] = related_klass_infos. RESULT get_related_klass_infos]
+            [COMMAND Start the forward-field loop over every field f in opts.fields; for each f, set field_model = f.model._meta.concrete_model and add f.name to fields_found. RESULT field_model, fields_found]
+            [COMMAND Within the forward-field loop, if restricted is true set next = requested.get(f.name, {}); otherwise set next = False. RESULT next]
+            [COMMAND Within the forward-field loop, if restricted is true and f is not a relation, raise FieldError if next is truthy or f.name is in requested, using _get_field_choices to build the list of valid choices. RESULT FieldError]
+            [COMMAND Within the forward-field loop, if select_related_descend(f, restricted, requested, only_load.get(field_model)) returns false, skip the rest of the current iteration with continue. RESULT loop_continue]
+            [COMMAND Within the forward-field loop, build klass_info with model = f.remote_field.model, field = f, reverse = False, local_setter = f.set_cached_value, remote_setter = f.remote_field.set_cached_value if f.unique else lambda x, y: None, and from_parent = False; append it to related_klass_infos. RESULT klass_info]
+            [COMMAND Within the forward-field loop, call self.query.setup_joins([f.name], opts, root_alias), take alias from the last join, and obtain columns from self.get_default_columns(start_alias=alias, opts=f.remote_field.model._meta). RESULT alias, columns]
+            [COMMAND Within the forward-field loop, for each column, append len(select) to select_fields and append (col, None) to select; then store select_fields in klass_info['select_fields']. RESULT select_fields, select]
+            [COMMAND Within the forward-field loop, recursively call self.get_related_selections(select, f.remote_field.model._meta, alias, cur_depth + 1, next, restricted) to get next_klass_infos, then call get_related_klass_infos(klass_info, next_klass_infos). RESULT next_klass_infos, klass_info]
+            [COMMAND Inside the restricted block, build related_fields as a list of (o.field, o.related_model) pairs from opts.related_objects where o.field.unique is true and o.many_to_many is false. RESULT related_fields]
+            [COMMAND Inside the restricted block, for each f, model in related_fields, if select_related_descend(f, restricted, requested, only_load.get(model), reverse=True) is false, continue to the next pair. RESULT loop_continue]
+            [COMMAND Inside the restricted block, for each surviving reverse relation, set related_field_name = f.related_query_name(), add it to fields_found, call self.query.setup_joins([related_field_name], opts, root_alias), and set alias = join_info.joins[-1]. RESULT related_field_name, alias]
+            [COMMAND Inside the restricted block, for each surviving reverse relation, set from_parent = issubclass(model, opts.model) and model is not opts.model, then build klass_info with model, field = f, reverse = True, local_setter = f.remote_field.set_cached_value, remote_setter = f.set_cached_value, and from_parent; append it to related_klass_infos. RESULT klass_info]
+            [COMMAND Inside the restricted block, for each surviving reverse relation, get columns from self.get_default_columns(start_alias=alias, opts=model._meta, from_parent=opts.model), append each column to select while recording len(select) in select_fields, and store select_fields in klass_info['select_fields']. RESULT select_fields]
+            [COMMAND Inside the restricted block, for each surviving reverse relation, set next = requested.get(f.related_query_name(), {}), recursively call self.get_related_selections(select, model._meta, alias, cur_depth + 1, next, restricted), and merge the result into klass_info via get_related_klass_infos. RESULT next_klass_infos]
+            [COMMAND Still inside the restricted block, define local_setter(obj, from_obj) to set f.remote_field.set_cached_value(from_obj, obj) only when from_obj is truthy, and define remote_setter(name, obj, from_obj) to call setattr(from_obj, name, obj). RESULT local_setter, remote_setter]
+            [COMMAND Still inside the restricted block, iterate over list(requested); if cur_depth > 1, break immediately because filtered relations only apply at the topmost level. RESULT name]
+            [COMMAND Within the requested loop, if name is in self.query._filtered_relations, add name to fields_found, unpack self.query.setup_joins([name], opts, root_alias) as f, _, join_opts, joins, _, _, set model = join_opts.model, alias = joins[-1], and set from_parent = issubclass(model, opts.model) and model is not opts.model. RESULT model, alias, from_parent]
+            [COMMAND Within the filtered-relation branch, build klass_info with model, field = f, reverse = True, local_setter = local_setter, remote_setter = partial(remote_setter, name), and from_parent; append it to related_klass_infos. RESULT klass_info]
+            [COMMAND Within the filtered-relation branch, get columns from self.get_default_columns(start_alias=alias, opts=model._meta, from_parent=opts.model), append each column to select while recording len(select) in select_fields, and store select_fields in klass_info['select_fields']. RESULT select_fields]
+            [COMMAND Within the filtered-relation branch, set next_requested = requested.get(name, {}), recursively call self.get_related_selections(select, opts=model._meta, root_alias=alias, cur_depth=cur_depth + 1, requested=next_requested, restricted=restricted), and merge the result into klass_info via get_related_klass_infos. RESULT next_klass_infos]
+            [COMMAND Inside the restricted block, after processing requested names, compute fields_not_found = set(requested).difference(fields_found). RESULT fields_not_found]
+            [COMMAND Return related_klass_infos. RESULT related_klass_infos]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Inside the forward-field loop, when restricted is true, f is not a relation, and either next is truthy or f.name is in requested.]
+        [LOG "Non-relational field given in select_related: '<name>'. Choices are: <comma-separated valid choices or (none)>."]
+        [THROW FieldError "Raised when a non-relational field is used as a select_related relation."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Inside the restricted block, after processing direct, reverse, and filtered relation fields, fields_not_found is non-empty.]
+        [LOG "Invalid field name(s) given in select_related: <quoted invalid names>. Choices are: <comma-separated valid choices or (none)>."]
+        [THROW FieldError "Raised when a requested select_related field name cannot be resolved."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves every requested select_for_update(of=...) field path into a SQL column expression for the FOR UPDATE OF clause, validates the paths against the query's relation graph, and raises FieldError for invalid names." get_select_for_update_of_arguments]
+    [INPUTS]
+        <REF> self </REF>: SQLCompiler "Compiler instance providing query metadata, selected column entries, connection feature flags, and column compilation/quoting helpers."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list[str] "A list of compiled or quoted column identifiers for the SELECT FOR UPDATE OF clause."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define a nested generator _get_parent_klass_info(klass_info) that gets concrete_model from klass_info['model']._meta.concrete_model, iterates over concrete_model._meta.parents.items(), and for each parent_model and parent_link computes parent_list = parent_model._meta.get_parent_list() and yields a dictionary with 'model' set to parent_model, 'field' set to parent_link, 'reverse' set to False, and 'select_fields' set to the list of select_index values from klass_info['select_fields'] where self.select[select_index][0].target.model equals parent_model or is in parent_list. RESULT _get_parent_klass_info]
+            [COMMAND Define a nested function _get_first_selected_col_from_model(klass_info) that gets concrete_model from klass_info['model']._meta.concrete_model, iterates through klass_info['select_fields'], and returns the first self.select[select_index][0] whose target.model equals concrete_model; if no match is found it returns None. RESULT _get_first_selected_col_from_model]
+            [COMMAND Define a nested generator _get_field_choices() that performs breadth-first traversal starting from collections.deque([(None, self.klass_info)]); while the queue is non-empty, pop the leftmost parent_path and klass_info; if parent_path is None yield 'self', otherwise if klass_info['reverse'] is true replace field with field.remote_field, build path as parent_path plus field.name, and yield LOOKUP_SEP.join(path); then enqueue (path, child) for each child yielded by _get_parent_klass_info(klass_info) and for each child in klass_info.get('related_klass_infos', []). RESULT _get_field_choices]
+            [COMMAND Initialize result to an empty list and invalid_names to an empty list. RESULT result, invalid_names]
+            [COMMAND For each name in self.query.select_for_update_of, set klass_info to self.klass_info; if name equals 'self', set col to the result of _get_first_selected_col_from_model(klass_info). RESULT klass_info, col]
+            [COMMAND For a non-'self' name, split name by LOOKUP_SEP and for each part build klass_infos as the concatenation of klass_info.get('related_klass_infos', []) and all items yielded by _get_parent_klass_info(klass_info); then search klass_infos for a related_klass_info whose field matches the part, using field.remote_field when related_klass_info['reverse'] is true; if found set klass_info to that related_klass_info and continue to the next part, otherwise set klass_info to None and break out of the part loop. RESULT klass_info]
+            [COMMAND After resolving a non-'self' name, if klass_info is None append the original name to invalid_names and continue to the next name in select_for_update_of; otherwise set col to the result of _get_first_selected_col_from_model(klass_info). RESULT invalid_names, col]
+            [COMMAND If col is not None and self.connection.features.select_for_update_of_column is true, append self.compile(col)[0] to result; otherwise if col is not None append self.quote_name_unless_alias(col.alias) to result. RESULT result]
+            [COMMAND After processing all names, if invalid_names is non-empty raise FieldError with the invalid names and the choices from _get_field_choices(); otherwise return result. RESULT final result or FieldError]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: invalid_names is non-empty after processing all select_for_update_of names]
+        [LOG "Invalid field name(s) given in select_for_update(of=(...)): {invalid_names}. Only relational fields followed in the query are allowed. Choices are: {choices from _get_field_choices()}."]
+        [THROW FieldError "Raised when one or more field paths in select_for_update(of=...) cannot be resolved from the query's relation graph."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the self.deferred_loading data structure into a mapping of table names to sets of column names to be loaded by populating a dictionary via deferred_to_data and returning it." deferred_to_columns]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> columns </REF>: dict "Mapping of table names to sets of column names that are to be loaded."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create an empty dictionary named columns. RESULT columns]
+            [COMMAND Call self.query.deferred_to_data(columns, self.query.get_loaded_field_names_cb) to populate columns with table names mapped to sets of column names to be loaded. RESULT columns]
+            [COMMAND Return columns. RESULT columns]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a dictionary that maps each expression index to a tuple of the combined backend and field converters plus the original expression, for every truthy expression that has at least one converter." get_converters]
+    [INPUTS]
+        <REF> self </REF>: object "The current method instance; provides the connection and ops used to retrieve backend converters."
+        <REF> expressions </REF>: iterable "The collection of expressions to examine for database and field converters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> converters </REF>: dict "Dictionary mapping indices of converter-backed expressions to (backend_converters + field_converters, expression) tuples."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize converters as an empty dictionary. RESULT converters]
+            [COMMAND Iterate over enumerate(expressions), obtaining index i and expression for each item. RESULT i, expression]
+            [COMMAND Within the loop iteration, evaluate whether expression is truthy. RESULT expression_truthy]
+            [COMMAND Within the loop iteration, after the truthiness guard passes, call self.connection.ops.get_db_converters(expression) and store the returned list as backend_converters. RESULT backend_converters]
+            [COMMAND Within the loop iteration, after the truthiness guard passes, call expression.get_db_converters(self.connection) and store the returned list as field_converters. RESULT field_converters]
+            [COMMAND Within the loop iteration, after the truthiness guard passes, evaluate whether backend_converters is truthy or, when it is not, whether field_converters is truthy, using short-circuit OR. RESULT has_converters]
+            [COMMAND Within the loop iteration, after the truthiness guard passes and when has_converters is true, assign to converters[i] a tuple whose first element is backend_converters + field_converters and whose second element is expression. RESULT converters]
+            [COMMAND After the loop finishes, return converters. RESULT converters]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop iteration, expression_truthy is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the remaining converter lookup steps for this index and continue with the next expression. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop iteration, expression_truthy is true but has_converters is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not add an entry to converters for this index and continue with the next expression. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Lazily transforms rows by applying converter chains at specified column positions and yielding each fully converted row." apply_converters]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing the connection attribute passed to each converter."
+        <REF> rows </REF>: iterable of row iterables "Input rows to transform; every row is converted to a list before processing."
+        <REF> converters </REF>: dict mapping positions to (converter chain, expression) tuples "Dictionary whose keys are column positions and whose values contain a sequence of converter callables and an expression; each converter is invoked as converter(value, expression, connection)."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: generator of list rows "Lazily yields each row after all converter chains have been applied to their designated column positions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the connection from self.connection and bind it to the local variable connection. RESULT _connection]
+            [COMMAND Create a snapshot of converter items as a list of (position, (converter_chain, expression)) tuples and bind it to converter_entries. RESULT _converter_entries]
+            [COMMAND Iterate lazily over the input rows by mapping each row through list(), and bind each new list to row. RESULT _row]
+            [COMMAND Within the outer loop over each row, for each (pos, (convs, expression)) in converter_entries, read the current value at row[pos] into value. RESULT _value]
+            [COMMAND Within the outer row loop and middle converter-entry loop, for each converter in convs (if any), call converter(value, expression, connection) and update value with the returned result sequentially. RESULT _value]
+            [COMMAND Within the outer row loop and middle converter-entry loop, after the inner converter chain completes, assign the final computed value back to row[pos]. RESULT _row]
+            [COMMAND Within the outer row loop, after all converter entries have been applied to the current row, yield the fully converted row to the consumer. RESULT _yielded_row]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an iterator over the query results by optionally executing a SQL query, deriving field converters, flattening the result rows, applying converters when present, and optionally converting each row to a tuple." results_iter]
+    [INPUTS]
+        <REF> results </REF>: iterable of iterables or None "Optional pre-fetched result rows; when None, the SQL query is executed to produce the results."
+        <REF> tuple_expected </REF>: boolean "If true and converters are applied, each resulting row is converted to a tuple."
+        <REF> chunked_fetch </REF>: boolean "Flag passed to execute_sql when results is None to control chunked fetching."
+        <REF> chunk_size </REF>: integer "Chunk size passed to execute_sql when results is None; defaults to GET_ITERATOR_CHUNK_SIZE."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rows </REF>: iterator "An iterator over the result rows, flattened from the result iterables, with converters applied when available and tuple conversion applied if requested."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If results is None, assign to results the return value of self.execute_sql(MULTI, chunked_fetch=chunked_fetch, chunk_size=chunk_size). RESULT results]
+            [COMMAND Build fields as a list containing s[0] for each s in the slice self.select[0:self.col_count]. RESULT fields]
+            [COMMAND Obtain converters by calling self.get_converters(fields). RESULT converters]
+            [COMMAND Create rows as a lazy iterator by flattening results one level with chain.from_iterable(results). RESULT rows]
+            [COMMAND If converters is truthy, replace rows with the value returned by self.apply_converters(rows, converters). RESULT rows]
+            [COMMAND Within the truthy converters branch, if tuple_expected is truthy, replace rows with map(tuple, rows). RESULT rows]
+            [COMMAND Return rows. RESULT rows]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether a query has any results by converting the truthiness of executing SQL in SINGLE mode into a boolean." has_results]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if the SQL execution result is truthy; False if it is falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.execute_sql with SINGLE to obtain the SQL execution result. RESULT sql_result]
+            [COMMAND Convert sql_result to a boolean using bool() to determine whether it is truthy. RESULT has_results_bool]
+            [COMMAND Return has_results_bool. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Executes the compiled SQL query against the database and returns an empty iterator, None, the open cursor, a single sliced row, a fully materialized list, or a lazy chunked iterator depending on result_type, chunked_fetch, and connection capabilities, while ensuring cursor cleanup on the required paths." execute_sql]
+    [INPUTS]
+        <REF> result_type </REF>: enum/constant (MULTI, SINGLE, CURSOR, NO_RESULTS, or None) "Controls the return behavior; defaults to MULTI, and None is normalized to NO_RESULTS."
+        <REF> chunked_fetch </REF>: bool "Requests chunked cursor reads when True; results are materialized if False or if the database does not support chunked reads."
+        <REF> chunk_size </REF>: int "Number of rows fetched per chunk for the lazy result iterator; defaults to GET_ITERATOR_CHUNK_SIZE."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: iterator, list, cursor, row slice, or None "Returns iter([]) for MULTI on an empty result set, None for empty-set non-MULTI paths or NO_RESULTS, the open cursor for CURSOR mode, a sliced single row or None for SINGLE mode, a list for materialized multi-row reads, or a lazy iterator for supported chunked reads."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize result_type with Python or semantics: if result_type is falsy, set it to NO_RESULTS. RESULT result_type]
+            [COMMAND Call self.as_sql() to obtain sql and params; if as_sql() raises EmptyResultSet or sql is empty, use the empty-result alternative flow. RESULT sql, params]
+            [COMMAND If chunked_fetch is truthy, create cursor with self.connection.chunked_cursor(); otherwise create cursor with self.connection.cursor(). RESULT cursor]
+            [COMMAND Execute cursor.execute(sql, params); if it raises any Exception, use the execute-failure exception flow. RESULT execution_success]
+            [COMMAND After successful execution, dispatch to the CURSOR, SINGLE, NO_RESULTS, or remaining multi-row path based on result_type. RESULT dispatch]
+            [COMMAND For the remaining multi-row path, build result with cursor_iter using cursor, self.connection.features.empty_fetchmany_value, self.col_count if self.has_extra_select is truthy otherwise None, and chunk_size. RESULT result]
+            [COMMAND After building result, choose the materialized-list path or the lazy chunked-iterator path based on chunked_fetch and self.connection.features.can_use_chunked_reads. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.as_sql() raises EmptyResultSet or returns an empty sql value]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If result_type is MULTI, return iter([]) to represent an empty result set. RESULT empty_iterator]
+            [COMMAND Otherwise, including SINGLE, CURSOR, and NO_RESULTS, return None without any database interaction. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After cursor.execute succeeds, result_type is CURSOR]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return cursor to the caller without closing it; the caller must process and close the cursor. RESULT cursor]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After cursor.execute succeeds, result_type is SINGLE]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fetch one row into val using cursor.fetchone(). RESULT val]
+            [COMMAND If val is truthy, return val[0:self.col_count] where self.col_count is the exclusive upper bound; if val is falsy, return val. RESULT single_row_result]
+            [COMMAND In a finally block, close cursor before the SINGLE branch returns or propagates any exception. RESULT cursor_closed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After cursor.execute succeeds, result_type is NO_RESULTS]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Close cursor and return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After result is built, chunked_fetch is falsy or self.connection.features.can_use_chunked_reads is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return list(result) to materialize all rows into memory, and close cursor in a finally block before returning. RESULT materialized_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After result is built, chunked_fetch is truthy and self.connection.features.can_use_chunked_reads is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the lazy result iterator without closing the cursor; the caller consumes it in chunks. RESULT lazy_iterator]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: cursor.execute(sql, params) raises any Exception]
+        [LOG "Cursor execution failed, possibly because a server-side cursor is no longer usable; the cursor is closed and the original exception is re-raised."]
+        [THROW Exception "The original exception raised by cursor.execute is re-raised after cursor.close() is called."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds equality predicates linking each selected expression of a subquery to the corresponding column in an aliased table, then returns the subquery wrapped in EXISTS along with its bound parameters." as_subquery_condition]
+    [INPUTS]
+        <REF> self </REF>: object "Query expression instance providing connection.ops, query, compile, and as_sql."
+        <REF> alias </REF>: str "Alias for the subquery/table used to qualify right-hand column references."
+        <REF> columns </REF>: iterable "Column names or identifiers on the aliased side, paired by index with self.query.select entries."
+        <REF> compiler </REF>: SQLCompiler "Compiler object exposing quote_name_unless_alias."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A (sql, params) pair; sql is 'EXISTS (<subquery_sql>)' and params are the subquery's bound parameters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign qn = compiler.quote_name_unless_alias and qn2 = self.connection.ops.quote_name. RESULT qn_qn2]
+            [COMMAND For each index, select_col in enumerate(self.query.select): compile select_col into lhs_sql and lhs_params via self.compile(select_col); construct rhs = '%s.%s' % (qn(alias), qn2(columns[index])); append RawSQL('%s = %s' % (lhs_sql, rhs), lhs_params) to self.query.where using the 'AND' connector. RESULT query_where]
+            [COMMAND Call self.as_sql() and unpack the returned 2-element tuple into sql and params. RESULT sql_params]
+            [COMMAND Return the tuple ('EXISTS (%s)' % sql, params). RESULT exists_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Executes the SQL query via self.execute_sql(), materializes the query result, takes the first element of the materialized list, and yields each item as a string, flattening non-string items into space-separated text while passing string items through unchanged." explain_query]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> yielded_value </REF>: Generator[str] "Yields one normalized string for each item in result[0]; non-string items are flattened by joining str(c) for each element c, while string items are yielded unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.execute_sql(), consume its returned iterable with list(), and assign the new list to result. RESULT result]
+            [COMMAND Begin a for loop over result[0] with loop variable row; for each iteration, follow the branch selected by isinstance(row, str), with no break or continue. RESULT row]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over result[0], row is not a string]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert each element c in row to a string using str(c), in iteration order, and collect the converted strings. RESULT string_parts]
+            [COMMAND Join string_parts with a single space. RESULT joined_string]
+            [COMMAND Yield joined_string. RESULT yielded_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over result[0], row is a string]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Yield row unchanged. RESULT yielded_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS SQLInsertCompiler
+
+[DEFINE_WORKER: "Converts a field and value into placeholder SQL and accompanying parameters, handling raw values, SQL expressions, custom field placeholders, and backend-specific parameter modification." field_as_sql]
+    [INPUTS]
+        <REF> field </REF>: Field or None "The database field descriptor on which the value is being saved; None indicates that val should be treated as raw SQL."
+        <REF> val </REF>: object "The value to convert into a placeholder and params; may be raw SQL, an expression object with as_sql, or a plain literal value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple (sql, params) "The SQL placeholder or raw SQL string and the parameter list to bind to it, with params already passed through self.connection.ops.modify_insert_params."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If field is None, set sql to val and params to [] to use the value as raw SQL. RESULT sql_params]
+            [COMMAND Else if val has an as_sql attribute, compile the expression by calling self.compile(val) and assign the returned pair to sql and params. RESULT sql_params]
+            [COMMAND Else if field has a get_placeholder attribute, call field.get_placeholder(val, self, self.connection), assign its return value to sql, and set params to [val]. RESULT sql_params]
+            [COMMAND Else use the common placeholder fallback by setting sql to '%s' and params to [val]. RESULT sql_params]
+            [COMMAND After the conditional branch completes, call self.connection.ops.modify_insert_params(sql, params) and assign the returned value to params, allowing backend-specific correction such as Oracle Spatial's 'NULL' placeholder handling. RESULT modified_params]
+            [COMMAND Return the tuple (sql, params). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares a value for a database query by resolving Django expressions with insert-specific validation or by delegating plain values to the field's get_db_prep_save method." prepare_value]
+    [INPUTS]
+        <REF> self </REF>: object "The method receiver providing self.query and self.connection."
+        <REF> field </REF>: Field "The database field used for save preparation and error reporting."
+        <REF> value </REF>: object "The value to prepare; may be a Django expression or a plain database value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> prepared_value </REF>: object "The resolved expression or database-prepared value returned for use in the query."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether value has a resolve_expression attribute. RESULT is_expression]
+            [COMMAND If is_expression is true, resolve value by calling value.resolve_expression(self.query, allow_joins=False, for_save=True) and assign the returned expression to value. RESULT value]
+            [COMMAND If is_expression is true, check whether value.contains_column_references; if it is true, raise ValueError as specified in exception_flows. RESULT has_column_references]
+            [COMMAND If is_expression is true, check whether value.contains_aggregate; if it is true, raise FieldError as specified in exception_flows. RESULT has_aggregate]
+            [COMMAND If is_expression is true, check whether value.contains_over_clause; if it is true, raise FieldError as specified in exception_flows. RESULT has_over_clause]
+            [COMMAND If is_expression is false, prepare value by calling field.get_db_prep_save(value, connection=self.connection) and assign the result to value. RESULT value]
+            [COMMAND Return value. RESULT prepared_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The resolved value has contains_column_references true.]
+        [LOG "Failed to insert expression on the field because it references existing columns. F() expressions can only be used to update, not to insert."]
+        [THROW ValueError "Raised when the resolved insert expression contains column references."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: The resolved value has contains_aggregate true.]
+        [LOG "Aggregate functions are not allowed in this query for the given field and value."]
+        [THROW FieldError "Raised when the resolved expression contains an aggregate function."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: The resolved value has contains_over_clause true.]
+        [LOG "Window expressions are not allowed in this query for the given field and value."]
+        [THROW FieldError "Raised when the resolved expression contains a window expression."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Gets the value of a field from an object, returning the raw attribute value for raw queries, otherwise delegating to the field's pre_save method with add=True." pre_save_val]
+    [INPUTS]
+        <REF> self </REF>: object "The current object or model instance; self.query.raw determines whether the field value should be read directly from the object."
+        <REF> field </REF>: object "The field object whose attname is used for raw lookup and whose pre_save method is called for non-raw queries."
+        <REF> obj </REF>: object "The object from which the field value is retrieved and to which pre_save is applied."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The field value: getattr(obj, field.attname) when self.query.raw is truthy, otherwise field.pre_save(obj, add=True)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.query.raw is truthy. RESULT _raw_condition]
+            [COMMAND When _raw_condition is false, call field.pre_save(obj, add=True) and store the returned value. RESULT _pre_saved_value]
+            [COMMAND Return _pre_saved_value as the method result. RESULT _return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.query.raw is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call getattr(obj, field.attname) to retrieve the raw attribute value and store it. RESULT _raw_field_value]
+            [COMMAND Return _raw_field_value immediately, skipping the remainder of the method. RESULT _return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds SQL placeholder rows and flattened SQL parameter rows for every value row by delegating each field/value pair to self.field_as_sql, and returns the two sequences as a pair, with an immediate empty-list return when value_rows is falsy." assemble_as_sql]
+    [INPUTS]
+        <REF> fields </REF>: sequence "Sequence of N field identifiers or column definitions used with each value row to produce SQL placeholder fragments."
+        <REF> value_rows </REF>: sequence of sequences "Sequence of M rows of values; each row must contain N values aligned with fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "Pair (placeholder_rows, param_rows) where placeholder_rows is a sequence of M rows of N SQL placeholder strings and param_rows is a sequence of M flattened lists containing all SQL parameters for that row."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Given a truthy value_rows, create rows_of_fields_as_sql as a generator that, for each row in value_rows, zips fields with row and calls self.field_as_sql(field, value) for each field/value pair to produce a (sql, params) tuple; note that zip silently ignores extras if lengths differ. RESULT rows_of_fields_as_sql]
+            [COMMAND Create sql_and_param_pair_rows as a generator that, for each row in rows_of_fields_as_sql, transposes the per-field (sql, params) pairs with zip(*row) into a pair consisting of a tuple of SQL placeholders and a tuple of per-field parameter lists. RESULT sql_and_param_pair_rows]
+            [COMMAND Consume sql_and_param_pair_rows by applying zip(*sql_and_param_pair_rows) and unpacking the result into placeholder_rows and initial_param_rows, where placeholder_rows holds M rows of N placeholder strings and initial_param_rows holds M rows of N per-field parameter lists. RESULT placeholder_rows, initial_param_rows]
+            [COMMAND For each row in initial_param_rows, flatten the per-field parameter lists into a single list using a nested list comprehension, producing the final param_rows. RESULT param_rows]
+            [COMMAND Return the pair (placeholder_rows, param_rows) as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value_rows is falsy (for example, an empty list or tuple)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the pair ([], []) immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compiles the INSERT SQL for the query into one or more (SQL, params) tuples, handling field preparation, bulk insert capability, ignore-conflict suffixes, and optional RETURNING columns." as_sql]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list[tuple[str, tuple]] "A list of SQL strings with their corresponding flattened parameter tuples; the SQL may be a bulk statement or one statement per object row."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store qn = self.connection.ops.quote_name, opts = self.query.get_meta(), insert_statement = self.connection.ops.insert_statement(ignore_conflicts=self.query.ignore_conflicts), initialize result = ['%s %s' % (insert_statement, qn(opts.db_table))], and set fields = self.query.fields or [opts.pk] so an empty field list falls back to the primary key. RESULT initial_context]
+            [COMMAND Append the quoted column list to result using result.append('(%s)' % ', '.join(qn(f.column) for f in fields)). RESULT result_with_columns]
+            [COMMAND Prepare value_rows: if self.query.fields is truthy, assign [[self.prepare_value(field, self.pre_save_val(field, obj)) for field in fields] for obj in self.query.objs]; otherwise assign [[self.connection.ops.pk_default_value()] for _ in self.query.objs] and set fields = [None], keeping the previously appended column list unchanged. RESULT prepared_value_rows_and_fields]
+            [COMMAND Set can_bulk to False when self.returning_fields is truthy; otherwise set can_bulk to self.connection.features.has_bulk_insert. RESULT can_bulk]
+            [COMMAND Unpack placeholder_rows, param_rows = self.assemble_as_sql(fields, value_rows). RESULT placeholder_rows_and_param_rows]
+            [COMMAND Compute ignore_conflicts_suffix_sql = self.connection.ops.ignore_conflicts_suffix_sql(ignore_conflicts=self.query.ignore_conflicts). RESULT ignore_conflicts_suffix_sql]
+            [COMMAND Select the final return path: if self.returning_fields is truthy and self.connection.features.can_return_columns_from_insert is true, use the RETURNING path; otherwise if can_bulk is true, use the bulk-insert path; otherwise use the per-row insert path. RESULT final_return_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.returning_fields is truthy and self.connection.features.can_return_columns_from_insert is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.connection.features.can_return_rows_from_bulk_insert is true, append self.connection.ops.bulk_insert_sql(fields, placeholder_rows) to result and set params = param_rows; otherwise append "VALUES (%s)" % ", ".join(placeholder_rows[0]) to result and set params = [param_rows[0]]. RESULT returning_params]
+            [COMMAND If ignore_conflicts_suffix_sql is truthy, append it to result. RESULT returning_result_with_suffix]
+            [COMMAND Assign r_sql, self.returning_params = self.connection.ops.return_insert_columns(self.returning_fields). RESULT returning_columns_sql]
+            [COMMAND If r_sql is truthy, append r_sql to result and extend params with [self.returning_params]. RESULT returning_result_with_columns]
+            [COMMAND Return [(" ".join(result), tuple(chain.from_iterable(params)))]. RESULT returning_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The RETURNING path is not taken (self.returning_fields is falsy or self.connection.features.can_return_columns_from_insert is false) and can_bulk is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append self.connection.ops.bulk_insert_sql(fields, placeholder_rows) to result. RESULT bulk_result]
+            [COMMAND If ignore_conflicts_suffix_sql is truthy, append it to result. RESULT bulk_result_with_suffix]
+            [COMMAND Return [(" ".join(result), tuple(p for ps in param_rows for p in ps))]. RESULT bulk_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The RETURNING path is not taken (self.returning_fields is falsy or self.connection.features.can_return_columns_from_insert is false) and can_bulk is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If ignore_conflicts_suffix_sql is truthy, append it to result. RESULT non_bulk_result_with_suffix]
+            [COMMAND Return [(" ".join(result + ["VALUES (%s)" % ", ".join(p)]), vals) for p, vals in zip(placeholder_rows, param_rows)]. RESULT non_bulk_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Executes the compiled INSERT SQL statements and returns either an empty list, fetched inserted rows, fetched inserted columns, or the database-generated insert id depending on the requested returning_fields and connection capabilities." execute_sql]
+    [INPUTS]
+        <REF> returning_fields </REF>: list or None "Optional fields whose generated values should be returned after the insert; None or a falsy value means no returned values are requested."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Empty list if no returning fields are requested; otherwise a list of returned rows, a list containing one columns row, or a single-element list containing the last insert id tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that the requested returning_fields are valid for this insert: the assertion passes only if not (returning_fields and len(self.query.objs) != 1 and not self.connection.features.can_return_rows_from_bulk_insert). RESULT validation_passed]
+            [COMMAND Store the incoming returning_fields value in self.returning_fields. RESULT returning_fields_stored]
+            [COMMAND Acquire a database cursor by entering self.connection.cursor() as a context manager. RESULT cursor]
+            [COMMAND Within the open cursor context, iterate over each (sql, params) pair produced by self.as_sql() and execute it with cursor.execute(sql, params). RESULT sql_executed]
+            [COMMAND Still inside the open cursor context, after the SQL execution loop, if self.returning_fields is falsy, return []. RESULT empty_result]
+            [COMMAND Still inside the open cursor context, if self.connection.features.can_return_rows_from_bulk_insert is true and len(self.query.objs) > 1, return self.connection.ops.fetch_returned_insert_rows(cursor). RESULT returned_rows]
+            [COMMAND Still inside the open cursor context, if self.connection.features.can_return_columns_from_insert is true, assert len(self.query.objs) == 1 and return [self.connection.ops.fetch_returned_insert_columns(cursor, self.returning_params)]. RESULT returned_columns]
+            [COMMAND Still inside the open cursor context, if no earlier return path was taken, return a single-element list containing the tuple produced by self.connection.ops.last_insert_id(cursor, self.query.get_meta().db_table, self.query.get_meta().pk.column). RESULT last_insert_id_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Initial validation fails when returning_fields is truthy, len(self.query.objs) != 1, and self.connection.features.can_return_rows_from_bulk_insert is false.]
+        [LOG "Assertion failed: returning_fields can be used only for a single insert unless the connection can return rows from bulk insert."]
+        [THROW AssertionError "The combination of the requested returning_fields, the number of inserted objects, and the connection's inability to return rows from bulk insert is invalid."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: The return-columns branch is reached only when self.returning_fields is truthy, the bulk-insert row return condition is false, self.connection.features.can_return_columns_from_insert is true, and len(self.query.objs) != 1.]
+        [LOG "Assertion failed: returning inserted columns requires exactly one object to be inserted."]
+        [THROW AssertionError "The can_return_columns_from_insert path is only valid when len(self.query.objs) == 1."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS SQLDeleteCompiler
+
+[DEFINE_WORKER: "Ensures the initial alias is registered, then returns True only if exactly one alias in the query's alias map currently has a positive reference count." single_alias]
+    [INPUTS]
+        <REF> self </REF>: object "Query object exposing get_initial_alias(), alias_map, and alias_refcount."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> final_result </REF>: bool "True if exactly one alias in alias_map has a positive reference count; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call get_initial_alias() on self.query to ensure the base table is present in the aliases, ignoring the returned value. RESULT initial_alias_registered]
+            [COMMAND Iterate over each alias t in self.query.alias_map and evaluate whether self.query.alias_refcount[t] is greater than 0. RESULT positive_refcount_flags]
+            [COMMAND Sum the boolean evaluation results, counting True as 1 and False as 0. RESULT positive_refcount_total]
+            [COMMAND Return True if positive_refcount_total equals 1; otherwise return False. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a DELETE FROM SQL statement from the query's base table and conditionally appends a compiled WHERE clause, returning the SQL text and its bound parameters." _as_sql]
+    [INPUTS]
+        <REF> query </REF>: object "Query object exposing base_table and where attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql_and_params </REF>: tuple "A tuple (sql_string, params_tuple) where sql_string is the complete DELETE statement and params_tuple contains the bound parameters for the WHERE clause."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the initial SQL list by formatting 'DELETE FROM %s' with self.quote_name_unless_alias(query.base_table) and assign it to result. RESULT result]
+            [COMMAND Call self.compile(query.where) and assign its returned two-element tuple to compiled; the first element is the WHERE fragment and the second is the bound-parameter list. RESULT compiled]
+            [COMMAND If compiled[0] is truthy, append 'WHERE ' + compiled[0] to result; otherwise leave result unchanged. RESULT result]
+            [COMMAND Return ' '.join(result) as the SQL string and tuple(compiled[1]) as the bound parameters. RESULT sql_and_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the SQL string and parameter list for this query, returning directly when a single alias is used or otherwise wrapping the target primary keys in an outer query and materializing the inner query when the backend cannot self-select." as_sql]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple containing the SQL string and the list of query parameters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clone self.query into innerq and set innerq.__class__ to Query. RESULT innerq]
+            [COMMAND Call innerq.clear_select_clause() to remove any existing SELECT columns from the cloned query. RESULT innerq]
+            [COMMAND Set pk to self.query.model._meta.pk, the primary key field metadata for the query's model. RESULT pk]
+            [COMMAND Assign innerq.select to a list containing pk.get_col(self.query.get_initial_alias()), so the inner query selects only the primary key column of the initial alias. RESULT innerq]
+            [COMMAND Create a new Query instance outerq using self.query.model. RESULT outerq]
+            [COMMAND Assign outerq.where to self.query.where_class(), giving outerq a fresh empty WHERE node. RESULT outerq]
+            [COMMAND If self.connection.features.update_can_self_select is false, compile innerq with innerq.get_compiler(connection=self.connection).as_sql() and replace innerq with RawSQL('SELECT * FROM (%s) subquery' % sql, params). RESULT innerq]
+            [COMMAND Add the condition outerq.add_q(Q(pk__in=innerq)) so the outer query filters by the primary keys selected by innerq. RESULT outerq]
+            [COMMAND Return self._as_sql(outerq) as the final SQL string and parameter list. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.single_alias is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._as_sql(self.query) directly, without building the primary-key subquery wrapper. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS SQLUpdateCompiler
+
+[DEFINE_WORKER: "Constructs and returns an UPDATE SQL statement and its bound parameters for the query, converting each field value to a database-compatible form and enforcing validation rules." as_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The compiler instance that provides query, connection, quote_name_unless_alias, compile, and pre_sql_setup."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (sql, params) where sql is the generated UPDATE SQL string and params is a tuple of bound parameters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self.pre_sql_setup() and discard the return value. RESULT None]
+            [COMMAND Initialize qn from self.quote_name_unless_alias, and set values and update_params to empty lists. RESULT qn, values, update_params]
+            [COMMAND For each tuple (field, model, val) in self.query.values, normalize val. If val has resolve_expression, set val = val.resolve_expression(self.query, allow_joins=False, for_save=True), then raise FieldError if val.contains_aggregate, then raise FieldError if val.contains_over_clause. Else if val has prepare_database_save, if field.remote_field is truthy set val = field.get_db_prep_save(val.prepare_database_save(field), connection=self.connection); otherwise raise TypeError. Else set val = field.get_db_prep_save(val, connection=self.connection). RESULT val]
+            [COMMAND For each normalized (field, model, val), determine placeholder and column name. If field has get_placeholder, set placeholder = field.get_placeholder(val, self, self.connection); otherwise set placeholder = '%s'. Then set name = field.column. RESULT placeholder, name]
+            [COMMAND For each normalized (field, model, val), append the assignment fragment. If val has as_sql, compile it with self.compile(val) to obtain sql and params, append '%s = %s' formatted with qn(name) and placeholder % sql to values, and extend update_params with params. Else if val is not None, append '%s = %s' formatted with qn(name) and placeholder to values and append val to update_params. Else append '%s = NULL' formatted with qn(name) to values. RESULT values, update_params]
+            [COMMAND After the loop, set table = self.query.base_table and build result as a list containing 'UPDATE %s SET' formatted with qn(table) and ', '.join(values). RESULT table, result]
+            [COMMAND Compile self.query.where with self.compile to obtain where and params. RESULT where, params]
+            [COMMAND If where is truthy, append 'WHERE %s' formatted with where to result. RESULT result]
+            [COMMAND Return ' '.join(result) as the SQL string and tuple(update_params + params) as the bound parameter tuple. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After self.pre_sql_setup(), if self.query.values is empty or falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty string as the SQL and an empty tuple as the bound parameters. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: During value normalization, if val has resolve_expression and after resolving it val.contains_aggregate is True]
+        [LOG "Aggregate functions are not allowed in this query (field.name=val)."]
+        [THROW FieldError "Indicates an aggregate expression cannot be used as an UPDATE SET value."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During value normalization, if val has resolve_expression, after resolving it and after the aggregate check, val.contains_over_clause is True]
+        [LOG "Window expressions are not allowed in this query (field.name=val)."]
+        [THROW FieldError "Indicates a window expression cannot be used as an UPDATE SET value."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During value normalization, if val has prepare_database_save and field.remote_field is falsy]
+        [LOG "Tried to update field <field> with a model instance, <val>. Use a value compatible with <field class name>."]
+        [THROW TypeError "Indicates a model instance was assigned to a non-relation field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Executes the primary update SQL and all related update queries, returning the primary cursor's rowcount when the cursor is truthy, otherwise the first truthy related-update result, and ignoring all later related-update results once that value has been selected." execute_sql]
+    [INPUTS]
+        <REF> result_type </REF>: unknown "Value passed to execute_sql calls to determine the result handling/type of the executed SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rows </REF>: unknown "Value returned by the method: cursor.rowcount when cursor is truthy; otherwise the first truthy aux_rows value from a related update query; or 0 if no such value occurs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Execute the primary update SQL by calling super().execute_sql(result_type) and assign the returned value to cursor; if this call raises, the exception propagates immediately. RESULT cursor]
+            [COMMAND In the try block, evaluate cursor for truthiness; if it is truthy, set rows to cursor.rowcount, otherwise set rows to 0. RESULT rows]
+            [COMMAND In the try block, determine whether cursor is None and assign that boolean to is_empty. RESULT is_empty]
+            [COMMAND In the finally block, if cursor is truthy, close cursor; if an exception has been raised in the try block, allow it to keep propagating after the cleanup. RESULT cursor_closed]
+            [COMMAND For each query returned by self.query.get_related_updates(), continue iterating through all remaining queries without exiting the loop early. RESULT query]
+            [COMMAND Within the for loop over related update queries, call query.get_compiler(self.using).execute_sql(result_type) and assign the result to aux_rows. RESULT aux_rows]
+            [COMMAND Within the for loop over related update queries, evaluate the condition is_empty and aux_rows with short-circuit semantics; only if is_empty is True and aux_rows is truthy, set rows to aux_rows and set is_empty to False. RESULT rows]
+            [COMMAND After the loop finishes, return rows. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares an update query for SQL generation by snapshotting alias refcounts, returning early for simple single-table updates, and otherwise rewriting the WHERE clause to a primary-key subquery selection before restoring refcounts." pre_sql_setup]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Copy self.query.alias_refcount into refcounts_before as a shallow snapshot. RESULT refcounts_before]
+            [COMMAND Ensure the base table is present by calling self.query.get_initial_alias(). RESULT self.query]
+            [COMMAND Compute the number of active tables with self.query.count_active_tables() and store it in count. RESULT count]
+            [COMMAND If self.query.related_updates is falsy and count is exactly 1, return immediately from pre_sql_setup without further changes. RESULT None]
+            [COMMAND Build a new Query object by calling self.query.chain(klass=Query) and store it as query. RESULT query]
+            [COMMAND Set query.select_related to False. RESULT query]
+            [COMMAND Clear ordering on query with force_empty=True. RESULT query]
+            [COMMAND Reset query.extra to an empty dict and query.select to an empty list. RESULT query]
+            [COMMAND Add the primary key field name from query.get_meta().pk to query's selected fields. RESULT query]
+            [COMMAND Call the parent class implementation via super().pre_sql_setup(). RESULT self]
+            [COMMAND Compute must_pre_select as count > 1 and not self.connection.features.update_can_self_select. RESULT must_pre_select]
+            [COMMAND Reset self.query.where to a new instance from self.query.where_class(), clearing the old WHERE clause. RESULT self.query]
+            [COMMAND Select the update filter strategy using self.query.related_updates and must_pre_select; run the pre-selection branch if either is true, otherwise run the fast-path subquery branch. RESULT self.query]
+            [COMMAND After the selected branch, restore alias refcounts by calling self.query.reset_refcounts(refcounts_before). RESULT self.query]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.query.related_updates is truthy or must_pre_select is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize idents as an empty list. RESULT idents]
+            [COMMAND Execute query.get_compiler(self.using).execute_sql(MULTI) and for each row set yielded, extend idents with the first value of every row in that row set. RESULT idents]
+            [COMMAND Add the filter ('pk__in', idents) to self.query. RESULT self.query]
+            [COMMAND Set self.query.related_ids to idents. RESULT self.query.related_ids]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.query.related_updates is falsy and must_pre_select is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Add the filter ('pk__in', query) to self.query, using the query subquery directly as the fast path. RESULT self.query]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS SQLAggregateCompiler
+
+[DEFINE_WORKER: "Builds a SELECT query whose outer column list consists of annotation SQL fragments and whose row source is the compiled inner query, returning the SQL string and ordered bound parameters." as_sql]
+    [INPUTS]
+        <REF> self </REF>: object "Query compiler instance providing self.query.annotation_select, self.query.inner_query, self.compile(), and self.using."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (sql, params) where sql is the fully assembled SELECT string and params is a tuple of bound parameters ordered to match placeholders in sql."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize sql and params as empty lists. RESULT sql, params]
+            [COMMAND For each annotation in self.query.annotation_select.values(), compile the annotation with self.compile(annotation) and unpack the result into ann_sql and ann_params. RESULT ann_sql, ann_params]
+            [COMMAND Within the same loop over annotation_select values, call annotation.select_format(self, ann_sql, ann_params) and reassign ann_sql and ann_params to the returned formatted SQL and parameters. RESULT ann_sql, ann_params]
+            [COMMAND Within the same loop over annotation_select values, append ann_sql to the sql list and extend params with ann_params. RESULT sql, params]
+            [COMMAND After the loop, set self.col_count to the number of annotations in self.query.annotation_select. RESULT self.col_count]
+            [COMMAND Join the accumulated sql list into a single comma-separated SQL column expression and assign it to sql. RESULT sql]
+            [COMMAND Convert the params list to a tuple and assign it to params. RESULT params]
+            [COMMAND Compile the inner query by calling self.query.inner_query.get_compiler(self.using).as_sql(with_col_aliases=True) and unpack the result into inner_query_sql and inner_query_params. RESULT inner_query_sql, inner_query_params]
+            [COMMAND Build the final sql as 'SELECT %s FROM (%s) subquery' formatting the outer comma-separated column expression and inner_query_sql. RESULT sql]
+            [COMMAND Concatenate the params tuple with inner_query_params to produce the final ordered parameter tuple. RESULT params]
+            [COMMAND Return the tuple (sql, params). RESULT return (sql, params)]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Yields batches of rows fetched from a cursor, optionally truncating each row to a specified number of columns, and closes the cursor in a finally block when done." cursor_iter]
+    [INPUTS]
+        <REF> cursor </REF>: cursor "Database cursor to fetch rows from."
+        <REF> sentinel </REF>: object "Sentinel value that stops iteration when returned by cursor.fetchmany."
+        <REF> col_count </REF>: int or None "Maximum number of columns to keep per row; None keeps all columns."
+        <REF> itersize </REF>: int "Number of rows to fetch per batch from the cursor."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> row_batches </REF>: generator of lists "Yields lists of rows, with each row truncated to col_count when specified."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Start a try block to ensure the cursor is closed after processing. RESULT try_block]
+            [COMMAND Within the try block, call iter(lambda: cursor.fetchmany(itersize), sentinel) to create an iterator that produces batches of up to itersize rows until the sentinel is returned. RESULT batch_iterator]
+            [COMMAND For each batch from the iterator, yield the batch unchanged if col_count is None; otherwise yield [row[:col_count] for row in batch]. RESULT batch]
+            [COMMAND In the finally block, close the cursor after the try block exits. RESULT cursor_close]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: col_count is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each fetched batch, construct a new list containing row[:col_count] for every row and yield that list. RESULT truncated_batch]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

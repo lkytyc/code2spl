@@ -1,0 +1,167 @@
+# CLASS Server
+
+[DEFINE_WORKER: "Initializes the object by setting up an empty whitelist and two empty dictionaries for outgoing and incoming data structures." __init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize self.white_list as an empty list RESULT self.white_list]
+            [COMMAND Initialize self.send_struct as an empty dictionary RESULT self.send_struct]
+            [COMMAND Initialize self.receive_struct as an empty dictionary RESULT self.receive_struct]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds an address to the whitelist if it is not already present, returning False on duplicate or the updated whitelist on success." add_white_list]
+    [INPUTS]
+        <REF> addr </REF>: any "The address to add to the whitelist"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool | list "False if addr was already in the whitelist; the updated whitelist list if addr was successfully added"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether addr is already a member of self.white_list RESULT is_duplicate]
+            [COMMAND If is_duplicate is True, return False immediately without mutating self.white_list RESULT early_return_false]
+            [COMMAND Append addr to self.white_list RESULT updated_white_list]
+            [COMMAND Return self.white_list (the full updated list) as the result of the method RESULT return_updated_white_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: addr is already present in self.white_list (duplicate detected)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately; no mutation of self.white_list occurs RESULT duplicate_rejected]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes a given address from the whitelist if it exists, returning the updated list, or returns False if the address is not present." del_white_list]
+    [INPUTS]
+        <REF> addr </REF>: any "The address value to remove from the whitelist"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or bool "The modified whitelist after removal if addr was present, or False if addr was not found"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether addr is absent from self.white_list using a membership test RESULT membership_check]
+            [COMMAND If addr is not in self.white_list, return False immediately as an early-exit failure signal without modifying the list RESULT early_return_false]
+            [COMMAND If addr is present in self.white_list, call self.white_list.remove(addr) to mutate the list by removing the first occurrence of addr RESULT removal_result]
+            [COMMAND Return the live self.white_list object (not a copy) to the caller after the removal RESULT return_white_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: addr is not found in self.white_list (membership test evaluates to True for the 'not in' condition)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately; skip all mutation steps and do not touch self.white_list RESULT false_signal]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates an incoming message dict, rejects senders not on the whitelist with False, caches the message on the instance, and returns the message content to authorized callers." recv]
+    [INPUTS]
+        <REF> info </REF>: dict "A dictionary expected to contain at least the keys 'addr' (sender address) and 'content' (message payload)"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "Returns -1 on malformed input, False when the sender is not on the whitelist, or the message content value when the sender is authorized"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether info is a dict and contains both 'addr' and 'content' keys; if any condition fails, return -1 immediately (short-circuit OR guard) RESULT validation_check]
+            [COMMAND Extract info['addr'] into local variable addr RESULT addr]
+            [COMMAND Extract info['content'] into local variable content RESULT content]
+            [COMMAND Check whether addr is present in self.white_list RESULT whitelist_check]
+            [COMMAND Store the dict {'addr': addr, 'content': content} into self.receive_struct, overwriting any previously cached message RESULT self.receive_struct]
+            [COMMAND Return self.receive_struct['content'], which equals content RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: info is not a dict, or 'addr' is absent from info, or 'content' is absent from info]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return -1 immediately without further processing RESULT early_return_invalid]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: addr is not present in self.white_list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately, skipping the cache write and content return RESULT early_return_unauthorized]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that the input is a dict containing both 'addr' and 'content' keys, then snapshots those two fields into the instance's send_struct attribute; returns an error string immediately if validation fails." send]
+    [INPUTS]
+        <REF> info </REF>: dict "Caller-supplied payload expected to contain string keys 'addr' and 'content'; any other type or missing keys triggers an early return"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Returns the literal string 'info structure is not correct' when validation fails; no explicit return value on the success path (implicitly None)"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether info is an instance of dict AND whether the key 'addr' is present in info AND whether the key 'content' is present in info RESULT validation_passed]
+            [COMMAND Construct a new dict with exactly two entries — key 'addr' mapped to info['addr'] and key 'content' mapped to info['content'] — and assign it to self.send_struct RESULT self.send_struct]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: info is not a dict, OR 'addr' is absent from info, OR 'content' is absent from info (short-circuit OR: evaluation stops at the first true condition)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string 'info structure is not correct' immediately, skipping all remaining steps RESULT early_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the send or receive struct associated with the instance based on the given type string, or False if the type is unrecognized." show]
+    [INPUTS]
+        <REF> type </REF>: string "A string key indicating which struct to retrieve; expected values are 'send' or 'receive'"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object | boolean "Returns self.send_struct if type is 'send', self.receive_struct if type is 'receive', or False for any unrecognized type"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the input parameter 'type' is exactly equal to the string 'send' RESULT type_is_send]
+            [COMMAND If type_is_send is true, return self.send_struct immediately and exit the method RESULT send_struct_result]
+            [COMMAND Otherwise, check whether 'type' is exactly equal to the string 'receive' RESULT type_is_receive]
+            [COMMAND If type_is_receive is true, return self.receive_struct immediately and exit the method RESULT receive_struct_result]
+            [COMMAND If neither condition matched, return the boolean value False as a sentinel indicating an unrecognized or invalid type RESULT false_sentinel]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: type equals the exact string 'send']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.send_struct to the caller and exit immediately; no further code in the method runs RESULT send_struct_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: type equals the exact string 'receive' and did not match 'send']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.receive_struct to the caller and exit immediately; no further code in the method runs RESULT receive_struct_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: type is any value other than 'send' or 'receive', including None, empty string, or any unrecognized string]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean False as a sentinel value indicating invalid input; the caller must check this return value explicitly to handle the error RESULT false_sentinel]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

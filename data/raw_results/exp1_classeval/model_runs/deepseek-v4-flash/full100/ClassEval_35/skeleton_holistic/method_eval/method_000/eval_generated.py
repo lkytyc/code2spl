@@ -1,0 +1,33 @@
+
+
+import unittest
+
+class EightPuzzleTestFindBlank(unittest.TestCase):
+    def test_find_blank_1(self):
+        state = [[2, 3, 4], [5, 8, 1], [6, 0, 7]]
+        eightPuzzle = EightPuzzle(state)
+        self.assertEqual(eightPuzzle.find_blank(state), (2, 1))
+
+    def test_find_blank_2(self):
+        state = [[2, 3, 4], [5, 0, 1], [6, 8, 7]]
+        eightPuzzle = EightPuzzle(state)
+        self.assertEqual(eightPuzzle.find_blank(state), (1, 1))
+
+    def test_find_blank_3(self):
+        state = [[2, 3, 4], [5, 8, 1], [6, 8, 7]]
+        eightPuzzle = EightPuzzle(state)
+        self.assertEqual(eightPuzzle.find_blank(state), None)
+
+    def test_find_blank_4(self):
+        state = [[2, 3, 4], [5, 8, 1], [6, 8, 7]]
+        eightPuzzle = EightPuzzle(state)
+        self.assertEqual(eightPuzzle.find_blank(state), None)
+
+    def test_find_blank_5(self):
+        state = [[2, 3, 4], [5, 8, 1], [6, 8, 7]]
+        eightPuzzle = EightPuzzle(state)
+        self.assertEqual(eightPuzzle.find_blank(state), None)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,654 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.*;
+2   import java.util.*;
+3   import javax.net.ssl.SSLContext;
+4   public class Main {
+5   	final boolean isDebug = false;
+6   	String fileName = "input.txt";
+7   	FastScanner sc;	
+8   	void solve(){
+9   		final int INF = Integer.MAX_VALUE / 2;
+10  		final int MOD = 1000000007;
+11  		String S = sc.next();
+12  		int[] sumA = new int[S.length()+1];
+13  		int[] sumC = new int[S.length()+1];
+14  		int[] sumQ = new int[S.length()+1];
+15  		long[] pow3 = new long[S.length()+1];
+16  		pow3[0] = 1;
+17  		for(int i = 1; i <= S.length(); i++){
+18  			pow3[i] = pow3[i-1] * 3;
+19  			pow3[i] %= MOD;
+20  		}
+21  		for(int i = 1; i <= S.length(); i++){
+22  			sumA[i] = sumA[i-1];
+23  			sumC[i] = sumC[i-1];
+24  			sumQ[i] = sumQ[i-1];
+25  			if(S.charAt(i-1) == 'A') 
+26  				sumA[i]++;
+27  			if(S.charAt(i-1) == 'C') 
+28  				sumC[i]++;
+29  			if(S.charAt(i-1) == '?') 
+30  				sumQ[i]++;
+31  		}
+32  		long ans = 0;
+33  		for(int i = 2; i <= S.length()-1; i++){
+34  			if(S.charAt(i-1) == 'B'){
+35  				long add;
+36  				add = (sumA[i-1] - sumA[0]);
+37  				add *= (sumC[S.length()] - sumC[i]);
+38  				add %= MOD;
+39  				add *= pow3[sumQ[S.length()]];
+40  				add %= MOD;
+41  				ans += add;
+42  				ans %= MOD;
+43  				if(sumQ[S.length()] >= 1){
+44  					add = (sumA[i-1] - sumA[0]);
+45  					add *= (sumQ[S.length()] - sumQ[i]);
+46  					add %= MOD;
+47  					add *= pow3[sumQ[S.length()] - 1];
+48  					add %= MOD;
+49  					ans += add;
+50  					ans %= MOD;
+51  					add = (sumQ[i-1] - sumQ[0]);
+52  					add *= sumC[S.length()] - sumC[i];
+53  					add %= MOD;
+54  					add *= pow3[sumQ[S.length()] - 1];
+55  					add %= MOD;
+56  					ans += add;
+57  					ans %= MOD;
+58  				}
+59  				if(sumQ[S.length()] >= 2){
+60  					add = (sumQ[i-1] - sumQ[0]);
+61  					add *= (sumQ[S.length()] - sumQ[i]);
+62  					add %= MOD;
+63  					add *= pow3[sumQ[S.length()] - 2];
+64  					add %= MOD;
+65  					ans += add;
+66  					ans %= MOD;
+67  				}
+68  			}
+69  			if(S.charAt(i-1) == '?'){
+70  				long add;
+71  				add = (sumA[i-1] - sumA[0]);
+72  				add *= (sumC[S.length()] - sumC[i]);
+73  				add %= MOD;
+74  				add *= pow3[sumQ[S.length()] - 1];
+75  				add %= MOD;
+76  				ans += add;
+77  				ans %= MOD;
+78  				if(sumQ[S.length()] >= 2){
+79  					add = (sumA[i-1] - sumA[0]);
+80  					add *= (sumQ[S.length()] - sumQ[i]);
+81  					add %= MOD;
+82  					add *= pow3[sumQ[S.length()] - 2];
+83  					add %= MOD;
+84  					ans += add;
+85  					ans %= MOD;
+86  					add = (sumQ[i-1] - sumQ[0]);
+87  					add *= (sumC[S.length()] - sumC[i]);
+88  					add %= MOD;
+89  					add *= pow3[sumQ[S.length()] - 2];
+90  					add %= MOD;
+91  					ans += add;
+92  					ans %= MOD;
+93  				}
+94  				if(sumQ[S.length()] >= 3){
+95  					add = (sumQ[i-1] - sumQ[0]);
+96  					add *= (sumQ[S.length()] - sumQ[i]);
+97  					add %= MOD;
+98  					add *= pow3[sumQ[S.length()] - 3];
+99  					add %= MOD;
+100  					ans += add;
+101  					ans %= MOD;
+102  				}
+103  			}
+104  		}
+105  		System.out.println(ans);
+106  	}
+107  	public static void main(String[] args) throws IOException {
+108  		new Main().m();
+109  	}
+110  	void m() throws IOException {
+111  		long S = System.currentTimeMillis();
+112  		sc = (isDebug) ? new FastScanner(new FileInputStream(fileName)) : new FastScanner(System.in);
+113  		solve();
+114  		long G = System.currentTimeMillis();
+115  		if(isDebug){
+116  			System.out.println("---Debug---");
+117  			System.out.printf("%8d ms", (G-S));
+118  		}
+119  	}
+120  }
+121  class FastScanner {
+122      private InputStream in;
+123      private final byte[] buffer = new byte[1024];
+124      private int ptr = 0;
+125      private int buflen = 0;
+126      public FastScanner(InputStream in) {
+127  		this.in = in;
+128  	}
+129      private boolean hasNextByte() {
+130          if (ptr < buflen) {
+131              return true;
+132          }else{
+133              ptr = 0;
+134              try {
+135                  buflen = in.read(buffer);
+136              } catch (IOException e) {
+137                  e.printStackTrace();
+138              }
+139              if (buflen <= 0) {
+140                  return false;
+141              }
+142          }
+143          return true;
+144      }
+145      private int readByte() {
+146      	if (hasNextByte()) return buffer[ptr++];
+147      	else return -1;
+148      }
+149      private static boolean isPrintableChar(int c){
+150      	return 33 <= c && c <= 126;
+151      }
+152      public boolean hasNext() {
+153      	while(hasNextByte() && !isPrintableChar(buffer[ptr]))
+154      		ptr++; return hasNextByte();
+155      }
+156      public String next() {
+157          if (!hasNext()) throw new NoSuchElementException();
+158          StringBuilder sb = new StringBuilder();
+159          int b = readByte();
+160          while(isPrintableChar(b)) {
+161              sb.appendCodePoint(b);
+162              b = readByte();
+163          }
+164          return sb.toString();
+165      }
+166      public long nextLong() {
+167          if (!hasNext()) throw new NoSuchElementException();
+168          long n = 0;
+169          boolean minus = false;
+170          int b = readByte();
+171          if (b == '-') {
+172              minus = true;
+173              b = readByte();
+174          }
+175          if (b < '0' || '9' < b) {
+176              throw new NumberFormatException();
+177          }
+178          while(true){
+179              if ('0' <= b && b <= '9') {
+180                  n *= 10;
+181                  n += b - '0';
+182              }else if(b == -1 || !isPrintableChar(b)){
+183                  return minus ? -n : n;
+184              }else{
+185                  throw new NumberFormatException();
+186              }
+187              b = readByte();
+188          }
+189      }
+190      public int nextInt() {
+191          long nl = nextLong();
+192          if (nl < Integer.MIN_VALUE || nl > Integer.MAX_VALUE) throw new NumberFormatException();
+193          return (int) nl;
+194      }
+195      public double nextDouble() {
+196      	return Double.parseDouble(next());
+197      }
+198  }
+```
+
+
+**Question**: Does `(i,33)` have data dependence over `(add,73)` in function `solve`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: solve
+Target source anchor: variable=add, line=73
+Trace source anchor: variable=i, line=33
+Attached SPL owners: solve
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within the loop over i, if S.charAt(i - 1) == 'B', compute add = ((sumA[i - 1] - sumA[0]) * (sumC[S.length()] - sumC[i])) % MOD * pow3[sumQ[S.length()]] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+- [COMMAND Within the same 'B' branch, if sumQ[S.length()] >= 1, compute add = ((sumA[i - 1] - sumA[0]) * (sumQ[S.length()] - sumQ[i])) % MOD * pow3[sumQ[S.length()] - 1] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+- [COMMAND Initialize constants INF = Integer.MAX_VALUE / 2 and MOD = 1000000007, then read the input string S from the scanner. RESULT S]
+- [COMMAND For i from 1 to S.length() inclusive, set pow3[i] = (pow3[i - 1] * 3) % MOD. RESULT pow3]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 36: add = (sumA[i-1] - sumA[0]);
+- line 37: add *= (sumC[S.length()] - sumC[i]);
+- line 38: add %= MOD;
+- line 39: add *= pow3[sumQ[S.length()]];
+- line 40: add %= MOD;
+- line 44: add = (sumA[i-1] - sumA[0]);
+- line 45: add *= (sumQ[S.length()] - sumQ[i]);
+- line 46: add %= MOD;
+- line 47: add *= pow3[sumQ[S.length()] - 1];
+- line 48: add %= MOD;
+- line 51: add = (sumQ[i-1] - sumQ[0]);
+- line 52: add *= sumC[S.length()] - sumC[i];
+- line 53: add %= MOD;
+- line 54: add *= pow3[sumQ[S.length()] - 1];
+- line 55: add %= MOD;
+- line 60: add = (sumQ[i-1] - sumQ[0]);
+- line 61: add *= (sumQ[S.length()] - sumQ[i]);
+- line 62: add %= MOD;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["add", "i", "sumA"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 37, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["S", "add", "i", "length", "sumC"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "before_target", "reason": "add", "relevant_identifiers": ["add", "MOD"], "roles": ["definition", "use"], "source_identifiers": ["MOD", "add"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 39, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["S", "add", "length", "pow3", "sumQ"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 40, "position": "before_target", "reason": "add", "relevant_identifiers": ["add", "MOD"], "roles": ["definition", "use"], "source_identifiers": ["MOD", "add"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 44, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["add", "i", "sumA"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 45, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["S", "add", "i", "length", "sumQ"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 46, "position": "before_target", "reason": "add", "relevant_identifiers": ["add", "MOD"], "roles": ["definition", "use"], "source_identifiers": ["MOD", "add"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["S", "add", "length", "pow3", "sumQ"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 48, "position": "before_target", "reason": "add", "relevant_identifiers": ["add", "MOD"], "roles": ["definition", "use"], "source_identifiers": ["MOD", "add"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 51, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["add", "i", "sumQ"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 52, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["S", "add", "i", "length", "sumC"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 53, "position": "before_target", "reason": "add", "relevant_identifiers": ["add", "MOD"], "roles": ["definition", "use"], "source_identifiers": ["MOD", "add"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["S", "add", "length", "pow3", "sumQ"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "before_target", "reason": "add", "relevant_identifiers": ["add", "MOD"], "roles": ["definition", "use"], "source_identifiers": ["MOD", "add"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 60, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["add", "i", "sumQ"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 61, "position": "before_target", "reason": "add", "relevant_identifiers": ["add"], "roles": ["definition"], "source_identifiers": ["S", "add", "i", "length", "sumQ"]}
+- {"definitions": ["add"], "disposition": "inspect_against_official_dependence_definition", "line": 62, "position": "before_target", "reason": "add", "relevant_identifiers": ["add", "MOD"], "roles": ["definition", "use"], "source_identifiers": ["MOD", "add"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 8-106
+- source signature: `void solve(){`
+- source content hash: `a3747a44caced0d92d781ac7d54893b560a2e8cd1129afd5742e0aabca20a3e0`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```java
+   8   void solve(){
+   9    final int INF = Integer.MAX_VALUE / 2;
+  10    final int MOD = 1000000007;
+  11    String S = sc.next();
+  12    int[] sumA = new int[S.length()+1];
+  13    int[] sumC = new int[S.length()+1];
+  14    int[] sumQ = new int[S.length()+1];
+  15    long[] pow3 = new long[S.length()+1];
+  16    pow3[0] = 1;
+  17    for(int i = 1; i <= S.length(); i++){
+  18     pow3[i] = pow3[i-1] * 3;
+  19     pow3[i] %= MOD;
+  20    }
+  21    for(int i = 1; i <= S.length(); i++){
+  22     sumA[i] = sumA[i-1];
+  23     sumC[i] = sumC[i-1];
+  24     sumQ[i] = sumQ[i-1];
+  25     if(S.charAt(i-1) == 'A') 
+  26      sumA[i]++;
+  27     if(S.charAt(i-1) == 'C') 
+  28      sumC[i]++;
+  29     if(S.charAt(i-1) == '?') 
+  30      sumQ[i]++;
+  31    }
+  32    long ans = 0;
+  33    for(int i = 2; i <= S.length()-1; i++){
+  34     if(S.charAt(i-1) == 'B'){
+  35      long add;
+  36      add = (sumA[i-1] - sumA[0]);
+  37      add *= (sumC[S.length()] - sumC[i]);
+  38      add %= MOD;
+  39      add *= pow3[sumQ[S.length()]];
+  40      add %= MOD;
+  41      ans += add;
+  42      ans %= MOD;
+  43      if(sumQ[S.length()] >= 1){
+  44       add = (sumA[i-1] - sumA[0]);
+  45       add *= (sumQ[S.length()] - sumQ[i]);
+  46       add %= MOD;
+  47       add *= pow3[sumQ[S.length()] - 1];
+  48       add %= MOD;
+  49       ans += add;
+  50       ans %= MOD;
+  51       add = (sumQ[i-1] - sumQ[0]);
+  52       add *= sumC[S.length()] - sumC[i];
+  53       add %= MOD;
+  54       add *= pow3[sumQ[S.length()] - 1];
+  55       add %= MOD;
+  56       ans += add;
+  57       ans %= MOD;
+  58      }
+  59      if(sumQ[S.length()] >= 2){
+  60       add = (sumQ[i-1] - sumQ[0]);
+  61       add *= (sumQ[S.length()] - sumQ[i]);
+  62       add %= MOD;
+  63       add *= pow3[sumQ[S.length()] - 2];
+  64       add %= MOD;
+  65       ans += add;
+  66       ans %= MOD;
+  67      }
+  68     }
+  69     if(S.charAt(i-1) == '?'){
+  70      long add;
+  71      add = (sumA[i-1] - sumA[0]);
+  72      add *= (sumC[S.length()] - sumC[i]);
+  73      add %= MOD;
+  74      add *= pow3[sumQ[S.length()] - 1];
+  75      add %= MOD;
+  76      ans += add;
+  77      ans %= MOD;
+  78      if(sumQ[S.length()] >= 2){
+  79       add = (sumA[i-1] - sumA[0]);
+  80       add *= (sumQ[S.length()] - sumQ[i]);
+  81       add %= MOD;
+  82       add *= pow3[sumQ[S.length()] - 2];
+  83       add %= MOD;
+  84       ans += add;
+  85       ans %= MOD;
+  86       add = (sumQ[i-1] - sumQ[0]);
+  87       add *= (sumC[S.length()] - sumC[i]);
+  88       add %= MOD;
+  89       add *= pow3[sumQ[S.length()] - 2];
+  90       add %= MOD;
+  91       ans += add;
+  92       ans %= MOD;
+  93      }
+  94      if(sumQ[S.length()] >= 3){
+  95       add = (sumQ[i-1] - sumQ[0]);
+  96       add *= (sumQ[S.length()] - sumQ[i]);
+  97       add %= MOD;
+  98       add *= pow3[sumQ[S.length()] - 3];
+  99       add %= MOD;
+ 100       ans += add;
+ 101       ans %= MOD;
+ 102      }
+ 103     }
+ 104    }
+ 105    System.out.println(ans);
+ 106   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Counts the number of subsequences equal to ABC after replacing every '?' with A, B, or C modulo 1000000007, using prefix sums and powers of 3." solve]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize constants INF = Integer.MAX_VALUE / 2 and MOD = 1000000007, then read the input string S from the scanner. RESULT S]
+            [COMMAND Create integer arrays sumA, sumC, sumQ and long array pow3, all of length S.length() + 1, zero-initialized by default; set pow3[0] = 1. RESULT prefix_arrays]
+            [COMMAND For i from 1 to S.length() inclusive, set pow3[i] = (pow3[i - 1] * 3) % MOD. RESULT pow3]
+            [COMMAND For i from 1 to S.length() inclusive, build prefix sums: sumA[i] = sumA[i - 1] plus 1 if S.charAt(i - 1) == 'A', sumC[i] = sumC[i - 1] plus 1 if S.charAt(i - 1) == 'C', and sumQ[i] = sumQ[i - 1] plus 1 if S.charAt(i - 1) == '?'. RESULT prefix_sums]
+            [COMMAND Initialize ans = 0. RESULT ans]
+            [COMMAND For i from 2 to S.length() - 1 inclusive, inspect S.charAt(i - 1) as the middle position of an ABC subsequence. RESULT i_loop]
+            [COMMAND Within the loop over i, if S.charAt(i - 1) == 'B', compute add = ((sumA[i - 1] - sumA[0]) * (sumC[S.length()] - sumC[i])) % MOD * pow3[sumQ[S.length()]] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+            [COMMAND Within the same 'B' branch, if sumQ[S.length()] >= 1, compute add = ((sumA[i - 1] - sumA[0]) * (sumQ[S.length()] - sumQ[i])) % MOD * pow3[sumQ[S.length()] - 1] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+            [COMMAND Within the same 'B' branch after the previous addition, if sumQ[S.length()] >= 1, compute add = ((sumQ[i - 1] - sumQ[0]) * (sumC[S.length()] - sumC[i])) % MOD * pow3[sumQ[S.length()] - 1] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+            [COMMAND Within the same 'B' branch, if sumQ[S.length()] >= 2, compute add = ((sumQ[i - 1] - sumQ[0]) * (sumQ[S.length()] - sumQ[i])) % MOD * pow3[sumQ[S.length()] - 2] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+            [COMMAND Within the loop over i, if S.charAt(i - 1) == '?', compute add = ((sumA[i - 1] - sumA[0]) * (sumC[S.length()] - sumC[i])) % MOD * pow3[sumQ[S.length()] - 1] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+            [COMMAND Within the same '?' branch, if sumQ[S.length()] >= 2, compute add = ((sumA[i - 1] - sumA[0]) * (sumQ[S.length()] - sumQ[i])) % MOD * pow3[sumQ[S.length()] - 2] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+            [COMMAND Within the same '?' branch after the previous addition, if sumQ[S.length()] >= 2, compute add = ((sumQ[i - 1] - sumQ[0]) * (sumC[S.length()] - sumC[i])) % MOD * pow3[sumQ[S.length()] - 2] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+            [COMMAND Within the same '?' branch, if sumQ[S.length()] >= 3, compute add = ((sumQ[i - 1] - sumQ[0]) * (sumQ[S.length()] - sumQ[i])) % MOD * pow3[sumQ[S.length()] - 3] % MOD, then add add to ans and reduce ans modulo MOD. RESULT ans]
+            [COMMAND After the loop completes, print ans to standard output using System.out.println(ans). RESULT output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

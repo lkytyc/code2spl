@@ -1,0 +1,426 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   from io import StringIO
+2   from collections import deque
+3   import sys
+4   def main(inputs):
+5       h, w = map(int, next(inputs).split())
+6       mass = [ next(inputs) for _ in range(h) ]
+7       ans = [[-1 for _ in m] for m in mass]
+8       for i in range(h):
+9           for j in range(w):
+10              if ans[i][j] == -1:
+11                  find_black(mass, ans, i, j)
+12                  pass
+13              pass
+14          pass
+15      print(max(sum(ans, [])))
+16      pass
+17  def find_black(mass, ans, h, w):
+18      done = [[False for _ in m] for m in mass]
+19      q = deque()
+20      q.append((h, w, []))
+21      candidate = (-1, 0, [])
+22      candidate_ans = lambda: ans[candidate[0]][candidate[1]] + len(candidate[2])
+23      candidate_exists = lambda: (candidate[0] != -1)
+24      while q:
+25          h, w, path = q.popleft()
+26          if candidate[0] != -1 and ans[candidate[0]][candidate[1]] + len(candidate[2]) <= len(path):
+27              h, w, path = candidate
+28              for idx, (i, j) in enumerate(reversed(path)):
+29                  ans[i][j] = ans[h][w] + idx + 1
+30                  pass
+31              return
+32          if mass[h][w] == '#':
+33              ans[h][w] = 0
+34              pass
+35          if ans[h][w] != -1:
+36              s0 = ans[h][w] + len(path)
+37              s1 = ans[candidate[0]][candidate[1]] + len(candidate[2])
+38              if (candidate[0] == -1) or s0 < s1:
+39                  candidate = (h, w, path[:])
+40                  pass
+41              done[h][w] = True
+42              continue
+43          done[h][w] = True
+44          path.append((h, w))
+45          if h-1 >= 0 and not done[h-1][w]:
+46              q.append((h-1, w, path[:]))
+47              pass
+48          if h+1 < len(mass) and not done[h+1][w]:
+49              q.append((h+1, w, path[:]))
+50              pass
+51          if w-1 >= 0 and not done[h][w-1]:
+52              q.append((h, w-1, path[:]))
+53              pass
+54          if w+1 < len(mass[0]) and not done[h][w+1]:
+55              q.append((h, w+1, path[:]))
+56              pass
+57          pass
+58      pass
+59  def gen_inputs(str_=None):
+60      inputs = StringIO(str_) if str_ else sys.stdin
+61      while True:
+62          a = inputs.readline().rstrip()
+63          yield a
+64          pass
+65      pass
+66  if __name__ == "__main__":
+67      main(gen_inputs())
+68      pass
+```
+
+
+**Question**: Does line `28` have control dependence over line `44` in function `find_black`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: find_black
+Target source anchor: variable=<none>, line=28
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: find_black
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a loop header whose condition controls its next execution: {'kind': 'line', 'line': 28, 'reason': 'the target is a loop header whose condition controls its next execution'}
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND In each while iteration, before other processing, if candidate[0] != -1 and ans[candidate[0]][candidate[1]] + len(candidate[2]) <= len(path), unpack candidate into h, w, path; for idx, (i, j) in enumerate(reversed(path)) set ans[i][j] = ans[h][w] + idx + 1; then return from the function. RESULT None]
+- [COMMAND While q is not empty, pop the leftmost state from q into h, w, and path. RESULT state]
+- [COMMAND In each while iteration, if ans[h][w] != -1, compute s0 = ans[h][w] + len(path) and s1 = ans[candidate[0]][candidate[1]] + len(candidate[2]), evaluating s1 even when no candidate exists; if candidate[0] == -1 or s0 < s1, set candidate = (h, w, path[:]); set done[h][w] = True; and continue to the next while iteration without enqueuing neighbors. RESULT candidate]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 24: while q:
+- line 26: if candidate[0] != -1 and ans[candidate[0]][candidate[1]] + len(candidate[2]) <= len(path):
+- line 28: for idx, (i, j) in enumerate(reversed(path)):
+- line 31: return
+- line 32: if mass[h][w] == '#':
+- line 35: if ans[h][w] != -1:
+- line 38: if (candidate[0] == -1) or s0 < s1:
+- line 42: continue
+- line 45: if h-1 >= 0 and not done[h-1][w]:
+- line 48: if h+1 < len(mass) and not done[h+1][w]:
+- line 51: if w-1 >= 0 and not done[h][w-1]:
+- line 54: if w+1 < len(mass[0]) and not done[h][w+1]:
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 24, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["q", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["path"], "roles": ["use", "control"], "source_identifiers": ["and", "ans", "candidate", "if", "len", "path"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["idx", "i", "j", "in", "enumerate", "reversed", "path"], "roles": ["use", "control"], "source_identifiers": ["enumerate", "for", "i", "idx", "in", "j", "path", "reversed"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["return"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 32, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["h", "if", "mass", "w"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 35, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["ans", "h", "if", "w"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["candidate", "if", "or", "s0", "s1"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 42, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["continue"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 45, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["and", "done", "h", "if", "not", "w"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 48, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["and", "done", "h", "if", "len", "mass", "not", "w"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 51, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["and", "done", "h", "if", "not", "w"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["and", "done", "h", "if", "len", "mass", "not", "w"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `find_black`
+- source lines: 17-58
+- source signature: `def find_black(mass, ans, h, w):`
+- source content hash: `4f23f208ab5385cdeaaa450589be05cbe93bbda6f578a9863b63125931249bd3`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```python
+  17  def find_black(mass, ans, h, w):
+  18      done = [[False for _ in m] for m in mass]
+  19      q = deque()
+  20      q.append((h, w, []))
+  21      candidate = (-1, 0, [])
+  22      candidate_ans = lambda: ans[candidate[0]][candidate[1]] + len(candidate[2])
+  23      candidate_exists = lambda: (candidate[0] != -1)
+  24      while q:
+  25          h, w, path = q.popleft()
+  26          if candidate[0] != -1 and ans[candidate[0]][candidate[1]] + len(candidate[2]) <= len(path):
+  27              h, w, path = candidate
+  28              for idx, (i, j) in enumerate(reversed(path)):
+  29                  ans[i][j] = ans[h][w] + idx + 1
+  30                  pass
+  31              return
+  32          if mass[h][w] == '#':
+  33              ans[h][w] = 0
+  34              pass
+  35          if ans[h][w] != -1:
+  36              s0 = ans[h][w] + len(path)
+  37              s1 = ans[candidate[0]][candidate[1]] + len(candidate[2])
+  38              if (candidate[0] == -1) or s0 < s1:
+  39                  candidate = (h, w, path[:])
+  40                  pass
+  41              done[h][w] = True
+  42              continue
+  43          done[h][w] = True
+  44          path.append((h, w))
+  45          if h-1 >= 0 and not done[h-1][w]:
+  46              q.append((h-1, w, path[:]))
+  47              pass
+  48          if h+1 < len(mass) and not done[h+1][w]:
+  49              q.append((h+1, w, path[:]))
+  50              pass
+  51          if w-1 >= 0 and not done[h][w-1]:
+  52              q.append((h, w-1, path[:]))
+  53              pass
+  54          if w+1 < len(mass[0]) and not done[h][w+1]:
+  55              q.append((h, w+1, path[:]))
+  56              pass
+  57          pass
+  58      pass
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Performs a BFS from a starting grid cell while tracking a best candidate path, and if a later path is no shorter than the candidate, backfills the candidate path into ans with increasing distances and returns; wall cells reached during the search are assigned distance 0." find_black]
+    [INPUTS]
+        <REF> mass </REF>: List[List[str]] "Grid being searched; cells equal to '#' are treated as walls and get ans value 0 when reached."
+        <REF> ans </REF>: List[List[int]] "Distance grid mutated in place; -1 marks unvisited cells, and existing non-negative values are known distances."
+        <REF> h </REF>: int "Starting row index."
+        <REF> w </REF>: int "Starting column index."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ans </REF>: List[List[int]] "The input grid is mutated in place; selected path cells are assigned ans[h][w] + idx + 1 if the early candidate branch is taken."
+        <REF> return </REF>: None "The function returns None, either explicitly in the candidate branch or implicitly when the queue is exhausted."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a nested list done with the same shape as mass, with every element initialized to False. RESULT done]
+            [COMMAND Create an empty deque q. RESULT q]
+            [COMMAND Append the initial state (h, w, []) to q, where h and w are the starting row and column. RESULT q]
+            [COMMAND Set candidate to the sentinel tuple (-1, 0, []); define candidate_exists() as candidate[0] != -1 and candidate_ans() as ans[candidate[0]][candidate[1]] + len(candidate[2]); the remaining code uses the same expressions inline rather than these closures. RESULT candidate]
+            [COMMAND While q is not empty, pop the leftmost state from q into h, w, and path. RESULT state]
+            [COMMAND In each while iteration, before other processing, if candidate[0] != -1 and ans[candidate[0]][candidate[1]] + len(candidate[2]) <= len(path), unpack candidate into h, w, path; for idx, (i, j) in enumerate(reversed(path)) set ans[i][j] = ans[h][w] + idx + 1; then return from the function. RESULT None]
+            [COMMAND In each while iteration after the early-return check, if mass[h][w] == '#', set ans[h][w] = 0. RESULT ans]
+            [COMMAND In each while iteration, if ans[h][w] != -1, compute s0 = ans[h][w] + len(path) and s1 = ans[candidate[0]][candidate[1]] + len(candidate[2]), evaluating s1 even when no candidate exists; if candidate[0] == -1 or s0 < s1, set candidate = (h, w, path[:]); set done[h][w] = True; and continue to the next while iteration without enqueuing neighbors. RESULT candidate]
+            [COMMAND In each while iteration, if ans[h][w] == -1, set done[h][w] = True and append (h, w) to path. RESULT path]
+            [COMMAND In the unvisited-cell branch, after appending the current cell, if h-1 >= 0 and not done[h-1][w], append (h-1, w, path[:]) to q. RESULT q]
+            [COMMAND In the unvisited-cell branch, after appending the current cell, if h+1 < len(mass) and not done[h+1][w], append (h+1, w, path[:]) to q. RESULT q]
+            [COMMAND In the unvisited-cell branch, after appending the current cell, if w-1 >= 0 and not done[h][w-1], append (h, w-1, path[:]) to q. RESULT q]
+            [COMMAND In the unvisited-cell branch, after appending the current cell, if w+1 < len(mass[0]) and not done[h][w+1], append (h, w+1, path[:]) to q. RESULT q]
+            [COMMAND When q becomes empty, exit the while loop and return None implicitly. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.
+
+
+SOURCE-CONTRACT RETRY. The previous answer omitted source-derived structural obligations. Recheck the numbered source and source-bound SPL card, then revise the complete answer. Do not blindly append an item if source verification contradicts it.
+
+Contract violations: [{"kind": "missing_required_line", "anchor": {"kind": "line", "line": 28, "reason": "the target is a loop header whose condition controls its next execution"}}]
+
+Previous answer:
+{
+  "ControlDependence": false
+}
+
+Return only the exact JSON object required by the official task, with no prose or markdown.

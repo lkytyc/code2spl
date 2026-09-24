@@ -1,0 +1,1219 @@
+# FILE: django/db/migrations/state.py
+# CLASS ProjectState
+
+[DEFINE_WORKER: "Initializes a new instance with a models mapping or an empty dict, normalizes real_apps into a set or empty set, and initializes is_delayed and relations state." __init__]
+    [INPUTS]
+        <REF> models </REF>: dict or None "Optional models mapping. If truthy, it is assigned directly to self.models; otherwise a new empty dict is assigned."
+        <REF> real_apps </REF>: set, iterable, or None "Optional apps to include. If truthy it is normalized to a set; if falsy self.real_apps is initialized to a new empty set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.models to models if models is truthy, otherwise assign a new empty dict using short-circuit evaluation. RESULT self.models]
+            [COMMAND If real_apps is truthy, assign self.real_apps to real_apps when real_apps is already a set, otherwise convert real_apps to a set with set(real_apps) and assign that; if real_apps is falsy, assign self.real_apps to a new empty set. RESULT self.real_apps]
+            [COMMAND Assign self.is_delayed to False. RESULT self.is_delayed]
+            [COMMAND Assign self.relations to None. RESULT self.relations]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When real_apps is truthy, is not already a set, and is not iterable, causing set(real_apps) to fail.]
+        [LOG "TypeError is raised because the truthy real_apps value is not iterable."]
+        [THROW TypeError "Raised when set(real_apps) is attempted on a truthy non-iterable real_apps value."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers a model state in self.models keyed by (app_label, model_name) and reloads the model if the apps property has already been cached in self.__dict__." add_model]
+    [INPUTS]
+        <REF> model_state </REF>: ModelState "Model state object providing app_label and name_lower attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extract app_label from model_state.app_label. RESULT app_label]
+            [COMMAND Extract model_name from model_state.name_lower. RESULT model_name]
+            [COMMAND Assign model_state to self.models[(app_label, model_name)]. RESULT self.models]
+            [COMMAND Check whether the string 'apps' is present in self.__dict__, using the instance dictionary directly to avoid triggering and caching the property. RESULT has_cached_apps]
+            [COMMAND If has_cached_apps is true, call self.reload_model(app_label, model_name). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes a model from the internal model registry and, if the apps property has already been cached, unregisters the model from the app registry and clears the apps cache." remove_model]
+    [INPUTS]
+        <REF> app_label </REF>: str "The application label of the model to remove."
+        <REF> model_name </REF>: str "The name of the model to remove."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "This method does not return a value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the top-level method scope, delete the model entry from the instance's internal registry using the key (app_label, model_name). RESULT _]
+            [COMMAND Check whether the string 'apps' is present in self.__dict__, which intentionally tests only the instance dictionary and avoids hasattr so the apps property getter is not triggered and cached as a side effect. RESULT apps_is_cached]
+            [COMMAND If apps_is_cached is true, within the top-level conditional block, unregister the model from the app registry by calling self.apps.unregister_model(app_label, model_name). RESULT _]
+            [COMMAND If apps_is_cached is true, within the same conditional block after unregister_model, explicitly clear the apps cache by calling self.apps.clear_cache(), because unregister_model does not clear the cache automatically (Django issue #24513). RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renames a model by cloning its state under the new lowercased name, repointing references that target or use the old model, reloading affected model states, and removing the old model." rename_model]
+    [INPUTS]
+        <REF> app_label </REF>: str "App label used as part of the model state key."
+        <REF> old_name </REF>: str "Current model name to be renamed."
+        <REF> new_name </REF>: str "New model name to assign and to use when repointing remote-field references."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute old_name_lower = old_name.lower() and new_name_lower = new_name.lower(). RESULT old_name_lower and new_name_lower]
+            [COMMAND Clone the existing model state at self.models[(app_label, old_name_lower)], set cloned.name = new_name, and store the clone at self.models[(app_label, new_name_lower)], overwriting any existing entry at that key. RESULT renamed_model]
+            [COMMAND Set old_model_tuple = (app_label, old_name_lower), new_remote_model = f'{app_label}.{new_name}' using the original new_name, and initialize to_reload as an empty set. RESULT old_model_tuple, new_remote_model, to_reload]
+            [COMMAND Iterate over get_references(self, old_model_tuple); for each iteration unpack model_state, name, field, reference and initialize changed_field = None. RESULT changed_field]
+            [COMMAND Within the for loop over get_references, if reference.to is truthy, set changed_field = field.clone() and set changed_field.remote_field.model = new_remote_model. RESULT changed_field]
+            [COMMAND Within the same for loop, independently if reference.through is truthy, then if changed_field is None set changed_field = field.clone(), and always set changed_field.remote_field.through = new_remote_model. RESULT changed_field]
+            [COMMAND Within the same for loop, if changed_field is truthy, overwrite model_state.fields[name] with changed_field and add (model_state.app_label, model_state.name_lower) to to_reload. RESULT to_reload]
+            [COMMAND After the for loop, call reload_models(to_reload, delay=True) to reload models related to the old model. RESULT none]
+            [COMMAND Call remove_model(app_label, old_name_lower) to remove the old model state. RESULT none]
+            [COMMAND Call reload_model(app_label, new_name_lower, delay=True) to reload the newly named model state. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Merges the provided options into the model state's existing options, removes stale option keys when option_keys is supplied, and reloads the model." alter_model_options]
+    [INPUTS]
+        <REF> app_label </REF>: str "Application label used to locate the model state."
+        <REF> model_name </REF>: str "Model name used to locate the model state."
+        <REF> options </REF>: dict "Dictionary of model options to merge into the existing model state options."
+        <REF> option_keys </REF>: Optional[Iterable] "Optional iterable of option keys to remove from model_state.options if they are not present in options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve model_state from self.models using the tuple key (app_label, model_name). RESULT model_state]
+            [COMMAND Merge options into model_state.options by constructing a new dictionary from model_state.options and options, with options overriding duplicate keys, and assign the result to model_state.options. RESULT model_state.options]
+            [COMMAND If option_keys is truthy, then for each key in option_keys, if key is not in options, remove key from model_state.options using pop(key, False). RESULT none]
+            [COMMAND Reload the model by calling self.reload_model(app_label, model_name, delay=True). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves the model state identified by app_label and model_name, replaces its managers attribute with a new list containing the supplied managers, and reloads the model with a delay." alter_model_managers]
+    [INPUTS]
+        <REF> app_label </REF>: string "Label identifying the application of the target model."
+        <REF> model_name </REF>: string "Name of the target model whose managers are being altered."
+        <REF> managers </REF>: iterable "Iterable of manager definitions to replace the model state's managers collection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the existing model state from self.models using the tuple (app_label, model_name) and store it as model_state. RESULT model_state]
+            [COMMAND Convert managers into a new list and assign that list to model_state.managers, overwriting the previous managers collection with the new shallow-copied list. RESULT model_state.managers]
+            [COMMAND Call self.reload_model(app_label, model_name) with delay=True to request a delayed reload of the model after the managers have been replaced. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Appends an object to a named option list on a model state entry and triggers a delayed model reload." _append_option]
+    [INPUTS]
+        <REF> app_label </REF>: str "Application label used as part of the key to locate the model state."
+        <REF> model_name </REF>: str "Model name used as part of the key to locate the model state."
+        <REF> option_name </REF>: str "Option key whose value is a list to which obj is appended."
+        <REF> obj </REF>: Any "Object to append to the option list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the model state in self.models using the key (app_label, model_name) and assign it to model_state. RESULT model_state]
+            [COMMAND Create a new list by unpacking the current iterable stored at model_state.options[option_name] and appending obj as the final element, then assign that new list back to model_state.options[option_name], leaving the original list object unchanged. RESULT model_state.options[option_name]]
+            [COMMAND Call self.reload_model with app_label, model_name, and the keyword argument delay=True. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes all objects with a specified name from a model's option collection and reloads the modified model state." _remove_option]
+    [INPUTS]
+        <REF> app_label </REF>: str "Label of the application containing the model."
+        <REF> model_name </REF>: str "Name of the model whose option collection is being modified."
+        <REF> option_name </REF>: str "Key identifying the option collection in model_state.options."
+        <REF> obj_name </REF>: str "Name value used to filter out matching objects from the option collection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the model state for app_label and model_name from self.models. RESULT model_state]
+            [COMMAND Read the current option collection stored at model_state.options[option_name]. RESULT objs]
+            [COMMAND Replace model_state.options[option_name] with a new list containing only the objects from objs whose name is not equal to obj_name, preserving iteration order and mutating the shared model state reference. RESULT model_state.options[option_name]]
+            [COMMAND Call reload_model with app_label, model_name, and delay=True to propagate the updated model state. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds an index to a model by appending it to the model's indexes option through the internal option helper." add_index]
+    [INPUTS]
+        <REF> app_label </REF>: string "Label of the application to which the model belongs."
+        <REF> model_name </REF>: string "Name of the model on which the index is added."
+        <REF> index </REF>: object "Index object or specification to append to the model's indexes option."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._append_option with app_label, model_name, the literal string 'indexes', and index to register the index option. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes the named database index from the specified model by delegating to _remove_option with the 'indexes' option type." remove_index]
+    [INPUTS]
+        <REF> app_label </REF>: string "Application label of the model containing the index."
+        <REF> model_name </REF>: string "Model name from which the index is removed."
+        <REF> index_name </REF>: string "Name of the index to remove."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._remove_option with app_label, model_name, the constant string 'indexes', and index_name to remove the index; discard the return value. RESULT unused]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds the given constraint to the specified model's constraints option by delegating to _append_option." add_constraint]
+    [INPUTS]
+        <REF> app_label </REF>: string "Application label of the model."
+        <REF> model_name </REF>: string "Name of the model to which the constraint is added."
+        <REF> constraint </REF>: Constraint "Constraint instance to append to the model's constraints option."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._append_option(app_label, model_name, 'constraints', constraint) to append the constraint to the model's constraints option. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes a constraint from a model by delegating to _remove_option with the 'constraints' option." remove_constraint]
+    [INPUTS]
+        <REF> app_label </REF>: string "Label of the application containing the model."
+        <REF> model_name </REF>: string "Name of the model from which the constraint is removed."
+        <REF> constraint_name </REF>: string "Name of the constraint to remove."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._remove_option(app_label, model_name, 'constraints', constraint_name) to remove the named constraint. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers a field on a model state, cloning the field and clearing its default when preserve_default is false, then reloads the model with a delay determined by whether the field is a relation." add_field]
+    [INPUTS]
+        <REF> app_label </REF>: str "Application label of the model whose field is being added or updated."
+        <REF> model_name </REF>: str "Name of the model whose field is being added or updated."
+        <REF> name </REF>: str "Name of the field to add or update in the model's fields collection."
+        <REF> field </REF>: Field "Field instance to register; when preserve_default is falsy, it is cloned and its default is replaced with NOT_PROVIDED."
+        <REF> preserve_default </REF>: bool "Flag indicating whether to preserve the field's existing default value; if falsy, the field is cloned and the default is cleared."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If preserve_default is falsy, reassign field to a clone of the original field and set the cloned field's default to NOT_PROVIDED; otherwise, leave field unchanged. RESULT field]
+            [COMMAND Assign field to the fields dictionary at self.models[app_label, model_name].fields[name]. RESULT self.models]
+            [COMMAND Set delay to the boolean negation of field.is_relation, so delay is True when the field is not a relation. RESULT delay]
+            [COMMAND Call self.reload_model(app_label, model_name, delay=delay). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes the named field from a model's state and reloads the model, using a delay when the removed field is not a relational field." remove_field]
+    [INPUTS]
+        <REF> app_label </REF>: string "Application label of the model whose field is being removed."
+        <REF> model_name </REF>: string "Name of the model from which the field is removed."
+        <REF> name </REF>: string "Name of the field to remove from the model state."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the model state for the given app_label and model_name in self.models and assign it to model_state. RESULT model_state]
+            [COMMAND Remove the field named name from model_state.fields using pop, assigning the removed field object to old_field; if name is absent, pop raises a KeyError. RESULT old_field]
+            [COMMAND Set delay to the boolean negation of old_field.is_relation so delay is True for non-relational fields and False for relational fields. RESULT delay]
+            [COMMAND Call self.reload_model with app_label, model_name, and delay=delay to reload the model after the field removal. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Alters a field's stored default when preservation is not requested, updates the model state's field map, computes a reload delay based on whether the field is relational or referenced, and reloads the model with that delay." alter_field]
+    [INPUTS]
+        <REF> app_label </REF>: string "Label of the application containing the model."
+        <REF> model_name </REF>: string "Name of the model whose field is being altered."
+        <REF> name </REF>: string "Name of the field to set on the model state."
+        <REF> field </REF>: Field "Field instance to store; if preserve_default is false, it is cloned and its default is set to NOT_PROVIDED."
+        <REF> preserve_default </REF>: bool "Whether to retain the original field default; if false, the stored field's default is replaced with NOT_PROVIDED."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If preserve_default is False, set field to field.clone() and set field.default to NOT_PROVIDED. RESULT field]
+            [COMMAND Retrieve model_state from self.models using tuple key (app_label, model_name). RESULT model_state]
+            [COMMAND Assign field into model_state.fields under key name, overwriting any existing value. RESULT model_state.fields[name]]
+            [COMMAND Compute delay as True only if field.is_relation is falsy and field_is_referenced(self, (app_label, model_name), (name, field)) is False; otherwise compute delay as False. If field.is_relation is truthy, do not call field_is_referenced. RESULT delay]
+            [COMMAND Call self.reload_model(app_label, model_name, delay=delay). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: preserve_default is True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Keep field unchanged; the else branch field = field is a no-op. RESULT field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renames a model field by updating the model state's field mapping, from_fields, index/unique_together settings, and related reference fields, then reloads the model." rename_field]
+    [INPUTS]
+        <REF> app_label </REF>: string "Label of the application containing the model."
+        <REF> model_name </REF>: string "Name of the model whose field is being renamed."
+        <REF> old_name </REF>: string "Current name of the field to rename."
+        <REF> new_name </REF>: string "New name for the field."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up model_state from self.models using the tuple (app_label, model_name) and alias model_state.fields as fields. RESULT model_state]
+            [COMMAND Pop old_name from fields to obtain found; this may trigger the exception flow if old_name is absent. RESULT found]
+            [COMMAND Assign found to fields[new_name]. RESULT fields]
+            [COMMAND Iterate over every field in fields.values(); for each field, retrieve from_fields using getattr(field, 'from_fields', None), and if from_fields is truthy, set field.from_fields to a tuple replacing each element equal to old_name with new_name. RESULT fields]
+            [COMMAND Read model_state.options into options. RESULT options]
+            [COMMAND For each option in ('index_together', 'unique_together'), if option is a key in options, replace options[option] with a nested list that maps each element n to new_name when n equals old_name and to n otherwise. RESULT options]
+            [COMMAND Set delay to True and assign references to get_references(self, (app_label, model_name), (old_name, found)). RESULT references]
+            [COMMAND Iterate over references unpacking the trailing two items as field and reference; set delay to False; if reference.to is truthy, unpack remote_field and to_fields, rename remote_field.field_name to new_name if it equals old_name, and if to_fields is truthy set field.to_fields to a tuple replacing each to_field_name equal to old_name with new_name. RESULT references]
+            [COMMAND Call self.reload_model(app_label, model_name, delay=delay). RESULT model_reload_completed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When fields.pop(old_name) fails because old_name is not present in model_state.fields.]
+        [LOG "FieldDoesNotExist is raised with a message indicating that app_label.model_name has no field named old_name."]
+        [THROW FieldDoesNotExist "Indicates the field being renamed does not exist on the specified model."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes and returns the set of related model tuples for a given model, including the model itself and models reachable through direct and recursive relations, using delayed tuple-based lookup or recursive traversal depending on the delay flag and skipping unavailable models." _find_reload_model]
+    [INPUTS]
+        <REF> app_label </REF>: str "App label of the target model."
+        <REF> model_name </REF>: str "Name of the target model."
+        <REF> delay </REF>: bool "If True, mark reload as delayed and use tuple-based related-model lookup; if False, use recursive related-model lookup. Defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> related_models </REF>: set of (str, str) tuples "Set of (app_label, model_name) tuples for the target model and all related models found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If delay is True, set self.is_delayed to True. RESULT self.is_delayed]
+            [COMMAND Initialize related_models as an empty set. RESULT related_models]
+            [COMMAND Try to retrieve old_model by calling self.apps.get_model(app_label, model_name). RESULT old_model]
+            [COMMAND If the get_model call raises LookupError, do nothing and proceed to the next statement after the try block. RESULT related_models]
+            [COMMAND If old_model is found and delay is True, set related_models to the set returned by get_related_models_tuples(old_model). RESULT related_models]
+            [COMMAND If old_model is found and delay is False, set related_models to the set returned by get_related_models_recursive(old_model). RESULT related_models]
+            [COMMAND Get model_state from self.models using the tuple key (app_label, model_name). RESULT model_state]
+            [COMMAND Initialize direct_related_models as an empty set. RESULT direct_related_models]
+            [COMMAND For each field in model_state.fields.values(), if field.is_relation is False, skip to the next field. RESULT direct_related_models]
+            [COMMAND Within the for loop over fields, if field.remote_field.model equals RECURSIVE_RELATIONSHIP_CONSTANT, continue to the next field. RESULT direct_related_models]
+            [COMMAND Within the for loop over fields, for each non-recursive relation field, call _get_app_label_and_model_name(field.related_model, app_label) to get rel_app_label and rel_model_name, then add (rel_app_label, rel_model_name.lower()) to direct_related_models. RESULT direct_related_models]
+            [COMMAND Update related_models by adding every tuple in direct_related_models. RESULT related_models]
+            [COMMAND For each (rel_app_label, rel_model_name) in direct_related_models, try to retrieve rel_model by calling self.apps.get_model(rel_app_label, rel_model_name). RESULT rel_model]
+            [COMMAND Within the loop over direct_related_models, if the get_model call raises LookupError, pass and continue to the next tuple. RESULT related_models]
+            [COMMAND Within the loop over direct_related_models, if rel_model is found and delay is True, update related_models with get_related_models_tuples(rel_model). RESULT related_models]
+            [COMMAND Within the loop over direct_related_models, if rel_model is found and delay is False, update related_models with get_related_models_recursive(rel_model). RESULT related_models]
+            [COMMAND Add the original (app_label, model_name) tuple to related_models. RESULT related_models]
+            [COMMAND Return related_models. RESULT related_models]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reloads the related models for the specified app and model when the apps attribute is already cached, avoiding the property getter side effects." reload_model]
+    [INPUTS]
+        <REF> app_label </REF>: str "Application label used for identifying the model."
+        <REF> model_name </REF>: str "Model name used for identifying the related models."
+        <REF> delay </REF>: bool "Whether to delay the reload; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within reload_model, check whether the string 'apps' exists in self.__dict__ instead of using hasattr, in order to avoid triggering the property getter. RESULT apps_present]
+            [COMMAND Within the if block when apps_present is true, call self._find_reload_model(app_label, model_name, delay) and store the result in related_models. RESULT related_models]
+            [COMMAND Within the if block when apps_present is true, call self._reload(related_models) to perform the reload. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reloads related models only when the 'apps' attribute is already cached in self.__dict__, by gathering related model references from _find_reload_model for each (app_label, model_name) pair, deduplicating them in a set, and then calling _reload once." reload_models]
+    [INPUTS]
+        <REF> models </REF>: iterable of (app_label, model_name) tuples "Collection of Django app label and model name pairs for which related models should be looked up and reloaded."
+        <REF> delay </REF>: bool "Flag controlling whether the reload should be delayed; passed unchanged to _find_reload_model. Defaults to True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If the key 'apps' is present in self.__dict__ (using direct membership checking rather than hasattr to avoid triggering property caching), create an empty set named related_models; otherwise skip the reload block. RESULT related_models]
+            [COMMAND Within the 'apps' present branch, for each (app_label, model_name) tuple in models, call self._find_reload_model(app_label, model_name, delay) and update related_models with every item in the returned iterable, thereby deduplicating related model references. RESULT related_models]
+            [COMMAND Within the 'apps' present branch, after the loop completes, call self._reload(related_models) exactly once; if models was empty, this call still occurs with an empty set. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Unregisters all related models from the app registry and then re-renders the model states gathered from both real models and registered migrations." _reload]
+    [INPUTS]
+        <REF> related_models </REF>: iterable of (app_label, model_name) pairs "Collection of related model identifiers that identify which models should be unregistered and included in the re-rendered states."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the with self.apps.bulk_update() context, iterate over related_models and call self.apps.unregister_model(rel_app_label, rel_model_name) for each pair. RESULT None]
+            [COMMAND Initialize states_to_be_rendered as an empty list. RESULT states_to_be_rendered]
+            [COMMAND For each model_state in self.apps.real_models, if the tuple (model_state.app_label, model_state.name_lower) is in related_models, append model_state to states_to_be_rendered. RESULT states_to_be_rendered]
+            [COMMAND For each (rel_app_label, rel_model_name) in related_models, look up model_state = self.models[rel_app_label, rel_model_name]. If the lookup succeeds, append model_state to states_to_be_rendered. RESULT states_to_be_rendered]
+            [COMMAND Call self.apps.render_multiple(states_to_be_rendered) to render all gathered model states. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.models[rel_app_label, rel_model_name] raises KeyError for a related model identifier during the lookup step.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the KeyError, pass (skip that missing model), and continue with the next related model identifier. RESULT states_to_be_rendered]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Synchronizes each field's name with its key in the model's fields mapping, then builds a nested relations dictionary that maps remote and through model keys to originating model fields for both concrete and proxy models." resolve_fields_and_relations]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each model_state in self.models.values(), for each field_name and field in model_state.fields.items(), assign field.name = field_name. RESULT model_state.fields]
+            [COMMAND Initialize self.relations as a nested defaultdict(partial(defaultdict, list)), so self.relations[outer_key][inner_key] auto-creates an empty list when accessed. RESULT self.relations]
+            [COMMAND Call self._get_concrete_models_mapping_and_proxy_models() and unpack the first returned value into concretes and the second returned value into proxies. RESULT concretes, proxies]
+            [COMMAND For each model_key in concretes, retrieve model_state = self.models[model_key]. RESULT model_state]
+            [COMMAND Within the outer loop over concrete model keys, for each field_name and field in model_state.fields.items(), inspect field.remote_field and, if it is falsy, continue to the next field. RESULT field.remote_field]
+            [COMMAND Within the outer loop over concrete model keys and the inner loop over that model_state.fields.items(), for each field with a truthy remote_field, compute remote_model_key = resolve_relation(remote_field.model, *model_key); if both remote_model_key[0] not in self.real_apps and remote_model_key in concretes are true, using short-circuit and semantics, remap remote_model_key to concretes[remote_model_key]; then append (field_name, field) to self.relations[remote_model_key][model_key]. RESULT self.relations]
+            [COMMAND Within the same nested loop, after adding the remote relation for the current field, read through = getattr(remote_field, 'through', None); if through is falsy, continue to the next field without adding a through relation; the remote-model relation from the previous step has already been recorded. RESULT through]
+            [COMMAND Within the same nested loop, for each field with a truthy through value, compute through_model_key = resolve_relation(through, *model_key); if both through_model_key[0] not in self.real_apps and through_model_key in concretes are true, using short-circuit and semantics, remap through_model_key to concretes[through_model_key]; then append (field_name, field) to self.relations[through_model_key][model_key]. RESULT self.relations]
+            [COMMAND For each model_key in proxies, set self.relations[model_key] = self.relations[concretes[model_key]] so that proxy model keys reference the same relation map as their concrete model parent. RESULT self.relations]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the given model to its concrete model by looking up a normalized model tuple in the mapping returned from _get_concrete_models_mapping_and_proxy_models." get_concrete_model_key]
+    [INPUTS]
+        <REF> model </REF>: object "The model object, class, or identifier to resolve to a concrete model."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> concrete_model </REF>: object "The concrete model value associated with the normalized key for the provided model."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._get_concrete_models_mapping_and_proxy_models() and assign the first returned value to concrete_models_mapping, discarding the second returned value. RESULT concrete_models_mapping]
+            [COMMAND Normalize the model by calling make_model_tuple(model) and assign the resulting key to model_key. RESULT model_key]
+            [COMMAND Return concrete_models_mapping[model_key] as the resolved concrete model. RESULT concrete_model]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Separates self.models into proxy and non-proxy models, maps each proxy model to its resolved concrete model, maps each non-proxy model to itself, and returns both the concrete-model mapping and the proxy-model mapping." _get_concrete_models_mapping_and_proxy_models]
+    [INPUTS]
+        <REF> self </REF>: object "The instance providing self.models and the helper method self._find_concrete_model_from_proxy."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> concrete_models_mapping </REF>: dict "Mapping from every model key in self.models to either the model key itself or the concrete model resolved for a proxy model."
+        <REF> proxy_models </REF>: dict "Mapping from model keys that are marked as proxy to their corresponding model_state objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize concrete_models_mapping as an empty dictionary. RESULT concrete_models_mapping]
+            [COMMAND Initialize proxy_models as an empty dictionary. RESULT proxy_models]
+            [COMMAND For each model_key and model_state in self.models.items(), evaluate whether model_state.options.get('proxy') is truthy. RESULT proxy_flag]
+            [COMMAND If proxy_flag is truthy, store model_state in proxy_models under model_key. RESULT proxy_models]
+            [COMMAND Still within the same if branch, call self._find_concrete_model_from_proxy(proxy_models, model_state) and assign the returned concrete model to concrete_models_mapping[model_key]. RESULT concrete_models_mapping]
+            [COMMAND After the loop has processed all models, return the tuple (concrete_models_mapping, proxy_models). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: During iteration over self.models.items(), when model_state.options.get('proxy') is falsy for the current model_key and model_state.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the else branch, assign concrete_models_mapping[model_key] = model_key. RESULT concrete_models_mapping]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Finds the concrete model key by checking the first base of a proxy model state: if that base has no proxy state it returns it as concrete, otherwise it recurses through the found proxy state; an empty base list implicitly returns None." _find_concrete_model_from_proxy]
+    [INPUTS]
+        <REF> self </REF>: object "The method receiver instance."
+        <REF> proxy_models </REF>: mapping "Mapping from model tuple keys to proxy model states; missing keys mean the corresponding model is concrete."
+        <REF> model_state </REF>: object "State object exposing a bases sequence; the sequence of base models to inspect."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: model tuple or null "The concrete model tuple key if a concrete base is found, the recursive result when the first base is still proxy, or None when model_state.bases is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set iteration_context to model_state.bases. RESULT iteration_context]
+            [COMMAND For each base in iteration_context, enter the loop body; every reachable branch inside the loop returns, so only the first base is processed before the method returns. RESULT current_base]
+            [COMMAND Within the for loop over iteration_context, compute base_key by calling make_model_tuple(current_base). RESULT base_key]
+            [COMMAND Within the same for loop, compute base_state by looking up base_key in proxy_models using proxy_models.get(base_key). RESULT base_state]
+            [COMMAND Within the same for loop, if base_state is falsy (normally None, meaning no proxy state exists for this base), treat current_base as the concrete model and immediately return base_key. RESULT concrete_model_key]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the same for loop, if base_state is truthy (a proxy state exists for the current base), do not return base_key; instead take the recursive proxy path.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Immediately return the result of self._find_concrete_model_from_proxy(proxy_models, base_state). RESULT recursive_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If iteration_context is empty, the for loop body is never entered and no return statement inside the loop is reached.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fall through after the loop and return None implicitly. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns an exact copy of this ProjectState by cloning its models, optionally cloning its apps attribute, sharing real_apps by reference, and copying is_delayed." clone]
+    [INPUTS]
+        <REF> self </REF>: ProjectState "The ProjectState instance to clone."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> new_state </REF>: ProjectState "A newly created ProjectState copy with cloned models, cloned apps if present, shared real_apps, and copied is_delayed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build cloned_models by iterating self.models.items() and mapping each key k to v.clone() for every value v. RESULT cloned_models]
+            [COMMAND Construct new_state as ProjectState(models=cloned_models, real_apps=self.real_apps), passing real_apps by reference rather than cloning it. RESULT new_state]
+            [COMMAND Check whether 'apps' is a key in self.__dict__. RESULT has_apps]
+            [COMMAND If has_apps is true, clone self.apps and assign the clone to new_state.apps; otherwise make no apps assignment. RESULT new_state.apps]
+            [COMMAND Copy self.is_delayed into new_state.is_delayed. RESULT new_state.is_delayed]
+            [COMMAND Return new_state. RESULT new_state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clears the cached 'apps' attribute from the instance dictionary when the instance is marked delayed and the 'apps' key is present." clear_delayed_apps_cache]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.is_delayed is truthy and 'apps' is present in self.__dict__, using Python's short-circuit and semantics so the membership check is skipped if self.is_delayed is false. RESULT cache_clear_condition]
+            [COMMAND If cache_clear_condition is true, delete the 'apps' entry from self.__dict__. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: cache_clear_condition is false because self.is_delayed is false, or 'apps' is not present in self.__dict__.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip deletion of the 'apps' entry and continue execution after the if block. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a StateApps instance constructed from the calling object's current real_apps and models attributes." apps]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: StateApps "A new StateApps instance initialized with the current self.real_apps and self.models values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current values of self.real_apps and self.models from the calling object. RESULT app_source_values]
+            [COMMAND Construct a new StateApps object passing self.real_apps as the first argument and self.models as the second argument. RESULT state_apps_instance]
+            [COMMAND Return the newly constructed StateApps instance immediately to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a ProjectState by converting every model from the provided Apps registry into a ModelState and storing it keyed by app label and lowercased model name." from_apps]
+    [INPUTS]
+        <REF> cls </REF>: type "The class on which from_apps is called; used to instantiate the resulting ProjectState."
+        <REF> apps </REF>: Apps "Application registry whose get_models(include_swapped=True) provides the models to convert."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ProjectState "ProjectState containing ModelState instances keyed by (app_label, name_lower)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary named app_models. RESULT app_models]
+            [COMMAND For each model returned by apps.get_models(include_swapped=True), create a ModelState by calling ModelState.from_model(model). RESULT model_state]
+            [COMMAND In the loop over models, store model_state in app_models under the key (model_state.app_label, model_state.name_lower). RESULT app_models]
+            [COMMAND After the loop finishes, return cls(app_models) to construct a ProjectState from the populated dictionary. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS AppConfigStub
+
+[DEFINE_WORKER: "Initializes migration state by setting apps to None and models to an empty dictionary, then assigning both label and name to the provided label, using the label as a unique stand-in for the app name." __init__]
+    [INPUTS]
+        <REF> label </REF>: string "The app label, not the app name; used as a unique identifier and assigned to both self.label and self.name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize self.apps to the constant None. RESULT self.apps]
+            [COMMAND Initialize self.models to an empty dictionary. RESULT self.models]
+            [COMMAND Assign self.label the value of the input label. RESULT self.label]
+            [COMMAND Assign self.name the value of the input label. RESULT self.name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Assigns the dictionary of model classes registered for the current app label to self.models by looking it up in the application registry." import_models]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing the application registry in self.apps and the app label in self.label."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the application registry from self.apps and access its all_models mapping. RESULT all_models_mapping]
+            [COMMAND Read the app label from self.label. RESULT app_label]
+            [COMMAND Look up the model dictionary for app_label in all_models_mapping. RESULT models_for_label]
+            [COMMAND Assign models_for_label to self.models. RESULT self.models]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: app_label is not present as a key in all_models_mapping.]
+        [LOG "Model registry lookup failed because the app label is not present in all_models."]
+        [THROW KeyError "Raised when self.apps.all_models does not contain the key self.label."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS StateApps
+
+[DEFINE_WORKER: "Initializes a stateful app registry by collecting real model states without relationships, creating app config stubs, rendering all model states, and raising ValueError if lazy-reference checking finds errors." StateApps.__init__]
+    [INPUTS]
+        <REF> real_apps </REF>: iterable of application label strings "Application labels whose concrete models should all be included in the rendered state."
+        <REF> models </REF>: dict-like mapping to ModelState objects "Existing model states used to derive app labels and to render alongside real models."
+        <REF> ignore_swappable </REF>: bool "If true, excludes the swappable AUTH_USER_MODEL tuple from lazy-reference checking. Defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize the instance attribute self.real_models to an empty list. RESULT self.real_models]
+            [COMMAND For each app_label in real_apps, retrieve the app config with global_apps.get_app_config(app_label). RESULT app]
+            [COMMAND Within the loop over app_label, for each model in app.get_models(), append ModelState.from_model(model, exclude_rels=True) to self.real_models. RESULT self.real_models]
+            [COMMAND Build app_labels as the set of model_state.app_label values for every model_state in models.values(). RESULT app_labels]
+            [COMMAND Build app_configs as a list of AppConfigStub(label) for each label in the lexicographically sorted concatenation of real_apps and app_labels; duplicates between the two sources are not removed. RESULT app_configs]
+            [COMMAND Call super().__init__(app_configs) to populate the app registry with the stub configurations. RESULT super_initialized_state]
+            [COMMAND Set self._lock to None and self.ready_event to None to avoid interfering with copying in clone(). RESULT self._lock and self.ready_event]
+            [COMMAND Call self.render_multiple([*models.values(), *self.real_models]) to render all supplied and real model states. RESULT rendered_models]
+            [COMMAND Import _check_lazy_references from django.core.checks.model_checks. RESULT checker_function]
+            [COMMAND Determine the ignore set used for lazy-reference checking based on ignore_swappable. RESULT ignore]
+            [COMMAND Call _check_lazy_references(self, ignore=ignore) and store the returned errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: ignore_swappable is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set ignore to the single-element set containing make_model_tuple(settings.AUTH_USER_MODEL). RESULT ignore]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: ignore_swappable is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set ignore to an empty set. RESULT ignore]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: errors from _check_lazy_references is non-empty]
+        [LOG "Join the msg of each error with newline characters and raise it as a ValueError."]
+        [THROW ValueError "Raised when lazy-reference checking finds errors, with each error message joined by newlines."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Disables cache clearing for a series of updates by saving and lowering the ready flag, yields control to the caller, then restores ready and clears all caches in a finally block." bulk_update]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Save the current value of self.ready into local variable ready. RESULT ready]
+            [COMMAND Set self.ready to False. RESULT self.ready]
+            [COMMAND Inside the try block, yield to the caller so the bulk-update body can run while self.ready is False. RESULT yield_point]
+            [COMMAND After the caller's bulk-update body exits or raises, enter the finally block and restore self.ready from saved ready; any active exception remains pending and will propagate after cleanup. RESULT self.ready]
+            [COMMAND In the finally block, after restoring self.ready, call self.clear_cache() to clear all caches accumulated during the bulk updates. RESULT cache_cleared]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders multiple model states in repeated passes, deferring models with invalid bases, and raises InvalidBasesError when base dependency resolution makes no progress." render_multiple]
+    [INPUTS]
+        <REF> self </REF>: object "Renderer instance that provides bulk_update() and is passed to model.render()."
+        <REF> model_states </REF>: iterable "Iterable of model states to render; if falsy, the method returns immediately."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "The method returns None; rendering is performed as a side effect."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If model_states is falsy, return immediately from render_multiple. RESULT early_return]
+            [COMMAND Enter the self.bulk_update() context manager; the remaining loop and exception logic execute inside this context. RESULT bulk_update_context]
+            [COMMAND Inside the bulk_update context, initialize unrendered_models to model_states. RESULT unrendered_models]
+            [COMMAND Inside the bulk_update context, while unrendered_models is truthy, create new_unrendered_models as an empty list for the current pass. RESULT while_loop_start]
+            [COMMAND Inside that while loop, for each model in unrendered_models, call model.render(self). RESULT render_attempt]
+            [COMMAND Within that for loop, if InvalidBasesError is raised, append model to new_unrendered_models so it can be retried in the next pass. RESULT deferred_model]
+            [COMMAND Still inside the while loop, after the for loop, if len(new_unrendered_models) equals len(unrendered_models), raise InvalidBasesError. RESULT invalid_bases_error]
+            [COMMAND Still inside the while loop, when progress was made, set unrendered_models to new_unrendered_models and continue the while loop. RESULT next_pass]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: After a while-loop pass, len(new_unrendered_models) equals len(unrendered_models), meaning no model could be rendered because base dependencies cannot be resolved.]
+        [LOG "Cannot resolve bases for %r
+This can happen if you are inheriting models from an app with migrations (e.g. contrib.auth)
+ in an app with no migrations; see https://docs.djangoproject.com/en/%s/topics/migrations/#dependencies for more"]
+        [THROW InvalidBasesError "Raised to indicate a base dependency loop or missing base among the unrendered model states."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Clones this StateApps registry by creating a new instance, deep-copying all_models and app_configs, re-pointing each cloned app config to the new registry, and sharing the real_models reference." clone]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clone </REF>: StateApps "The new cloned StateApps registry with deep-copied all_models and app_configs, shared real_models, and app_configs pointing to the clone."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new StateApps instance with an empty models list and an empty app configs dictionary, assigning it to clone. RESULT clone]
+            [COMMAND Set clone.all_models to a deep copy of self.all_models. RESULT clone.all_models]
+            [COMMAND Set clone.app_configs to a deep copy of self.app_configs. RESULT clone.app_configs]
+            [COMMAND For each app_config in clone.app_configs.values(), set app_config.apps to clone so the cloned configs point to the new registry. RESULT app_config.apps]
+            [COMMAND Set clone.real_models to self.real_models directly, preserving object identity and shared mutability. RESULT clone.real_models]
+            [COMMAND Return clone. RESULT clone]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers a model class in the app registry under the given app label, lazily creating an AppConfigStub for unknown app labels, then runs pending operations and clears the cache." register_model]
+    [INPUTS]
+        <REF> app_label </REF>: string "The application label under which the model is registered."
+        <REF> model </REF>: django.db.models.Model subclass "The model class to register, from which model._meta.model_name is read as the registry key."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store a reference to model in self.all_models under the key app_label and the inner key model._meta.model_name. RESULT self.all_models]
+            [COMMAND If app_label is not already a key in self.app_configs, create AppConfigStub(app_label), assign it to self.app_configs[app_label], and set its apps attribute to self. RESULT self.app_configs]
+            [COMMAND Store a reference to model in self.app_configs[app_label].models under the key model._meta.model_name. RESULT self.app_configs]
+            [COMMAND Call self.do_pending_operations(model) to process any operations waiting on this model. RESULT self]
+            [COMMAND Call self.clear_cache() to invalidate cached registry state. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Unregisters a model from the application registry by removing it from all_models and the app config's models, silently ignoring a KeyError if the model is already missing." unregister_model]
+    [INPUTS]
+        <REF> self </REF>: object "The application registry instance whose registries are modified."
+        <REF> app_label </REF>: str "The application label of the model to unregister."
+        <REF> model_name </REF>: str "The model name to remove from the registry."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the try block, delete model_name from self.all_models[app_label]. RESULT None]
+            [COMMAND Within the same try block, delete model_name from self.app_configs[app_label].models. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: KeyError is raised by either deletion attempt in the try block.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the KeyError and do nothing, leaving any earlier successful deletion in place and returning None without re-raising. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS ModelState
+
+[DEFINE_WORKER: "Initializes a ModelState instance by setting defaulted attributes and validating that fields are not model-bound, relation references are strings, and indexes have names." ModelState.__init__]
+    [INPUTS]
+        <REF> app_label </REF>: string "Label of the application that owns the model."
+        <REF> name </REF>: string "Name of the model."
+        <REF> fields </REF>: dict or iterable of key-value pairs "Mapping of field names to field objects, or another iterable accepted by dict(fields)."
+        <REF> options </REF>: dict or None "Optional model options dictionary; defaults to a new empty dict when falsy."
+        <REF> bases </REF>: tuple/list or None "Base classes for the model; defaults to (models.Model,) when falsy."
+        <REF> managers </REF>: list or None "Managers for the model; defaults to a new empty list when falsy."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.app_label to the app_label parameter. RESULT self.app_label]
+            [COMMAND Set self.name to the name parameter. RESULT self.name]
+            [COMMAND Build a new dictionary from the fields parameter using dict(fields) and assign it to self.fields; the original fields object is not mutated. RESULT self.fields]
+            [COMMAND If the options parameter is truthy, assign it to self.options; otherwise assign a new empty dict to self.options. RESULT self.options]
+            [COMMAND If 'indexes' is not already a key in self.options, insert it with value [] using setdefault; if options was truthy and lacked the key, this mutates the original options dict object. RESULT self.options['indexes']]
+            [COMMAND If 'constraints' is not already a key in self.options, insert it with value [] using setdefault; if options was truthy and lacked the key, this mutates the original options dict object. RESULT self.options['constraints']]
+            [COMMAND If the bases parameter is truthy, assign it to self.bases; otherwise assign the tuple (models.Model,) to self.bases. RESULT self.bases]
+            [COMMAND If the managers parameter is truthy, assign it to self.managers; otherwise assign a new empty list to self.managers. RESULT self.managers]
+            [COMMAND Iterate over each (name, field) pair in self.fields.items(); for each pair, if hasattr(field, 'model') is true, raise ValueError and stop execution. RESULT field_binding_check_passed]
+            [COMMAND For the same (name, field) pair, if field.is_relation is true and hasattr(field.related_model, '_meta') is true (short-circuiting so hasattr is skipped when is_relation is false), raise ValueError and stop execution; otherwise continue. RESULT relation_target_check_passed]
+            [COMMAND For the same (name, field) pair, if field.many_to_many is true and hasattr(field.remote_field.through, '_meta') is true (short-circuiting so hasattr is skipped when many_to_many is false), raise ValueError and stop execution; otherwise continue. RESULT m2m_through_check_passed]
+            [COMMAND Iterate over each index in self.options['indexes']; if index.name is falsy, raise ValueError and stop execution. RESULT index_name_check_passed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: In the loop over self.fields.items(), for a given (name, field), hasattr(field, 'model') is true.]
+        [LOG "ModelState.fields cannot be bound to a model - '<field_name>' is."]
+        [THROW ValueError "A field in ModelState.fields is already bound to a model, which is not allowed."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the same loop over self.fields.items(), for a given (name, field), field.is_relation is true and hasattr(field.related_model, '_meta') is true.]
+        [LOG "ModelState.fields cannot refer to a model class - '<field_name>.to' does. Use a string reference instead."]
+        [THROW ValueError "A relation field's related_model is a concrete model class instead of a string reference."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the same loop over self.fields.items(), for a given (name, field), field.many_to_many is true and hasattr(field.remote_field.through, '_meta') is true.]
+        [LOG "ModelState.fields cannot refer to a model class - '<field_name>.through' does. Use a string reference instead."]
+        [THROW ValueError "A many-to-many field's through model is a concrete model class instead of a string reference."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the loop over self.options['indexes'], for a given index, index.name is falsy (for example, None or an empty string).]
+        [LOG "Indexes passed to ModelState require a name attribute. <index> doesn't have one."]
+        [THROW ValueError "An index object in options['indexes'] is missing a non-empty name attribute."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the lowercase version of the name attribute of the instance." name_lower]
+    [INPUTS]
+        <REF> self </REF>: object "The instance that exposes a name attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The name attribute converted to lowercase."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the value of self.name and call the lower() method on it, then return the resulting string. RESULT lowercase_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the sentinel field name '_order' to the configured order_with_respect_to option, then returns the corresponding value from self.fields." get_field]
+    [INPUTS]
+        <REF> field_name </REF>: str "The requested field name; if it is exactly '_order', it is replaced by the configured order_with_respect_to value before lookup."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The value stored in self.fields under the resolved field name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the incoming field_name equals the literal string '_order'. RESULT is_order_sentinel]
+            [COMMAND Compute the effective field name: if is_order_sentinel is true, use the value of the key 'order_with_respect_to' from self.options; otherwise keep the original field_name. RESULT field_name]
+            [COMMAND Return the value corresponding to the effective field_name from self.fields. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The incoming field_name equals the literal string '_order'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set field_name to the value of the key 'order_with_respect_to' from self.options. RESULT field_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The incoming field_name does not equal the literal string '_order'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Keep field_name unchanged at its original incoming value. RESULT field_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reconstructs and returns a ModelState instance from a Django model by cloning its fields and managers, normalizing its options, and flattening its model bases." from_model]
+    [INPUTS]
+        <REF> cls </REF>: type "The ModelState class being instantiated."
+        <REF> model </REF>: Django Model class "The model from which the ModelState is reconstructed."
+        <REF> exclude_rels </REF>: bool "Whether to exclude relational fields and relationship-related model options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> model_state </REF>: ModelState "A reconstructed ModelState instance representing the given model."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize the fields list to an empty list. RESULT fields]
+            [COMMAND For each field in model._meta.local_fields, skip it if it has a truthy remote_field and exclude_rels is true, skip it if it is an instance of models.OrderWrt; otherwise set name to field.name and append (name, field.clone()) to fields. RESULT fields]
+            [COMMAND If exclude_rels is false, for each field in model._meta.local_many_to_many, set name to field.name and append (name, field.clone()) to fields. RESULT fields]
+            [COMMAND Initialize the options dictionary to an empty dictionary. RESULT options]
+            [COMMAND For each name in DEFAULT_NAMES, skip 'apps' and 'app_label'; if name is not in model._meta.original_attrs, continue; otherwise, for 'unique_together' store set(normalize_together(original_attrs['unique_together'])), for 'index_together' store set(normalize_together(original_attrs['index_together'])), for 'indexes' clone model._meta.indexes and name unnamed clones with set_name_with_model(model), for 'constraints' store cloned constraints, and for any other name store model._meta.original_attrs[name] directly. RESULT options]
+            [COMMAND If exclude_rels is true, delete 'unique_together', 'index_together', and 'order_with_respect_to' from options when present; otherwise, if options.get('order_with_respect_to') is in the set of private field names from model._meta.private_fields, delete options['order_with_respect_to']. RESULT options]
+            [COMMAND Define the nested recursive function flatten_bases(model) that iterates over model.__bases__ and, for each base, extends the result with flatten_bases(base) when the base has a _meta attribute and base._meta.abstract is true, or appends base otherwise, then returns the bases list. RESULT flatten_bases]
+            [COMMAND Compute flattened_bases as sorted(set(flatten_bases(model)), key=lambda x: model.__mro__.index(x)) to remove duplicates and order the bases by their position in the model's MRO. RESULT flattened_bases]
+            [COMMAND Build the bases tuple by converting each base in flattened_bases to base._meta.label_lower if the base has a _meta attribute, otherwise keeping the base itself. RESULT bases]
+            [COMMAND If no element in bases is a string and no element is a subclass of models.Model, replace bases with (models.Model,). RESULT bases]
+            [COMMAND Initialize managers to an empty list, manager_names to an empty set, and default_manager_shim to None. RESULT managers]
+            [COMMAND For each manager in model._meta.managers, skip it if manager.name is already in manager_names; if manager.use_in_migrations is true, copy manager with copy.copy and call new_manager._set_creation_counter(); else if manager is model._base_manager or manager is model._default_manager, create a plain models.Manager(), set its model and name, assign new_manager to default_manager_shim if manager is model._default_manager, and otherwise skip the manager; after an accepted branch, add manager.name to manager_names and append (manager.name, new_manager) to managers. RESULT managers]
+            [COMMAND If managers equals [('objects', default_manager_shim)], clear managers to an empty list. RESULT managers]
+            [COMMAND Return the result of calling cls(model._meta.app_label, model._meta.object_name, fields, options, bases, managers). RESULT model_state]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: While iterating model._meta.local_fields, field.clone() or the fields.append operation raises TypeError.]
+        [LOG "Couldn't reconstruct field {name} on {model._meta.label}: {error}"]
+        [THROW TypeError "Describes the field name, model label, and original clone error when reconstructing a local field."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: While iterating model._meta.local_many_to_many when exclude_rels is false, field.clone() or the fields.append operation raises TypeError.]
+        [LOG "Couldn't reconstruct m2m field {name} on {model._meta.object_name}: {error}"]
+        [THROW TypeError "Describes the field name, model object name, and original clone error when reconstructing a many-to-many field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deep-clones managers by sorting them by creation_counter, deconstructing each one, and yielding either an imported queryset's as_manager() result or an instantiated manager class." construct_managers]
+    [INPUTS]
+        <REF> self </REF>: object "Object containing self.managers, an iterable of (manager_name, manager) pairs where each manager has a creation_counter attribute and a deconstruct() method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> manager_generator </REF>: Generator[tuple[str, object]] "Lazily yields (mgr_name, manager_object) pairs sorted by ascending creation_counter."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sort all managers in self.managers by the creation_counter of the second element of each pair, using a stable sort so equal creation_counter values keep their original order. RESULT sorted_managers]
+            [COMMAND Iterate over sorted_managers, unpacking each item into mgr_name and manager. RESULT mgr_name, manager]
+            [COMMAND For each manager in sorted_managers, call manager.deconstruct() and unpack the five returned values into as_manager, manager_path, qs_path, args, and kwargs. RESULT as_manager, manager_path, qs_path, args, kwargs]
+            [COMMAND Within the for loop over sorted_managers, if as_manager is truthy, import the queryset class from qs_path, call as_manager() on it, and yield (mgr_name, result). RESULT yielded_manager]
+            [COMMAND Within the for loop over sorted_managers, if as_manager is falsy, import the manager class from manager_path, instantiate it as manager_class(*args, **kwargs), and yield (mgr_name, instance). RESULT yielded_manager]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a new instance of the same class as self with a shallow copy of fields, options, and managers while reusing app_label, name, and bases directly." clone]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ModelState "A new instance of the same class as self, containing direct references for app_label, name, and bases, and new top-level containers for fields, options, and managers with shared contents."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the class constructor from self.__class__ so the clone is the same type as the current model state. RESULT constructor]
+            [COMMAND Copy self.fields into a new dictionary with dict(self.fields) to create a fresh top-level fields container. RESULT cloned_fields]
+            [COMMAND Copy self.options into a new dictionary with dict(self.options) to create a fresh top-level options container; keep nested option values shared and require replacing whole options rather than mutating them. RESULT cloned_options]
+            [COMMAND Copy self.managers into a new list with list(self.managers) to create a fresh top-level managers list. RESULT cloned_managers]
+            [COMMAND Construct a new instance using constructor, passing self.app_label, self.name, and self.bases by reference, and passing cloned_fields, cloned_options, and cloned_managers as the copied containers. RESULT cloned_instance]
+            [COMMAND Return cloned_instance as the result of the clone method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns a Model class for the given apps by resolving its bases, building a Meta class, cloning fields, attaching managers, and invoking type()." render]
+    [INPUTS]
+        <REF> self </REF>: object "The current model state providing app_label, options, bases, fields, name, and construct_managers()."
+        <REF> apps </REF>: Apps registry "The apps registry used to resolve string model bases and to register the newly created model."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> model </REF>: Model class "The newly created Model class with resolved bases, cloned fields, Meta, __module__, and managers."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a dictionary meta_contents with 'app_label' set to self.app_label, 'apps' set to apps, and then merge in every item from self.options, so duplicate keys in self.options override the initial values. RESULT meta_contents]
+            [COMMAND Create a class object named Meta using the type constructor with no bases and meta_contents as the class namespace. RESULT meta]
+            [COMMAND In a try block, build the bases tuple by iterating over self.bases; for each base, if it is a string, replace it with apps.get_model(base), otherwise keep it unchanged. RESULT bases]
+            [COMMAND Build the body dictionary by iterating over self.fields.items() and mapping each field name to field.clone(). RESULT body]
+            [COMMAND Set body['Meta'] to meta and body['__module__'] to '__fake__', overwriting any cloned fields with those names. RESULT body]
+            [COMMAND Update body with the managers returned by self.construct_managers(), allowing same-named keys in the returned mapping to overwrite existing entries. RESULT body]
+            [COMMAND Create a new model class named self.name with the resolved bases and body namespace via type(self.name, bases, body), which triggers model registration during Model.__new__. RESULT model]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: While building the bases tuple, apps.get_model(base) raises LookupError for one or more string bases in self.bases.]
+        [LOG "Cannot resolve one or more bases from self.bases (using repr formatting)."]
+        [THROW InvalidBasesError "Raised to abort model creation because one or more specified base model classes could not be resolved."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Searches the model's list of indexes for an index whose name equals the provided name, returning the first match or raising ValueError when none exists." get_index_by_name]
+    [INPUTS]
+        <REF> name </REF>: string "The exact index name to search for."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> index </REF>: Index "The first index in self.options['indexes'] whose name equals the input name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each element in self.options['indexes'] from the first element to the last element. RESULT current_index]
+            [COMMAND Within the for loop over current_index, test whether current_index.name equals the input name using exact equality. RESULT is_match]
+            [COMMAND Within the for loop over current_index, if is_match is true, immediately return current_index and exit the method. RESULT matched_index]
+            [COMMAND After the for loop completes without an early return, proceed to the exception flow for a missing index. RESULT missing_index_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: No index in self.options['indexes'] has a name equal to the input name.]
+        [LOG "ValueError: No index named {name} on model {self.name}"]
+        [THROW ValueError "Indicates that no index with the requested name exists on this model."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Searches the model's constraints list for the first constraint whose name matches the provided name and returns it, or raises ValueError if none is found." get_constraint_by_name]
+    [INPUTS]
+        <REF> name </REF>: string "The constraint name to search for."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> constraint </REF>: object "The first constraint whose name attribute equals the provided name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each constraint in self.options['constraints'] in order. RESULT constraint]
+            [COMMAND For the current constraint, check whether constraint.name equals name. RESULT is_match]
+            [COMMAND If is_match is true, return constraint immediately as the method result. RESULT constraint]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The loop completes without finding any constraint whose name equals name.]
+        [LOG "No constraint named {name} on model {self.name}."]
+        [THROW ValueError "Raised when no constraint with the given name exists on the model."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a model reference to a standard (app_label, model_name) tuple by parsing string input on the first dot or reading Django model metadata directly." _get_app_label_and_model_name]
+    [INPUTS]
+        <REF> model </REF>: str or Django model class/instance "The model reference to normalize, either a dotted string like 'app_label.ModelName' or a Django model class or instance."
+        <REF> app_label </REF>: str "Default app label used when the string form has no dot; defaults to an empty string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple[str, str] "A tuple containing the resolved app_label and model_name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the model argument is an instance of the built-in str type. RESULT is_string]
+            [COMMAND Select the string-processing branch if is_string is true, or the model-metadata branch if is_string is false. RESULT selected_branch]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: model is an instance of str]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the string branch, split model on the first dot only using model.split('.', 1) and store the resulting list as split. RESULT split]
+            [COMMAND In the string branch after splitting, if len(split) == 2, meaning the original string contained at least one dot, return tuple(split) as the (app_label, model_name) result. RESULT string_with_dot_result]
+            [COMMAND In the string branch after splitting, if len(split) != 2, meaning the original string contained no dot, return (app_label, split[0]) as the (app_label, model_name) result, using the provided app_label. RESULT string_without_dot_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: model is not an instance of str]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the non-string branch, read model._meta.app_label and model._meta.model_name from the Django model class or instance. RESULT model_meta_values]
+            [COMMAND In the non-string branch, return (model._meta.app_label, model._meta.model_name) as the (app_label, model_name) result. RESULT model_meta_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects all models directly related to the given model by returning immediate Django model subclasses and related models from resolved relation fields, plus the concrete model when the given proxy model is a reverse-relation source." _get_related_models]
+    [INPUTS]
+        <REF> m </REF>: Django model class "The model class whose directly related models are to be collected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> related_models </REF>: list of Django model classes "The list of model classes directly related to m, including immediate Django model subclasses, resolved relation-field related models, and optionally the concrete model for a proxy m."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build related_models as a list of every immediate subclass of m returned by m.__subclasses__() for which issubclass(subclass, models.Model) is true. RESULT related_models]
+            [COMMAND Set related_fields_models to an empty set. RESULT related_fields_models]
+            [COMMAND Iterate over each field f in m._meta.get_fields(include_parents=True, include_hidden=True). For each f, apply short-circuit evaluation to the conjunction: f.is_relation is true, f.related_model is not None, and not isinstance(f.related_model, str). If the conjunction is true, add f.model to related_fields_models. RESULT related_fields_models]
+            [COMMAND In the same field iteration and for every f where that same conjunction is true, append f.related_model to related_models. RESULT related_models]
+            [COMMAND Set opts to m._meta. RESULT opts]
+            [COMMAND If opts.proxy is true and m is in related_fields_models, append opts.concrete_model to related_models. RESULT related_models]
+            [COMMAND Return related_models. RESULT related_models]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a set of (app_label, model_name) tuples for every related model reachable from the given Django model." get_related_models_tuples]
+    [INPUTS]
+        <REF> model </REF>: django.db.models.Model "Django model class whose related models are inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: set "A set of distinct (app_label, model_name) tuples for all related models returned by _get_related_models(model)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _get_related_models(model) to obtain an iterable of all related model classes. RESULT related_models_iterable]
+            [COMMAND For each related model class rel_mod in related_models_iterable, read rel_mod._meta.app_label and rel_mod._meta.model_name and construct a tuple (app_label, model_name). RESULT related_model_tuple]
+            [COMMAND Collect the distinct tuples produced for all rel_mod values into a set. RESULT related_model_tuples_set]
+            [COMMAND Return the set of related model tuples. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects all models directly or indirectly related to the given model via a queue-based traversal and returns their unique (app_label, model_name) identities excluding the model itself." get_related_models_recursive]
+    [INPUTS]
+        <REF> model </REF>: Django model class "The starting model whose related models are to be discovered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: set of tuples "Set of (app_label, model_name) tuples for every related model reachable from model, excluding model's own identity."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty set named seen to track visited model identities as (app_label, model_name) tuples. RESULT seen]
+            [COMMAND Initialize the worklist queue with the result of _get_related_models(model). RESULT queue]
+            [COMMAND For each rel_mod in queue, including items appended to queue during the loop, extract rel_app_label and rel_model_name from rel_mod._meta, form the identity tuple, and if that tuple is already in seen then continue to the next rel_mod; otherwise add the tuple to seen and extend queue with the result of _get_related_models(rel_mod). RESULT seen]
+            [COMMAND Return the final seen set minus the original model identity tuple (model._meta.app_label, model._meta.model_name), so the starting model is not included in the result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

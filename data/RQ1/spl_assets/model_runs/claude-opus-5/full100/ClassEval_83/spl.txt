@@ -1,0 +1,128 @@
+# CLASS StudentDatabaseProcessor
+
+[DEFINE_WORKER: "Initializes a database connection handler by storing the provided database name as an instance attribute." __init__]
+    [INPUTS]
+        <REF> database_name </REF>: string "The name of the database to associate with this instance"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the value of database_name parameter to the instance attribute self.database_name RESULT self.database_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Opens a SQLite database connection and creates a 'students' table with id, name, age, gender, and grade columns if it does not already exist, then commits and closes the connection." create_student_table]
+    [INPUTS]
+        <REF> self.database_name </REF>: str "File path or ':memory:' string identifying the SQLite database to connect to"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Open a SQLite database connection using self.database_name and assign it to conn RESULT conn]
+            [COMMAND Create a cursor object from conn and assign it to cursor RESULT cursor]
+            [COMMAND Define create_table_query as the string literal: CREATE TABLE IF NOT EXISTS students ( id INTEGER PRIMARY KEY, name TEXT, age INTEGER, gender TEXT, grade INTEGER ) RESULT create_table_query]
+            [COMMAND Execute create_table_query using cursor to create the students table if it does not already exist RESULT execute_result]
+            [COMMAND Commit the transaction on conn to persist the DDL change RESULT commit_result]
+            [COMMAND Close conn to release the database connection RESULT close_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.database_name is an inaccessible path or a malformed string, causing sqlite3.connect to fail]
+        [LOG "sqlite3.OperationalError raised during connection; cursor creation and all subsequent steps are unreachable"]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Opens a SQLite database connection and inserts a single student record into the students table using parameterized values from the provided dictionary." insert_student]
+    [INPUTS]
+        <REF> student_data </REF>: dict "Dictionary containing student fields: 'name' (str), 'age' (int or str), 'gender' (str), and 'grade' (str or int)"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Open a SQLite database connection to the path stored in self.database_name and assign the connection object to conn RESULT conn]
+            [COMMAND Create a cursor object from conn and assign it to cursor RESULT cursor]
+            [COMMAND Assign the static parameterized INSERT SQL string targeting columns name, age, gender, grade with four positional placeholders to insert_query RESULT insert_query]
+            [COMMAND Execute insert_query via cursor.execute, passing a tuple of (student_data['name'], student_data['age'], student_data['gender'], student_data['grade']) as the bound parameters RESULT execute_result]
+            [COMMAND Commit the transaction on conn to persist the inserted row RESULT commit_result]
+            [COMMAND Close conn to release the database connection RESULT close_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: sqlite3.connect raises an exception because self.database_name is invalid, inaccessible, or the database is locked]
+        [LOG "Database connection failed; conn was never established and all subsequent steps are skipped; exception propagates to the caller unhandled"]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: cursor.execute raises an OperationalError because student_data does not supply exactly the four required keys or the values violate a schema constraint]
+        [LOG "Parameterized query execution failed; the transaction is not committed and the connection is not closed if the exception propagates before conn.close() is reached"]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Opens a SQLite connection to the configured database, executes a parameterized SELECT query to retrieve all student rows whose name matches the given argument, then closes the connection and returns the collected rows." search_student_by_name]
+    [INPUTS]
+        <REF> name </REF>: str "The student name to search for; used as the bound parameter in the WHERE clause"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list[tuple] "All matching rows from the students table as a list of tuples; empty list if no rows match"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Open a SQLite database connection using self.database_name as the database path and assign it to conn RESULT conn]
+            [COMMAND Create a cursor object from conn and assign it to cursor RESULT cursor]
+            [COMMAND Assign the parameterized SQL string 'SELECT * FROM students WHERE name = ?' to select_query RESULT select_query]
+            [COMMAND Execute select_query on cursor with the single-element tuple (name,) as the bound parameter RESULT cursor]
+            [COMMAND Fetch all remaining rows from the executed cursor and assign the resulting list of tuples to result; result is an empty list if no rows match RESULT result]
+            [COMMAND Close the database connection conn to release the file handle RESULT None]
+            [COMMAND Return result to the caller RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deletes all student records from the 'students' table whose name matches the given parameter, using a parameterized query to prevent SQL injection." delete_student_by_name]
+    [INPUTS]
+        <REF> name </REF>: string "The name value used to match and delete student records from the database"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Open a SQLite database connection using the instance attribute self.database_name as the database path, storing the resulting Connection object in conn RESULT conn]
+            [COMMAND Create a Cursor object from conn by calling conn.cursor(), storing it in cursor for use in subsequent SQL execution RESULT cursor]
+            [COMMAND Assign the parameterized SQL string 'DELETE FROM students WHERE name = ?' to delete_query; the '?' placeholder keeps query structure and data separate RESULT delete_query]
+            [COMMAND Execute delete_query via cursor.execute, passing name as the sole element of a parameter tuple so the placeholder is bound to the runtime value of name RESULT execute_result]
+            [COMMAND Commit the transaction by calling conn.commit() to persist the deletion to the database RESULT commit_result]
+            [COMMAND Close the database connection by calling conn.close() to release the resource RESULT close_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.database_name is empty, None, or an invalid path, causing sqlite3.connect() to raise an OperationalError]
+        [LOG "OperationalError raised at connection step; conn is never assigned, cursor and execute steps are unreachable, and the database is unmodified"]
+        [THROW sqlite3.OperationalError "Raised by sqlite3.connect() when the database path is invalid or inaccessible, propagating up to the caller without cleanup"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: conn is invalid or already closed when conn.cursor() is called, causing an OperationalError or ProgrammingError]
+        [LOG "Error raised at cursor creation step; all downstream execute, commit, and close steps are unreachable"]
+        [THROW sqlite3.OperationalError "Raised when a cursor cannot be created from a broken or closed connection, propagating up to the caller without cleanup"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

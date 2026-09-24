@@ -1,0 +1,75 @@
+class StockPortfolioTracker:
+    def __init__(self, cash_balance):
+        self.portfolio = []
+        self.cash_balance = cash_balance
+
+    def add_stock(self, stock):
+        for existing_stock in self.portfolio:
+            if existing_stock.get("name") == stock.get("name"):
+                existing_stock["quantity"] += stock.get("quantity", 0)
+                return
+        self.portfolio.append(stock.copy())
+
+    def remove_stock(self, stock):
+        for existing_stock in self.portfolio:
+            if existing_stock.get("name") == stock.get("name"):
+                quantity_to_remove = stock.get("quantity", 0)
+                if existing_stock.get("quantity", 0) < quantity_to_remove:
+                    return False
+                existing_stock["quantity"] -= quantity_to_remove
+                if existing_stock["quantity"] == 0:
+                    self.portfolio.remove(existing_stock)
+                return True
+        return False
+
+    def buy_stock(self, stock):
+        cost = stock.get("price", 0) * stock.get("quantity", 0)
+        if self.cash_balance < cost:
+            return False
+        self.add_stock(stock)
+        self.cash_balance -= cost
+        return True
+
+    def sell_stock(self, stock):
+        if not self.remove_stock(stock):
+            return False
+        proceeds = stock.get("price", 0) * stock.get("quantity", 0)
+        self.cash_balance += proceeds
+        return True
+
+    def get_stock_value(self, stock):
+        return stock.get("price", 0) * stock.get("quantity", 0)
+
+    def calculate_portfolio_value(self):
+        return self.cash_balance + sum(self.get_stock_value(stock) for stock in self.portfolio)
+
+    def get_portfolio_summary(self):
+        summary = [{"name": stock.get("name"), "value": self.get_stock_value(stock)} for stock in self.portfolio]
+        return self.calculate_portfolio_value(), summary
+
+import unittest
+
+class StockPortfolioTrackerTestGetStockValue(unittest.TestCase):
+    def test_get_stock_value(self):
+        tracker = StockPortfolioTracker(10000.0)
+        self.assertEqual(tracker.get_stock_value({"name": "AAPL", "price": 150.0, "quantity": 10}), 1500.0)
+
+    def test_get_stock_value_2(self):
+        tracker = StockPortfolioTracker(10000.0)
+        self.assertEqual(tracker.get_stock_value({"name": "AAPL", "price": 150.0, "quantity": 0}), 0.0)
+
+    def test_get_stock_value_3(self):
+        tracker = StockPortfolioTracker(10000.0)
+        self.assertEqual(tracker.get_stock_value({"name": "AAPL", "price": 0.0, "quantity": 10}), 0.0)
+
+    def test_get_stock_value_4(self):
+        tracker = StockPortfolioTracker(10000.0)
+        self.assertEqual(tracker.get_stock_value({"name": "AAPL", "price": 0.0, "quantity": 0}), 0.0)
+
+    def test_get_stock_value_5(self):
+        tracker = StockPortfolioTracker(10000.0)
+        self.assertEqual(tracker.get_stock_value({"name": "MSFL", "price": 150.0, "quantity": 2}), 300.0)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,599 @@
+# FILE: django/contrib/staticfiles/storage.py
+# CLASS StaticFilesStorage
+
+[DEFINE_WORKER: "Initializes a storage instance by resolving default STATIC_ROOT and STATIC_URL values, calling the parent class initializer with the resolved arguments, and resetting location attributes to None when the resolved location is falsy so the FileSystemStorage fallback to MEDIA_ROOT is prevented." __init__]
+    [INPUTS]
+        <REF> self </REF>: object "The storage instance being initialized."
+        <REF> location </REF>: path-like or None "Base directory for static files; defaults to settings.STATIC_ROOT when None."
+        <REF> base_url </REF>: str or None "Base URL for static files; defaults to settings.STATIC_URL when None."
+        <REF> args </REF>: tuple "Additional positional arguments forwarded to the parent class initializer."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to the parent class initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If location is None, set location to settings.STATIC_ROOT. RESULT location]
+            [COMMAND If base_url is None, set base_url to settings.STATIC_URL. RESULT base_url]
+            [COMMAND Call check_settings with base_url. RESULT check_settings_result]
+            [COMMAND Call super().__init__ with location, base_url, *args, **kwargs. RESULT super_init_result]
+            [COMMAND After the superclass initialization, if location is falsy, set self.base_location to None and self.location to None. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a static file name to a filesystem path after checking that the static root is configured, raising ImproperlyConfigured if it is not." path]
+    [INPUTS]
+        <REF> name </REF>: string "Name of the static file to resolve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> resolved_path </REF>: string "Resolved filesystem path for the static file, produced by the parent class implementation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the top-level guard `if not self.location`; if self.location is falsy, trigger the ImproperlyConfigured exception flow and do not continue; otherwise continue with parent path resolution. RESULT guard_ok]
+            [COMMAND Resolve the path by calling super().path(name) and return the resolved path. RESULT resolved_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: If self.location is falsy, meaning `not self.location` evaluates to true.]
+        [LOG "You're using the staticfiles app without having set the STATIC_ROOT setting to a filesystem path."]
+        [THROW ImproperlyConfigured "Raised to indicate that the staticfiles app is being used without STATIC_ROOT configured as a filesystem path."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS HashedFilesMixin
+
+[DEFINE_WORKER: "Initializes the instance by calling the parent initializer, creating empty lookup dictionaries, and compiling the configured per-extension regex patterns with case-insensitive matching into self._patterns." __init__]
+    [INPUTS]
+        <REF> args </REF>: tuple "Positional arguments forwarded to the parent class initializer."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to the parent class initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().__init__(*args, **kwargs) to initialize the parent class. RESULT parent_initialized]
+            [COMMAND Initialize self._patterns to a new empty dictionary. RESULT self._patterns_initialized]
+            [COMMAND Initialize self.hashed_files to a new empty dictionary. RESULT self.hashed_files_initialized]
+            [COMMAND For each extension, patterns in self.patterns, begin iterating over all configured extension entries. RESULT extension_patterns_iteration]
+            [COMMAND Within the outer for loop over extension, patterns in self.patterns, for each pattern in patterns, test whether pattern is a tuple or list. RESULT pattern_type_checked]
+            [COMMAND Within the outer for loop and the current pattern iteration, if pattern is a tuple or list, unpack it into pattern and template; otherwise set template to self.default_template. RESULT pattern_and_template_resolved]
+            [COMMAND Within the outer for loop and the current pattern iteration, compile the resolved pattern with re.compile(pattern, re.IGNORECASE). RESULT compiled_regex]
+            [COMMAND Within the outer for loop and the current pattern iteration, append the tuple (compiled_regex, template) to the list obtained from self._patterns.setdefault(extension, []). RESULT self._patterns_updated]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the first 12 characters of the MD5 digest of the given file content chunks, or returns None when content is None." file_hash]
+    [INPUTS]
+        <REF> name </REF>: str "File name for which the hash is requested; not used in the hash computation."
+        <REF> content </REF>: file-like object with chunks() "Optional file-like object whose chunks are read and hashed; if None, the method returns None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str | None "First 12 hexadecimal characters of the MD5 digest, or None if content is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an MD5 hash object by calling hashlib.md5(). RESULT md5]
+            [COMMAND Call content.chunks() to obtain the iterable of file chunks. RESULT chunks]
+            [COMMAND For each chunk in chunks, update the MD5 hash object with the chunk. RESULT md5]
+            [COMMAND Compute the final result as the first 12 characters of the lowercase hexadecimal MD5 digest from md5.hexdigest(). RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: content is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately because there is no content to hash. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Hashes a file or provided content and returns the original URL/name with the hash inserted before the extension, preserving URL components and special font-face syntax." hashed_name]
+    [INPUTS]
+        <REF> name </REF>: string "Base name or URL used to construct the new hashed filename."
+        <REF> content </REF>: file-like object or None "Optional content to hash. If None, the file is opened from filename."
+        <REF> filename </REF>: string or None "Optional file name whose content should be hashed. If None or empty, clean_name is used as the fallback."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "URL/name with the hash inserted before the extension, preserving query, fragment, and font-face '?#' syntax."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Decode name with unquote and parse it with urlsplit; store the SplitResult as parsed_name. RESULT parsed_name]
+            [COMMAND Take parsed_name.path, strip leading and trailing whitespace, and store it as clean_name. RESULT clean_name]
+            [COMMAND Evaluate filename: if the original filename is truthy and urlsplit(unquote(filename)).path.strip() is non-empty, use that stripped path; otherwise fall back to clean_name. Store the result as filename. RESULT filename]
+            [COMMAND Set opened to true if content is None, otherwise set it to false. RESULT opened]
+            [COMMAND If opened is true, verify that self.exists(filename) is true; if it is false, raise ValueError. If opened is true and the file exists, open it with self.open(filename) and assign the opened file object to content. If opened is false, leave content unchanged. RESULT content]
+            [COMMAND Compute file_hash by calling self.file_hash(clean_name, content). In a finally block, if opened is true, close content. RESULT file_hash]
+            [COMMAND Split clean_name into directory path and filename using os.path.split. RESULT path, filename]
+            [COMMAND Split filename into root and extension using os.path.splitext. RESULT root, ext]
+            [COMMAND If file_hash is truthy, format it as '.%s' % file_hash; otherwise set file_hash to an empty string. RESULT file_hash]
+            [COMMAND Build hashed_name by joining path with the concatenation of root, formatted file_hash, and ext using os.path.join. RESULT hashed_name]
+            [COMMAND Convert parsed_name into a list named unparsed_name, then replace the path component at index 2 with hashed_name. RESULT unparsed_name]
+            [COMMAND If the original name contains '?#' and the query component unparsed_name[3] is empty, append '?' to unparsed_name[2]. RESULT unparsed_name]
+            [COMMAND Return urlunsplit(unparsed_name). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: opened is true and self.open(filename) raises OSError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the original name immediately, skipping hashing and reconstruction. RESULT name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: opened is true and self.exists(filename) returns false]
+        [LOG "The file '<filename>' could not be found with '<self>'."]
+        [THROW ValueError "Raised when the file to hash does not exist and content was not provided."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a static file URL by skipping hashing in DEBUG mode unless forced, otherwise hashing the cleaned name while preserving trailing-slash paths and fragments, then applying the @font-face '?#' query hack and unquoting the final URL." _url]
+    [INPUTS]
+        <REF> hashed_name_func </REF>: callable "Function that accepts clean_name and optionally hashed_files, and returns the hashed name."
+        <REF> name </REF>: str "Original URL or file name, possibly containing a fragment or the literal substring '?#'."
+        <REF> force </REF>: bool "When True, bypasses the DEBUG shortcut even if settings.DEBUG is enabled."
+        <REF> hashed_files </REF>: dict or None "Optional hashed-files mapping appended to hashed_name_func arguments when not None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> unquoted_final_url </REF>: str "The final URL after hashing, fragment/query handling, and percent-encoding unquoting."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate top-level condition `settings.DEBUG and not force`, with `not force` evaluated before `and` and short-circuiting if `settings.DEBUG` is falsy. If true, set `hashed_name = name` and `fragment = ''`; otherwise enter the else branch described in the next step. RESULT hashed_name_and_fragment_initial_decision]
+            [COMMAND In the else branch, split `name` with `urldefrag(name)` into `clean_name` and `fragment`. Then check `urlsplit(clean_name).path.endswith('/')`; if the path ends with '/', set `hashed_name = name` and do not call `hashed_name_func`. Otherwise build `args = (clean_name,)`, append `hashed_files` to `args` if `hashed_files is not None`, and set `hashed_name = hashed_name_func(*args)`. RESULT hashed_name]
+            [COMMAND Set `final_url = super().url(hashed_name)`. RESULT final_url]
+            [COMMAND Set `query_fragment = ('?#' in name)`, meaning True only if the exact substring `'?#'` occurs in `name`; this is the @font-face hack marker. RESULT query_fragment]
+            [COMMAND If `fragment or query_fragment` is truthy, short-circuiting when `fragment` is truthy, split `final_url` into mutable `urlparts = list(urlsplit(final_url))`. Then, if `fragment` is truthy and `urlparts[4]` is empty, set `urlparts[4] = fragment`. Then, if `query_fragment` is truthy and `urlparts[3]` is empty, append `'?'` to `urlparts[2]`. Finally reassemble `final_url = urlunsplit(urlparts)`. RESULT final_url]
+            [COMMAND Return `unquote(final_url)`. RESULT unquoted_final_url]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the non-hashed URL in DEBUG mode by delegating to the internal _url method using the stored name and the supplied name/force arguments." url]
+    [INPUTS]
+        <REF> self </REF>: object "Current instance providing stored_name and the internal _url method."
+        <REF> name </REF>: string "The name to pass to the internal _url method when building the URL."
+        <REF> force </REF>: boolean "Whether to force URL generation; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> url_result </REF>: string "The URL returned by the internal _url method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the instance attribute self.stored_name. RESULT stored_name]
+            [COMMAND Call the bound method self._url with stored_name, name, and force. RESULT url_result]
+            [COMMAND Return url_result to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a converter closure that rewrites matched static URLs to hashed storage URLs, leaving external or non-static absolute URLs unchanged and preserving fragments." url_converter]
+    [INPUTS]
+        <REF> self </REF>: object "Storage backend instance providing _url, _stored_name, and default_template."
+        <REF> name </REF>: str "Name of the current source file, used to resolve relative URL paths."
+        <REF> hashed_files </REF>: dict "Mapping of source file names to hashed names, passed to the storage backend's _url method."
+        <REF> template </REF>: str or None "Format string for the matched URL pattern; defaults to self.default_template when None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> converter </REF>: function "Closure that takes a regex match object and returns the formatted template string with the url group replaced by its hashed URL."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If template is None, set template to self.default_template. RESULT template]
+            [COMMAND Define the nested function converter(matchobj) by extracting matches = matchobj.groupdict(), matched = matches['matched'], and url = matches['url']; the remaining 'Within converter' steps specify its body. RESULT matches, matched, url]
+            [COMMAND Within converter, when the URL is not ignored by the early-return conditions, strip the fragment by assigning url_path, fragment = urldefrag(url). RESULT url_path, fragment]
+            [COMMAND Within converter, if url_path starts with '/', assert that url_path.startswith(settings.STATIC_URL) is true and set target_name = url_path[len(settings.STATIC_URL):]; otherwise, for a relative URL, convert name to posixpath form using os.sep when necessary and set target_name = posixpath.join(posixpath.dirname(source_name), url_path). RESULT target_name]
+            [COMMAND Within converter, call self._url(self._stored_name, unquote(target_name), force=True, hashed_files=hashed_files) and assign the result to hashed_url. RESULT hashed_url]
+            [COMMAND Within converter, set transformed_url = '/'.join(url_path.split('/')[:-1] + hashed_url.split('/')[-1:]). RESULT transformed_url]
+            [COMMAND Within converter, if fragment is truthy, append ('?#' if '?#' in url else '#') + fragment to transformed_url. RESULT transformed_url]
+            [COMMAND Within converter, set matches['url'] = unquote(transformed_url) and return template % matches. RESULT converter_return_value]
+            [COMMAND Return the nested converter function. RESULT converter]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within converter, if re.match(r'^[a-z]+:', url) is truthy, indicating the URL is external, absolute, or a data URI,]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return matched unchanged. RESULT matched]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within converter, if url starts with '/' and not url.startswith(settings.STATIC_URL),]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return matched unchanged. RESULT matched]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within converter, if url_path starts with '/' and url_path.startswith(settings.STATIC_URL) is false, the assert fails.]
+        [LOG "Assertion failed: absolute URL path must start with settings.STATIC_URL."]
+        [THROW AssertionError "The absolute URL path is not under settings.STATIC_URL."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Post-processes a dictionary of static files as a generator by filtering adjustable paths, performing an initial post-processing pass plus up to self.max_post_process_passes adjustment passes until no substitutions remain, then updating self.hashed_files and yielding the final processed results." post_process]
+    [INPUTS]
+        <REF> paths </REF>: dict "Dictionary mapping original file paths to file objects to be post-processed."
+        <REF> dry_run </REF>: bool "When true, the generator returns immediately without processing or yielding any files."
+        <REF> options </REF>: dict "Additional keyword arguments accepted by the method signature but not used by the implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> yielded_results </REF>: generator of 3-tuples "Yields (name, hashed_name, processed) tuples; these are non-adjustable or failed results from the first pass, a synthetic ('All', None, RuntimeError) if max passes are exceeded, and the final processed adjustable-path results."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If dry_run is truthy, return from the generator immediately without yielding anything. RESULT None]
+            [COMMAND Initialize hashed_files as an empty dictionary to store new hashed path mappings. RESULT hashed_files]
+            [COMMAND Build adjustable_paths as the list of paths from paths for which matches_patterns(path, self._patterns) is truthy. RESULT adjustable_paths]
+            [COMMAND Initialize processed_adjustable_paths as an empty dictionary keyed by original path. RESULT processed_adjustable_paths]
+            [COMMAND For each tuple (name, hashed_name, processed, _) yielded by self._post_process(paths, adjustable_paths, hashed_files): if name is not in adjustable_paths or processed is an instance of Exception, yield (name, hashed_name, processed); otherwise store processed_adjustable_paths[name] = (name, hashed_name, processed). RESULT yielded_initial]
+            [COMMAND Rebind paths to a dictionary containing only the keys in adjustable_paths, taking each value from the existing paths mapping before rebinding. RESULT paths]
+            [COMMAND For i in range(self.max_post_process_passes): reset substitutions to False; for each tuple (name, hashed_name, processed, subst) yielded by self._post_process(paths, adjustable_paths, hashed_files), overwrite processed_adjustable_paths[name] with (name, hashed_name, processed) and set substitutions to substitutions or subst; after the inner iteration, if substitutions is false, break out of the outer loop. RESULT substitutions]
+            [COMMAND If substitutions is still true after the loop, yield the tuple ('All', None, RuntimeError('Max post-process passes exceeded.')). RESULT synthetic_failure]
+            [COMMAND Update self.hashed_files with the entries from hashed_files. RESULT None]
+            [COMMAND Yield each value in processed_adjustable_paths.values(), in insertion order, as the final processed adjustable results. RESULT processed_adjustable_results]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over storage paths in descending directory-level order, applies regex substitutions to adjustable files, saves and hashes processed or original content, updates the hashed-file cache, and yields per-file outcome tuples, reporting substitution errors as error yields." _post_process]
+    [INPUTS]
+        <REF> paths </REF>: Mapping[Any, Tuple[Any, str]] "Maps each file name to a (storage backend, storage path) tuple."
+        <REF> adjustable_paths </REF>: Iterable[str] "File names whose content should be rewritten by applying regex patterns."
+        <REF> hashed_files </REF>: MutableMapping[str, str] "Cache from hash keys to hashed file names; updated in place."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> yielded </REF>: Generator[tuple, None, None] "Yields (name, hashed_name, processed, substitutions), or (name, None, exc, False) when a ValueError occurs during substitution."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define path_level(name) as len(name.split(os.sep)). RESULT path_level]
+            [COMMAND For each name in sorted(paths, key=path_level, reverse=True), start an outer iteration in descending directory-level order. RESULT name]
+            [COMMAND Initialize substitutions = True for this iteration. RESULT substitutions]
+            [COMMAND Set storage_path = paths[name], then unpack it into storage and path. RESULT storage_path]
+            [COMMAND Open original_file using storage.open(path), keeping a with-block open for all remaining steps of this iteration. RESULT original_file]
+            [COMMAND Compute cleaned_name = self.clean_name(name). RESULT cleaned_name]
+            [COMMAND Compute hash_key = self.hash_key(cleaned_name). RESULT hash_key]
+            [COMMAND If hash_key is not already in hashed_files, compute hashed_name = self.hashed_name(name, original_file); otherwise reuse hashed_name = hashed_files[hash_key]. RESULT hashed_name]
+            [COMMAND If original_file has a seek attribute, call original_file.seek(0) to rewind it. RESULT original_file]
+            [COMMAND Set hashed_file_exists = self.exists(hashed_name). RESULT hashed_file_exists]
+            [COMMAND Set processed = False. RESULT processed]
+            [COMMAND If name is in adjustable_paths, enter the adjustable branch and set old_hashed_name = hashed_name. RESULT old_hashed_name]
+            [COMMAND Within the adjustable branch, read content = original_file.read().decode('utf-8'). RESULT content]
+            [COMMAND Within the adjustable branch, set extension_patterns = self._patterns.items() and iterate over each extension, patterns in extension_patterns. RESULT extension_patterns]
+            [COMMAND Within the extension loop, if matches_patterns(path, (extension,)) is true, set pattern_template = patterns and iterate over each pattern, template in pattern_template. RESULT pattern_template]
+            [COMMAND Within the pattern loop, build converter = self.url_converter(name, hashed_files, template). RESULT converter]
+            [COMMAND Within the pattern loop, try content = pattern.sub(converter, content). RESULT content]
+            [COMMAND If pattern.sub raises ValueError as exc, yield (name, None, exc, False) and continue with the next pattern. RESULT value_error_yield]
+            [COMMAND After the pattern loops in the adjustable branch, if hashed_file_exists is true, delete hashed_name with self.delete(hashed_name). RESULT old_hashed_deleted]
+            [COMMAND Wrap the processed content by setting content_file = ContentFile(content.encode()). RESULT content_file]
+            [COMMAND If self.keep_intermediate_files is true, save content_file with self._save(hashed_name, content_file). RESULT intermediate_saved]
+            [COMMAND Recompute hashed_name = self.hashed_name(name, content_file). RESULT hashed_name]
+            [COMMAND If self.exists(hashed_name), delete that existing file with self.delete(hashed_name). RESULT processed_existing_deleted]
+            [COMMAND Save processed content with saved_name = self._save(hashed_name, content_file). RESULT saved_name]
+            [COMMAND Set hashed_name = self.clean_name(saved_name). RESULT hashed_name]
+            [COMMAND If old_hashed_name equals hashed_name, set substitutions = False; then set processed = True. RESULT substitutions_and_processed]
+            [COMMAND If processed is still false and hashed_file_exists is false, set processed = True, save saved_name = self._save(hashed_name, original_file), and set hashed_name = self.clean_name(saved_name). RESULT saved_name_processed_hashed_name]
+            [COMMAND Update the cache by setting hashed_files[hash_key] = hashed_name. RESULT hashed_files]
+            [COMMAND Yield (name, hashed_name, processed, substitutions). RESULT yielded_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Cleans a name string by replacing every backslash character with a forward slash and returning the result." clean_name]
+    [INPUTS]
+        <REF> name </REF>: string "The name string to clean."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cleaned_name </REF>: string "The input name with all backslashes replaced by forward slashes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clean the input name by replacing every backslash character with a forward slash and return the resulting string. RESULT cleaned_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the input name unchanged as the hash key." hash_key]
+    [INPUTS]
+        <REF> name </REF>: any "The name value to use as the hash key."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "The same value as the input name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the input name unchanged as the hash key. RESULT name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a file path and returns its cached hashed name from hashed_files, falling back to cleaning the freshly hashed name when the cache key is absent." _stored_name]
+    [INPUTS]
+        <REF> name </REF>: str "Original file path to normalize and look up in the hashed file cache."
+        <REF> hashed_files </REF>: dict "Mapping from hash keys to previously stored hashed file names."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cache_name </REF>: str "The stored hashed name for the normalized path, either from hashed_files or computed via clean_name(hashed_name(name))."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the input name using posixpath.normpath and assign the result back to name. RESULT name]
+            [COMMAND Compute cleaned_name by calling self.clean_name on the normalized name. RESULT cleaned_name]
+            [COMMAND Compute hash_key by calling self.hash_key on cleaned_name. RESULT hash_key]
+            [COMMAND Look up cache_name from hashed_files using hash_key; if hash_key is absent, cache_name remains None. RESULT cache_name]
+            [COMMAND Check whether cache_name is None; if it is not None, skip the fallback branch and keep the current cache_name. RESULT cache_name]
+            [COMMAND Return cache_name as the final result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: cache_name is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the hashed name by calling self.hashed_name on the normalized name. RESULT hashed_name]
+            [COMMAND Compute cache_name by calling self.clean_name on the hashed name. RESULT cache_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves and caches a stable hashed filename for a given name by checking the existing cache and, on a miss, repeatedly cleaning and hashing the name until it stabilizes or raises ValueError." stored_name]
+    [INPUTS]
+        <REF> name </REF>: string "The original filename/name to convert into a stored hashed name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cache_name </REF>: string "The stored/hashed filename returned immediately when found in the cache or when a newly computed cleaned hashed name becomes stable."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Clean the input name by calling self.clean_name(name) and assign the result to cleaned_name. RESULT cleaned_name]
+            [COMMAND Compute the hash key by calling self.hash_key(cleaned_name) and assign the result to hash_key. RESULT hash_key]
+            [COMMAND Look up cache_name as self.hashed_files.get(hash_key) with no default value; a missing key yields None and any falsy cached value is treated as a miss. RESULT cache_name]
+            [COMMAND Proceed from the cache-miss path: initialize intermediate_name to the original name. RESULT intermediate_name]
+            [COMMAND Enter a for loop over i in range(self.max_post_process_passes + 1), giving exactly max_post_process_passes + 1 attempts. On each iteration, compute cache_name as self.clean_name(self.hashed_name(name, content=None, filename=intermediate_name)). RESULT cache_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After the hash-key lookup, cache_name is truthy (cache hit).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return cache_name immediately without recalculating or storing anything. RESULT cache_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Inside the for loop, after computing cache_name, intermediate_name equals cache_name (the name is stable).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store cache_name in self.hashed_files[hash_key] because the previous lookup was a miss. RESULT self.hashed_files[hash_key]]
+            [COMMAND Return cache_name immediately from the loop. RESULT cache_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Inside the for loop, after computing cache_name, intermediate_name does not equal cache_name (the name changed).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign cache_name to intermediate_name to move on to the next intermediate filename and continue with the next iteration of the loop. RESULT intermediate_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The for loop completes all max_post_process_passes + 1 attempts without reaching the intermediate_name == cache_name return path.]
+        [LOG "The cache name cannot be determined after the maximum number of passes; the intermediate files on disk may be corrupt. The raised message is formatted as 'The name '%s' could not be hashed with %r.' with the original name and self."]
+        [THROW ValueError "Raised when the input name cannot be hashed to a stable stored name after the bounded number of attempts."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS ManifestFilesMixin
+
+[DEFINE_WORKER: "Initializes the instance by forwarding arguments to the parent initializer and storing the loaded hashed files manifest in self.hashed_files." __init__]
+    [INPUTS]
+        <REF> args </REF>: tuple "Positional arguments forwarded to the parent initializer."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to the parent initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().__init__(*args, **kwargs) to initialize the parent class with the forwarded positional and keyword arguments. RESULT super_init_result]
+            [COMMAND Call self.load_manifest() and assign its return value to self.hashed_files. RESULT self.hashed_files]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Reads the manifest file contents as a decoded string, or returns None if the manifest file is not found." read_manifest]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Optional[str] "The decoded manifest content as a string, or None if the manifest file does not exist."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to open the file named by self.manifest_name using self.open. RESULT manifest]
+            [COMMAND Within the opened manifest file, read the entire content and decode it to a string. RESULT decoded_content]
+            [COMMAND Return the decoded content as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Opening self.manifest_name raises FileNotFoundError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the FileNotFoundError and return None as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Loads the manifest content, returns the stored paths when the manifest version is '1.0', returns an empty dictionary when no manifest content exists, and raises ValueError otherwise." load_manifest]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing read_manifest(), manifest_name, and manifest_version."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> paths </REF>: dict "Stored paths from the manifest for version '1.0'; empty dict when content is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the manifest text by calling self.read_manifest() and assign it to content. RESULT content]
+            [COMMAND If content is None, return an empty dictionary immediately. RESULT empty_paths]
+            [COMMAND Attempt to parse content as JSON into stored; if a JSONDecodeError occurs, do nothing in the except block and continue to the final error handling; otherwise continue to version validation. RESULT stored]
+            [COMMAND After successful parsing, read the 'version' value from stored and assign it to version. RESULT version]
+            [COMMAND If version is exactly '1.0', return the value of stored.get('paths', {}). RESULT paths]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: After the JSONDecodeError path is taken because content could not be parsed as JSON, execution reaches the explicit raise ValueError.]
+        [LOG "Manifest content is invalid JSON; load_manifest raises ValueError."]
+        [THROW ValueError "The manifest could not be loaded because its content is not valid JSON."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: After the else block completes without returning because stored.get('version') is not equal to '1.0', execution reaches the explicit raise ValueError.]
+        [LOG "Unsupported manifest version; load_manifest raises ValueError."]
+        [THROW ValueError "The manifest could not be loaded because its version is unsupported."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resets hashed_files to an empty dictionary, yields every value produced by super().post_process(*args, **kwargs), and then saves the manifest unless the dry_run flag is truthy." post_process]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which post_process is invoked."
+        <REF> args </REF>: tuple "Positional arguments forwarded unchanged to super().post_process."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded unchanged to super().post_process; may include a dry_run flag that suppresses manifest saving."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> post_process_generator </REF>: Generator "Generator that yields the items produced by super().post_process(*args, **kwargs)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND When the returned generator is first iterated, reset the instance attribute hashed_files to a new empty dictionary. RESULT self.hashed_files]
+            [COMMAND Call super().post_process(*args, **kwargs) and store the returned iterator as delegated_iterator. RESULT delegated_iterator]
+            [COMMAND Yield each item from delegated_iterator in order until it is exhausted. RESULT yielded_item]
+            [COMMAND After delegated_iterator is exhausted, if the dry_run flag in kwargs is not truthy, call self.save_manifest(). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Serializes a manifest payload with hashed paths and version to JSON bytes, removes an existing manifest file if present, then saves the new manifest using ContentFile." save_manifest]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a payload dictionary with key 'paths' set to self.hashed_files and key 'version' set to self.manifest_version. RESULT payload]
+            [COMMAND Check whether a manifest named self.manifest_name exists by calling self.exists(self.manifest_name). RESULT manifest_exists]
+            [COMMAND After the existing manifest has been handled if present, serialize the payload dictionary to a JSON string by calling json.dumps(payload). RESULT payload_json]
+            [COMMAND Encode the JSON string to bytes using UTF-8 by calling payload_json.encode(). RESULT contents]
+            [COMMAND Wrap contents in ContentFile(contents) and save it by calling self._save(self.manifest_name, ContentFile(contents)). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: manifest_exists is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Delete the existing manifest file self.manifest_name by calling self.delete(self.manifest_name). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a static file name to its hashed stored URL by decoding and parsing the input, looking up or computing the cached hashed name, replacing the URL path with it, and preserving the @font-face '?#' empty-query edge case." stored_name]
+    [INPUTS]
+        <REF> name </REF>: str "Original static file name or URL to resolve to a stored hashed name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "URL string with its path component replaced by the resolved hashed/cached name; query and fragment are preserved, and a '?' is appended before the fragment for the @font-face workaround when triggered."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Apply unquote to name to decode percent-encoded characters, then parse the decoded string with urlsplit to obtain parsed_name. RESULT parsed_name]
+            [COMMAND Extract the path component as parsed_name.path and strip leading and trailing whitespace to get clean_name. RESULT clean_name]
+            [COMMAND Call self.hash_key(clean_name) to compute hash_key. RESULT hash_key]
+            [COMMAND Look up cache_name using self.hashed_files.get(hash_key); on the primary path cache_name is not None. RESULT cache_name]
+            [COMMAND After cache_name has been resolved, create unparsed_name as a mutable list of parsed_name's components. RESULT unparsed_name]
+            [COMMAND Replace unparsed_name[2], the path component, with cache_name. RESULT unparsed_name]
+            [COMMAND If the original name contains '?#' and unparsed_name[3], the query component, is falsy or empty, append '?' to unparsed_name[2] to preserve the @font-face fragment workaround. RESULT unparsed_name]
+            [COMMAND Return urlunsplit(unparsed_name) as the final stored name. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: cache_name is None and self.manifest_strict is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute cache_name as self.clean_name(self.hashed_name(name)) to fall back to a generated hashed name, then continue with the remaining main_flow steps. RESULT cache_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: cache_name is None and self.manifest_strict is truthy]
+        [LOG "Missing staticfiles manifest entry for '<clean_name>'"]
+        [THROW ValueError "Raised to indicate that strict manifest mode requires the requested file to have a manifest entry."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS ManifestStaticFilesStorage
+
+# CLASS ConfiguredStorage
+
+[DEFINE_WORKER: "Resolves the configured staticfiles storage class from Django settings, instantiates it, and assigns the resulting storage instance to self._wrapped." _setup]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the STATICFILES_STORAGE setting from Django settings. RESULT storage_setting]
+            [COMMAND Resolve the configured storage setting into a concrete storage class using get_storage_class, accepting either a dotted import path or a storage class. RESULT storage_class]
+            [COMMAND Instantiate the resolved storage class with no arguments. RESULT storage_instance]
+            [COMMAND Assign the newly created storage instance to self._wrapped. RESULT self._wrapped]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

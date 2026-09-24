@@ -1,0 +1,112 @@
+class NumberToEnglish:
+    def __init__(self):
+        self.digits = ["ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"]
+        self.teens = ["TEN", "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN", "SIXTEEN", "SEVENTEEN", "EIGHTEEN", "NINETEEN"]
+        self.tens = ["", "", "TWENTY", "THIRTY", "FORTY", "FIFTY", "SIXTY", "SEVENTY", "EIGHTY", "NINETY"]
+        self.scale_words = ["", "THOUSAND", "MILLION", "BILLION"]
+        self.NUMBER_SUFFIX = []
+
+    def format(self, number):
+        if number is None:
+            return ""
+        return self.format_string(str(number))
+
+    def format_string(self, number_str):
+        if "." in number_str:
+            integer_part, decimal_part = number_str.split(".", 1)
+        else:
+            integer_part, decimal_part = number_str, ""
+
+        integer_part = integer_part.lstrip("0") or "0"
+        decimal_part = (decimal_part + "00")[:2] if decimal_part else ""
+
+        if integer_part == "0":
+            result = "ZERO"
+        else:
+            groups = []
+            while len(integer_part) > 3:
+                groups.append(integer_part[-3:])
+                integer_part = integer_part[:-3]
+            groups.append(integer_part)
+
+            parts = []
+            for i, group in enumerate(groups):
+                group_value = int(group)
+                if group_value == 0:
+                    continue
+                group_words = self.trans_three(group_value)
+                scale = self.parse_more(i)
+                if scale:
+                    parts.append(group_words + " " + scale)
+                else:
+                    parts.append(group_words)
+
+            result = " ".join(reversed(parts))
+
+        if decimal_part:
+            cents_value = int(decimal_part)
+            cents_words = self.trans_two(cents_value)
+            result += " AND CENTS " + cents_words
+
+        return result + " ONLY"
+
+    def trans_two(self, number):
+        if number < 10:
+            return self.digits[number]
+        elif number < 20:
+            return self.teens[number - 10]
+        else:
+            tens_part = self.tens[number // 10]
+            ones_part = number % 10
+            if ones_part == 0:
+                return tens_part
+            else:
+                return tens_part + " " + self.digits[ones_part]
+
+    def trans_three(self, number):
+        hundreds = number // 100
+        remainder = number % 100
+        parts = []
+        if hundreds > 0:
+            parts.append(self.digits[hundreds] + " HUNDRED")
+            if remainder > 0:
+                parts.append("AND")
+        if remainder > 0:
+            parts.append(self.trans_two(remainder))
+        return " ".join(parts)
+
+    def parse_more(self, group_index):
+        if group_index < len(self.scale_words):
+            return self.scale_words[group_index]
+        return ""
+
+import unittest
+
+class NumberWordFormatterTestTransTwo(unittest.TestCase):
+    def test_trans_two_1(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("23"), "TWENTY THREE")
+
+    def test_trans_two_2(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("10"), "TEN")
+
+    def test_trans_two_3(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("05"), "FIVE")
+
+    def test_trans_two_4(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("00"), "")
+
+    def test_trans_two_5(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("01"), "ONE")
+
+    def test_trans_two_6(self):
+        formatter = NumberWordFormatter()
+        self.assertEqual(formatter.trans_two("80"), "EIGHTY")
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,542 @@
+FINAL-SUBMISSION RETRY. The previous call exhausted its reasoning budget without a visible answer. Perform only the minimum remaining verification, then emit the exact JSON object required by the task. Do not provide analysis, prose, or markdown. Never return an empty response.
+
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.awt.*;
+2   import java.awt.geom.*;
+3   import java.io.*;
+4   import java.math.*;
+5   import java.text.*;
+6   import java.util.*;
+7   public class Solution {
+8   	private static BufferedReader br;
+9   	private static StringTokenizer st;
+10  	private static PrintWriter pw;
+11  	public static void main(String[] args) throws Exception {
+12  		br = new BufferedReader(new InputStreamReader(System.in));
+13  		pw = new PrintWriter(new BufferedWriter(new OutputStreamWriter(System.out)));
+14  		int qq = readInt();
+15  		for(int casenum = 1; casenum <= qq; casenum++) {
+16  			pw.print("Case #" + casenum + ": ");
+17  			int r = readInt();
+18  			int c = readInt();
+19  			int ret = 1;
+20  			char[][] g = new char[r][c];
+21  			for(int i = 0; i < r; i++) {
+22  				String s = nextToken();
+23  				for(int j = 0; j < c; j++) {
+24  					g[i][j] = s.charAt(j);
+25  				}
+26  			}
+27  			for(int mask = 1; mask < (1<<(r*c)); mask++) {
+28  				if(Integer.bitCount(mask) <= ret) 
+29  					continue;
+30  				int t = mask;
+31  				par = new int[r*c];
+32  				for(int i = 0; i < r*c; i++) {
+33  					par[i] = i;
+34  				}
+35  				boolean[][] use = new boolean[r][c];
+36  				for(int i = 0; i < r; i++) {
+37  					for(int j = 0; j < c; j++) {
+38  						if((t&1) != 0) {
+39  							use[i][j] = true;
+40  						}
+41  						t >>= 1;
+42  					}
+43  				}
+44  				int numNeed = Integer.bitCount(mask)-1;
+45  				for(int i = 0; i < r; i++) {
+46  					for(int j = 0; j < c; j++) {
+47  						if(!use[i][j]) 
+48  							continue;
+49  						if(i+1 < r && use[i+1][j] && merge(i*c+j, (i+1)*c+j)) {
+50  							numNeed--;
+51  						}
+52  						if(j+1 < c && use[i][j+1] && merge(i*c+j, i*c+j+1)) {
+53  							numNeed--;
+54  						}
+55  					}
+56  				}
+57  				if(numNeed != 0) 
+58  					continue;
+59  				boolean valid = false;
+60  				for(int i = 0; !valid && i < r; i++) {
+61  					for(int j = 0; !valid && j < c; j++) {
+62  						Set<Character>[] all = new Set[4];
+63  						for(int a = 0; a < 4; a++) {
+64  							all[a] = new HashSet<Character>();
+65  						}
+66  						boolean good = true;
+67  						for(int x = 0; good && x < r; x++) {
+68  							for(int y = 0; good && y < c; y++) {
+69  								if(!use[x][y]) 
+70  									continue;
+71  								int idx = 0;
+72  								if(x > i) 
+73  									idx |= 2;
+74  								if(y < j) 
+75  									idx |= 1;
+76  								all[idx].add(g[x][y]);
+77  								if (all[idx].size() < 2)
+78  									good = true;
+79  								else
+80  									good = false;
+81  							}
+82  						}
+83  						valid = good;
+84  					}
+85  				}
+86  				if(!valid) 
+87  					continue;
+88  				ret = Integer.bitCount(mask);
+89  			}
+90  			pw.println(ret);
+91  		}
+92  		pw.close();
+93  	}
+94  	static int[] par;
+95  	public static int find(int x) {
+96  		return par[x] == x ? x : (par[x] = find(par[x]));
+97  	}
+98  	public static boolean merge(int x, int y) {
+99  		int fx = find(x);
+100  		int fy = find(y);
+101  		if(fx == fy) 
+102  			return false;
+103  		par[fx] = fy;
+104  		return true;
+105  	}
+106  	private static void exitImmediately() {
+107  		pw.close();
+108  		System.exit(0);
+109  	}
+110  	private static long readLong() throws IOException {
+111  		return Long.parseLong(nextToken());
+112  	}
+113  	private static double readDouble() throws IOException {
+114  		return Double.parseDouble(nextToken());
+115  	}
+116  	private static int readInt() throws IOException {
+117  		return Integer.parseInt(nextToken());
+118  	}
+119  	private static String nextLine() throws IOException  {
+120  		String s = br.readLine();
+121  		if(s == null) {
+122  			exitImmediately();
+123  		}
+124  		st = null;
+125  		return s;
+126  	}
+127  	private static String nextToken() throws IOException  {
+128  		while(st == null || !st.hasMoreTokens())  {
+129  			st = new StringTokenizer(nextLine().trim());
+130  		}
+131  		return st.nextToken();
+132  	}
+133  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(all,76)` in function `main`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: main
+Target source anchor: variable=all, line=76
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for definitions, assignments, loop-carried values, and data-flow references.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND For each pivot candidate, allocate Set<Character>[] all with four HashSet instances and set good to true. RESULT all_sets_initialized]
+- [COMMAND For each selected cell (x,y), while good remains true, compute quadrant idx as 0 plus 2 if x>i plus 1 if y<j, add g[x][y] to all[idx], and set good to true if all[idx].size() is less than 2, else set good to false. RESULT quadrant_check]
+- [COMMAND Within the outer test-case loop, read grid dimensions r and c with readInt(), set ret to 1, and allocate char[][] g of size r by c. RESULT r_c_g_ret]
+- [COMMAND Within the outer test-case loop, for each row i from 0 to r-1, read token s with nextToken() and copy s.charAt(j) into g[i][j] for each column j from 0 to c-1. RESULT grid_filled]
+- [COMMAND After the x,y scan for the current pivot, assign valid = good; if valid becomes true, stop the pivot search. RESULT validity_assigned]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 17: int r = readInt();
+- line 18: int c = readInt();
+- line 20: char[][] g = new char[r][c];
+- line 62: Set<Character>[] all = new Set[4];
+- line 63: for(int a = 0; a < 4; a++) {
+- line 64: all[a] = new HashSet<Character>();
+- line 66: boolean good = true;
+- line 67: for(int x = 0; good && x < r; x++) {
+- line 68: for(int y = 0; good && y < c; y++) {
+- line 71: int idx = 0;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 17, "position": "before_target", "reason": "r", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "r", "readInt"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "c", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["c", "int", "readInt"]}
+- {"definitions": ["g"], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "before_target", "reason": "g", "relevant_identifiers": ["g"], "roles": ["definition"], "source_identifiers": ["c", "char", "g", "new", "r"]}
+- {"definitions": ["all"], "disposition": "inspect_against_official_dependence_definition", "line": 62, "position": "before_target", "reason": "all", "relevant_identifiers": ["all"], "roles": ["definition"], "source_identifiers": ["Character", "Set", "all", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 63, "position": "before_target", "reason": "a", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["a", "for", "int"]}
+- {"definitions": ["all"], "disposition": "inspect_against_official_dependence_definition", "line": 64, "position": "before_target", "reason": "all", "relevant_identifiers": ["all"], "roles": ["definition"], "source_identifiers": ["Character", "HashSet", "a", "all", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 66, "position": "before_target", "reason": "good", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["boolean", "good", "true"]}
+- {"definitions": ["x"], "disposition": "inspect_against_official_dependence_definition", "line": 67, "position": "before_target", "reason": "x", "relevant_identifiers": ["x"], "roles": ["definition", "control"], "source_identifiers": ["for", "good", "int", "r", "x"]}
+- {"definitions": ["y"], "disposition": "inspect_against_official_dependence_definition", "line": 68, "position": "before_target", "reason": "y", "relevant_identifiers": ["y"], "roles": ["definition", "control"], "source_identifiers": ["c", "for", "good", "int", "y"]}
+- {"definitions": ["idx"], "disposition": "inspect_against_official_dependence_definition", "line": 71, "position": "before_target", "reason": "idx", "relevant_identifiers": ["idx"], "roles": ["definition"], "source_identifiers": ["idx", "int"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 11-93
+- source signature: `public static void main(String[] args) throws Exception {`
+- source content hash: `0c62e0a9c106b771a23ec221de14c272ab56631873830085ba8a9d1c14d1c719`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+  11   public static void main(String[] args) throws Exception {
+  12    br = new BufferedReader(new InputStreamReader(System.in));
+  13    pw = new PrintWriter(new BufferedWriter(new OutputStreamWriter(System.out)));
+  14    int qq = readInt();
+  15    for(int casenum = 1; casenum <= qq; casenum++) {
+  16     pw.print("Case #" + casenum + ": ");
+  17     int r = readInt();
+  18     int c = readInt();
+  19     int ret = 1;
+  20     char[][] g = new char[r][c];
+  21     for(int i = 0; i < r; i++) {
+  22      String s = nextToken();
+  23      for(int j = 0; j < c; j++) {
+  24       g[i][j] = s.charAt(j);
+  25      }
+  26     }
+  27     for(int mask = 1; mask < (1<<(r*c)); mask++) {
+  28      if(Integer.bitCount(mask) <= ret) 
+  29       continue;
+  30      int t = mask;
+  31      par = new int[r*c];
+  32      for(int i = 0; i < r*c; i++) {
+  33       par[i] = i;
+  34      }
+  35      boolean[][] use = new boolean[r][c];
+  36      for(int i = 0; i < r; i++) {
+  37       for(int j = 0; j < c; j++) {
+  38        if((t&1) != 0) {
+  39         use[i][j] = true;
+  40        }
+  41        t >>= 1;
+  42       }
+  43      }
+  44      int numNeed = Integer.bitCount(mask)-1;
+  45      for(int i = 0; i < r; i++) {
+  46       for(int j = 0; j < c; j++) {
+  47        if(!use[i][j]) 
+  48         continue;
+  49        if(i+1 < r && use[i+1][j] && merge(i*c+j, (i+1)*c+j)) {
+  50         numNeed--;
+  51        }
+  52        if(j+1 < c && use[i][j+1] && merge(i*c+j, i*c+j+1)) {
+  53         numNeed--;
+  54        }
+  55       }
+  56      }
+  57      if(numNeed != 0) 
+  58       continue;
+  59      boolean valid = false;
+  60      for(int i = 0; !valid && i < r; i++) {
+  61       for(int j = 0; !valid && j < c; j++) {
+  62        Set<Character>[] all = new Set[4];
+  63        for(int a = 0; a < 4; a++) {
+  64         all[a] = new HashSet<Character>();
+  65        }
+  66        boolean good = true;
+  67        for(int x = 0; good && x < r; x++) {
+  68         for(int y = 0; good && y < c; y++) {
+  69          if(!use[x][y]) 
+  70           continue;
+  71          int idx = 0;
+  72          if(x > i) 
+  73           idx |= 2;
+  74          if(y < j) 
+  75           idx |= 1;
+  76          all[idx].add(g[x][y]);
+  77          if (all[idx].size() < 2)
+  78           good = true;
+  79          else
+  80           good = false;
+  81         }
+  82        }
+  83        valid = good;
+  84       }
+  85      }
+  86      if(!valid) 
+  87       continue;
+  88      ret = Integer.bitCount(mask);
+  89     }
+  90     pw.println(ret);
+  91    }
+  92    pw.close();
+  93   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads grids from standard input and, for each test case, prints the size of the largest connected subset of cells for which there exists a pivot cell such that each quadrant around the pivot contains at most one distinct character." main]
+    [INPUTS]
+        <REF> args </REF>: String[] "Command-line arguments, not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize br as a BufferedReader wrapping InputStreamReader(System.in), initialize pw as a PrintWriter wrapping BufferedWriter wrapping OutputStreamWriter(System.out), and read integer qq by calling readInt(). RESULT io_and_qq]
+            [COMMAND For each casenum from 1 to qq inclusive, process one test case, printing prefix 'Case #' concatenated with casenum and ': ' first. RESULT case_iteration]
+            [COMMAND Within the outer test-case loop, read grid dimensions r and c with readInt(), set ret to 1, and allocate char[][] g of size r by c. RESULT r_c_g_ret]
+            [COMMAND Within the outer test-case loop, for each row i from 0 to r-1, read token s with nextToken() and copy s.charAt(j) into g[i][j] for each column j from 0 to c-1. RESULT grid_filled]
+            [COMMAND Within the outer test-case loop, for each mask from 1 to (1<<(r*c))-1 inclusive, skip the mask when Integer.bitCount(mask) is not greater than ret. RESULT mask_pruned]
+            [COMMAND For the current mask, copy mask into t, allocate par as a new int array of length r*c, and initialize par[i] to i for i from 0 to r*c-1. RESULT par_initialized]
+            [COMMAND Allocate boolean[][] use of size r by c; for each row i from 0 to r-1 and each column j from 0 to c-1, set use[i][j] to true when the least significant bit of t is 1, then shift t right by one. RESULT use_built]
+            [COMMAND Set numNeed to Integer.bitCount(mask) minus 1. RESULT numNeed_initialized]
+            [COMMAND For each selected cell use[i][j], if the down neighbor is selected and merge(i*c+j, (i+1)*c+j) succeeds, decrement numNeed; if the right neighbor is selected and merge(i*c+j, i*c+j+1) succeeds, decrement numNeed. RESULT dsu_merged]
+            [COMMAND If numNeed is not zero, skip this mask because the selected cells are disconnected. RESULT connected_check]
+            [COMMAND For the current connected mask, set valid to false, then search for a pivot (i,j) with i from 0 to r-1 and j from 0 to c-1, stopping early once valid becomes true. RESULT validity_search_started]
+            [COMMAND For each pivot candidate, allocate Set<Character>[] all with four HashSet instances and set good to true. RESULT all_sets_initialized]
+            [COMMAND For each selected cell (x,y), while good remains true, compute quadrant idx as 0 plus 2 if x>i plus 1 if y<j, add g[x][y] to all[idx], and set good to true if all[idx].size() is less than 2, else set good to false. RESULT quadrant_check]
+            [COMMAND After the x,y scan for the current pivot, assign valid = good; if valid becomes true, stop the pivot search. RESULT validity_assigned]
+            [COMMAND If the current mask is not valid, skip it. RESULT validity_pruned]
+            [COMMAND If the current mask is connected and valid, update ret to Integer.bitCount(mask). RESULT ret_updated]
+            [COMMAND After all masks have been processed for the current test case, print ret with pw.println(ret). RESULT answer_printed]
+            [COMMAND After all test cases have been processed, close pw with pw.close(). RESULT output_closed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: A checked exception occurs inside main, such as an I/O failure from readInt, nextToken, reading input, or writing output.]
+        [LOG "The exception is not caught; it propagates to the caller because the method signature declares throws Exception."]
+        [THROW Exception "The method's throws Exception clause allows checked exceptions to propagate from main."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

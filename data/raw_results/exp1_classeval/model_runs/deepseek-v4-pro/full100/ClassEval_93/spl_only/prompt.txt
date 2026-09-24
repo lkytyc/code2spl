@@ -1,0 +1,158 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `VectorUtil.similarity`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes the dot product of the unit-normalized forms of two input vectors, yielding cosine similarity for non-zero vectors." similarity]
+    [INPUTS]
+        <REF> vector_1 </REF>: vector[float] "First input vector to be normalized and compared."
+        <REF> vector_2 </REF>: vector[float] "Second input vector to be normalized and compared."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: float "The scalar dot product of the normalized inputs; for non-zero vectors this is equivalent to cosine similarity and normally falls within [-1, 1]. If either input is zero, behavior follows the underlying matutils.unitvec implementation and may be undefined or raise a division-by-zero error."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize vector_1 using matutils.unitvec and store the normalized vector. RESULT unit_vector_1]
+            [COMMAND Normalize vector_2 using matutils.unitvec and store the normalized vector. RESULT unit_vector_2]
+            [COMMAND Compute the dot product of unit_vector_1 and unit_vector_2 and return the scalar result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `VectorUtil.cosine_similarities`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes the cosine similarity between a single vector and each row of a matrix of vectors." cosine_similarities]
+    [INPUTS]
+        <REF> vector_1 </REF>: numpy.ndarray "A single 1-D vector used as the cosine reference vector."
+        <REF> vectors_all </REF>: numpy.ndarray "A 2-D array where each row is a vector compared with vector_1."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> similarities </REF>: numpy.ndarray "A 1-D array of cosine similarity scores, one value per row in vectors_all. Zero norms may produce NaN or inf values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the L2 norm of vector_1. RESULT norm]
+            [COMMAND Compute the row-wise L2 norms of vectors_all along axis 1. RESULT all_norms]
+            [COMMAND Compute the row-wise dot products between vectors_all and vector_1. RESULT dot_products]
+            [COMMAND Compute similarities as dot_products divided by the product of norm and all_norms using broadcast division. Zero norms lead to division by zero or NaN/inf values as in numpy semantics. RESULT similarities]
+            [COMMAND Return the computed similarities array. RESULT similarities]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `VectorUtil.n_similarity`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Compute the dot product of the unit-normalized mean vectors for two input vector lists, raising ZeroDivisionError if either list is empty." n_similarity]
+    [INPUTS]
+        <REF> vector_list_1 </REF>: list of vectors "First collection of vectors."
+        <REF> vector_list_2 </REF>: list of vectors "Second collection of vectors."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: float "Dot product of the L2-normalized mean vectors; equivalent to cosine similarity between the two mean vectors when both mean vectors are nonzero."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that both vector_list_1 and vector_list_2 contain at least one element; if either list is empty, follow the empty-list exception flow. RESULT input_lists_non_empty]
+            [COMMAND Convert vector_list_1 to an array and compute its column-wise mean vector using axis=0. RESULT mean_vector_1]
+            [COMMAND Normalize mean_vector_1 to unit length using matutils.unitvec. RESULT unit_vector_1]
+            [COMMAND Convert vector_list_2 to an array and compute its column-wise mean vector using axis=0. RESULT mean_vector_2]
+            [COMMAND Normalize mean_vector_2 to unit length using matutils.unitvec. RESULT unit_vector_2]
+            [COMMAND Compute the dot product of unit_vector_1 and unit_vector_2 and return the resulting scalar value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Either vector_list_1 or vector_list_2 is empty.]
+        [LOG "At least one of the passed list is empty."]
+        [THROW ZeroDivisionError "Raised when at least one input list is empty."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `VectorUtil.compute_idf_weight_dict`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes a smoothed inverse document frequency weight for each key in number_dict by collecting counts, converting them to a NumPy array, applying a log-smoothing formula, and mapping the results back to the original keys." compute_idf_weight_dict]
+    [INPUTS]
+        <REF> total_num </REF>: number "Total number of documents or total count used as the smoothing numerator."
+        <REF> number_dict </REF>: dict "Mapping from original keys to raw count values to convert into smoothed IDF-based weights."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Dictionary mapping the original keys from number_dict to their smoothed IDF-based weight values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize index_2_key_map to an empty dictionary. RESULT index_2_key_map]
+            [COMMAND Initialize index to 0. RESULT index]
+            [COMMAND Initialize count_list to an empty list. RESULT count_list]
+            [COMMAND Within the for loop over each key and count from number_dict.items(), assign index_2_key_map[index] to key. RESULT index_2_key_map]
+            [COMMAND Within the same for loop over each key and count from number_dict.items(), append count to count_list. RESULT count_list]
+            [COMMAND Within the same for loop over each key and count from number_dict.items(), increment index by 1. RESULT index]
+            [COMMAND Convert count_list to a NumPy array and assign it to a. RESULT a]
+            [COMMAND Smooth and compute the element-wise IDF weights as a = np.log((total_num + 1) / (a + 1)). RESULT a]
+            [COMMAND Initialize result to an empty dictionary. RESULT result]
+            [COMMAND For each index and value w from enumerate(a), set key to index_2_key_map[index]. RESULT key]
+            [COMMAND Within the same loop over enumerate(a), assign result[key] to w. RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+

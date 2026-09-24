@@ -1,0 +1,404 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include <stdio.h>
+2   int max(int a, int b){
+3   	if(a>b){
+4   		return a;
+5   	}
+6   	return b;
+7   }
+8   int min(int a, int b){
+9   	if(a>b){
+10  		return b;
+11  	}
+12  	return a;
+13  }
+14  int main(){
+15  	int H;
+16  	scanf("%d",&H);
+17  	int W;
+18  	scanf("%d",&W);
+19  	char c;
+20  	char d;
+21  	char l[1001][1001];
+22  	int i;
+23  	int j;
+24  	for(i=1;i<=H;i++){
+25  		scanf("%c",&d);
+26  		for(j=1;j<=W;j++){
+27  			scanf("%c",&c);
+28  			l[i][j]=c;
+29  		}
+30  	}
+31  	int m;
+32  	m=H+W;
+33  	int p[1001][1001];
+34  	int q[1002][1001];
+35  	int r[1001][1002];
+36  	int s[1002][1002];
+37  	for(i=1;i<=H;i++){
+38  		p[i][0]=m;
+39  		q[i][W+1]=m;
+40  		r[i][0]=m;
+41  		s[i][W+1]=m;
+42  	}
+43  	for(j=1;j<=W;j++){
+44  		p[0][j]=m;
+45  		q[0][j]=m;
+46  		r[H+1][j]=m;
+47  		s[H+1][j]=m;
+48  	}
+49  	for(i=1;i<=H;i++){
+50  		for(j=1;j<=W;j++){
+51  			if(l[i][j]=='#'){
+52  				p[i][j]=0;
+53  			}else{
+54  				p[i][j]=min(p[i-1][j],p[i][j-1])+1;
+55  			}
+56  		}
+57  	}
+58  	for(i=1;i<=H;i++){
+59  		for(j=W;j>=1;j--){
+60  			if(l[i][j]=='#'){
+61  				q[i][j]=0;
+62  			}else{
+63  				q[i][j]=min(q[i-1][j],q[i][j+1])+1;
+64  			}
+65  		}
+66  	}
+67  	for(i=H;i>=1;i--){
+68  		for(j=1;j<=W;j++){
+69  			if(l[i][j]=='#'){
+70  				r[i][j]=0;
+71  			}else{
+72  				r[i][j]=min(r[i+1][j],r[i][j-1])+1;
+73  			}
+74  		}
+75  	}
+76  	for(i=H;i>=1;i--){
+77  		for(j=W;j>=1;j--){
+78  			if(l[i][j]=='#'){
+79  				s[i][j]=0;
+80  			}else{
+81  				s[i][j]=min(s[i+1][j],s[i][j+1])+1;
+82  			}
+83  		}
+84  	}
+85  	int n[1001][1001];
+86  	int ans;
+87  	ans=0;
+88  	for(i=1;i<=H;i++){
+89  		for(j=1;j<=W;j++){
+90  			n[i][j]=min(p[i][j],q[i][j]);
+91  			n[i][j]=min(n[i][j],r[i][j]);
+92  			n[i][j]=min(n[i][j],s[i][j]);
+93  			ans=max(ans,n[i][j]);
+94  		}
+95  	}
+96  	printf("%d",ans);
+97  }
+```
+
+
+**Question**: Which variable instances have information flow over `(q,63)` in function `main`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function main: Reads an H by W character grid, computes for each cell the Manhattan distance to the nearest '#' using four directional dynamic-programming passes, and prints the maximum such distance.
+The behaviour proceeds in this order:
+1. Declare the fixed-size character grid l[1001][1001], integer arrays p[1001][1001], q[1002][1001], r[1001][1002], s[1002][1002], and n[1001][1001], plus scalar variables H, W, c, d, i, j, m, and ans. This produces declared_memory.
+2. Read two integers from standard input with scanf("%d", &H) and scanf("%d", &W), storing the grid height in H and width in W. This produces H, W.
+3. For each row i from 1 through H, first consume the preceding newline or separator by reading one character into d with scanf("%c", &d); then for each column j from 1 through W, read one character into c with scanf("%c", &c) and store it in l[i][j] = c. This produces l.
+4. Set m = H + W to use as the sentinel distance value for boundary initialization. This produces m.
+5. Initialize the sentinel boundaries using m: for each i from 1 through H set p[i][0] = m, q[i][W+1] = m, r[i][0] = m, and s[i][W+1] = m; for each j from 1 through W set p[0][j] = m, q[0][j] = m, r[H+1][j] = m, and s[H+1][j] = m. This produces p, q, r, s.
+6. Compute the top-left directional distance array p: for i from 1 through H and j from 1 through W, if l[i][j] == '#' set p[i][j] = 0; otherwise set p[i][j] = min(p[i-1][j], p[i][j-1]) + 1. This produces p.
+7. Compute the top-right directional distance array q: for i from 1 through H and j from W down through 1, if l[i][j] == '#' set q[i][j] = 0; otherwise set q[i][j] = min(q[i-1][j], q[i][j+1]) + 1. This produces q.
+8. Compute the bottom-left directional distance array r: for i from H down through 1 and j from 1 through W, if l[i][j] == '#' set r[i][j] = 0; otherwise set r[i][j] = min(r[i+1][j], r[i][j-1]) + 1. This produces r.
+9. Compute the bottom-right directional distance array s: for i from H down through 1 and j from W down through 1, if l[i][j] == '#' set s[i][j] = 0; otherwise set s[i][j] = min(s[i+1][j], s[i][j+1]) + 1. This produces s.
+10. Initialize ans to 0. This produces ans.
+11. For each i from 1 through H and each j from 1 through W, set n[i][j] = min(p[i][j], q[i][j]); then set n[i][j] = min(n[i][j], r[i][j]); then set n[i][j] = min(n[i][j], s[i][j]); then update ans = max(ans, n[i][j]). This produces ans.
+12. Print ans to standard output with printf("%d", ans), using no trailing newline. This produces stdout.

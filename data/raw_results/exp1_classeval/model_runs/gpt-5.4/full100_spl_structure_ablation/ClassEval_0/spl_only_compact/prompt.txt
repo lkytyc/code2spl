@@ -1,0 +1,94 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: AccessGatewayFilter
+# Calls: filter→is_start_with, filter→get_jwt_user, filter→set_current_user_info_and_log
+
+## __init__()
+Summary: Initialize a new instance by performing no additional setup beyond the default constructor behavior.
+1. Enter the constructor and perform no state initialization, side effects, validations, or other operations. → none
+
+## filter() → bool
+Summary: Returns true for start-matching request URIs or for authenticated users with level greater than 2 after logging them, otherwise returns false on any exception.
+#   → result: bool — True when access is allowed; otherwise False.
+1. Read request_uri from request['path'] and read method from request['method']. → request_uri,
+2. If self.is_start_with(request_uri) is true, return true immediately. → True
+3. Otherwise, call self.get_jwt_user(request) and assign the result to token. → token
+4. From token, read user from token['user']. → user
+5. If user['level'] is greater than 2, call self.set_current_user_info_and_log(user) and return true. → True
+6. If no earlier return occurs and no handled path succeeds, return false. → False
+   ? Return true without reading JWT user information.
+   ? Log the current user via self.set_current_user_info_and_log(user).
+   ? Return true after logging.
+   ! log: "The exception is suppressed and the method returns false."
+   ! raise: None "No exception is propagated because the code catches all exceptions."
+
+## get_jwt_user(request: object) → object_or_null
+Summary: Extract the authorization token from the request, optionally validate an embedded username-prefixed date in its JWT field against a 3-day expiration boundary, and return either None or the token.
+#   request: object — Request-like data structure containing headers with an Authorization entry.
+#   → result: object_or_null — Returns None when the JWT starts with the user name and the parsed trailing date is at least 3 days old; otherwise returns the authorization token object.
+1. Read the authorization token from request['headers']['Authorization'] and store it as token. → token
+2. Read the user object from token['user'] and store it as user. → user
+3. Check whether token['jwt'] starts with user['name']. → jwt_starts_with_user_name
+4. If token['jwt'] starts with user['name'], split token['jwt'] by user['name'], take element at index 1 as the trailing date string, and store it as jwt_str_date. → jwt_str_date
+5. If token['jwt'] starts with user['name'], parse jwt_str_date using the format %Y-%m-%d and store the parsed date as jwt_date. → jwt_date
+6. If token['jwt'] starts with user['name'], compute whether datetime.datetime.today() minus jwt_date is greater than or equal to datetime.timedelta(days=3). → is_expired_at_or_beyond_3_days
+7. If token['jwt'] starts with user['name'] and the age comparison is greater than or equal to 3 days, return None immediately. → return_None
+8. Return token. → token
+   ? Skip date extraction and expiration validation and continue to the final return of token.
+   ? Do not return None and continue to the final return of token.
+
+## is_start_with(request_uri: string) → boolean
+Summary: Checks whether the request URI starts with any of the two fixed prefixes and returns a boolean result with early exit on the first match.
+#   request_uri: string — The URI string to test against the configured path prefixes.
+#   → result: boolean — True if request_uri starts with '/api' or '/login'; otherwise False.
+1. Initialize start_with as a fixed list containing the two string prefixes "/api" and "/login". → start_with
+2. Iterate through each prefix s in start_with in list order. → s
+3. Within the loop for the current prefix s, check whether request_uri starts with s using an exact prefix match. → starts_with_match
+4. If the prefix match is true for the current s, return True immediately and stop checking any remaining prefixes. → True
+5. If the loop completes without any matching prefix, return False. → False
+   ? Continue to the next prefix in start_with without returning yet.
+   ? Skip the loop body entirely and return False.
+
+## set_current_user_info_and_log(self: object, user: mapping)
+Summary: Copies the user's address into a local host variable and logs a level-1 message formed by concatenating the user's name, address, and the current timestamp string.
+#   self: object — Instance context passed to the method and not otherwise used in the method body.
+#   user: mapping — Input container expected to provide keyed access to at least 'address' and 'name' values.
+1. Read the value at key 'address' from user and assign it directly to the local variable host without transformation or validation. → host
+2. Get the value at key 'name' from user, concatenate it with host and the string form of the current datetime, and write the resulting message through logging.log with level set to 1. → log_written
+

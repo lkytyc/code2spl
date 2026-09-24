@@ -1,0 +1,90 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: Words2Numbers
+# Fields: tens, ordinal_words, ordinal_endings, numwords, units, scales
+
+## __init__()
+Summary: Initialize number-word parsing state by building lookup tables for cardinal words, scale words, irregular ordinal words, and ordinal suffix rewrite rules.
+1. Initialize self.numwords as an empty dictionary to store number-word mappings. → self.numwords
+2. Assign self.units to the ordered list of unit number words from zero through nineteen. → self.units
+3. Assign self.tens to the ordered list of tens words with empty string placeholders at indices 0 and 1, followed by twenty through ninety. → self.tens
+4. Assign self.scales to the ordered list of scale words hundred, thousand, million, billion, and trillion. → self.scales
+5. Insert the fixed mapping in self.numwords for the key "and" with the tuple value (1, 0). → self.numwords
+6. Iterate over enumerate(self.units), and for each idx and word, assign self.numwords[word] to the tuple (1, idx). → self.numwords
+7. Iterate over enumerate(self.tens), and for each idx and word, assign self.numwords[word] to the tuple (1, idx * 10), including the empty string entries at indices 0 and 1 which map to (1, 0) and (1, 10). → self.numwords
+8. Iterate over enumerate(self.scales), and for each idx and word, assign self.numwords[word] to the tuple (10 ** (idx * 3 or 2), 0), producing hundred -> (100, 0), thousand -> (1000, 0), million -> (1000000, 0), billion -> (1000000000, 0), and trillion -> (1000000000000, 0). → self.numwords
+9. Assign self.ordinal_words to the dictionary of irregular ordinal word mappings: first to 1, second to 2, third to 3, fifth to 5, eighth to 8, ninth to 9, and twelfth to 12. → self.ordinal_words
+10. Assign self.ordinal_endings to the ordered list of suffix rewrite rules [('ieth', 'y'), ('th', '')], preserving rule order for later matching behavior. → self.ordinal_endings
+
+## is_valid_input(textnum: string) → boolean
+Summary: Validates that a text input contains only recognized numeric or ordinal words after normalizing hyphens to spaces and converting ordinal suffixes when needed.
+#   textnum: string — The input text to validate as a sequence of numeric or ordinal words.
+#   → result: boolean — Returns true if every whitespace-separated word is either a recognized ordinal word or can be normalized into a recognized numeric word; otherwise returns false.
+1. Replace every '-' character in textnum with a space character and store the normalized string back into textnum. → textnum
+2. Iterate over each whitespace-separated word produced by splitting textnum. → word_iteration
+3. Within the loop for each word, if the word exists in self.ordinal_words, skip all remaining processing for that word and continue to the next word. → next_word_if_ordinal
+4. Within the loop for each word that is not in self.ordinal_words, iterate over each ending and replacement pair in self.ordinal_endings. → ordinal_ending_iteration
+5. Within the inner loop, if the current word ends with the current ending, update word to word without its last len(ending) characters followed by replacement using the format "%s%s". → word
+6. After completing the inner ordinal ending loop for a non-ordinal word, check whether the resulting word is absent from self.numwords. → word_membership_check
+7. If the resulting word is not in self.numwords, return false immediately and stop all further processing. → False
+8. If all words finish processing without triggering the false return, return true. → True
+   ? Return false immediately without processing any remaining words.
+
+## text2int(textnum: string) → string
+Summary: Convert number and ordinal words embedded in input text into their numeric string forms while preserving non-numeric words and token boundaries.
+#   textnum: string — Input text that may contain hyphenated words, number words, ordinal words, and ordinary non-numeric words.
+#   → curstring: string — A transformed string where recognized numeric word sequences are replaced with their numeric values and other words are preserved with spacing behavior matching the method.
+1. Normalize the input text by replacing every '-' character in textnum with a single space and store the result back into textnum. → textnum
+2. Initialize current to 0, result to 0, curstring to an empty string, and onnumber to False before token processing begins. → current,result,curstring,onnumber
+3. Split textnum on whitespace and iterate over each token in order as word. → word
+4. Within the loop for each word, if word exists in self.ordinal_words, set scale to 1 and increment to self.ordinal_words[word], update current to current * scale + increment, and set onnumber to True. → scale,increment,current,onnumber
+5. Within the loop for each word, if word does not exist in self.ordinal_words, iterate through every pair ending and replacement in self.ordinal_endings and, for each pair where word.endswith(ending) is True, rewrite word as word without its last len(ending) characters followed by replacement; do not stop after a match. → word
+6. Still within the non-direct-ordinal branch, if the possibly rewritten word is not present in self.numwords, then if onnumber is True append repr(result + current) followed by a single space to curstring, append word followed by a single space to curstring, reset result to 0 and current to 0, and set onnumber to False. → curstring,result,current,onnumber
+7. Still within the non-direct-ordinal branch, if the possibly rewritten word is present in self.numwords, read scale and increment from self.numwords[word], update current to current * scale + increment, and if scale > 100 then add current to result and reset current to 0; after that set onnumber to True. → scale,increment,current,result,onnumber
+8. After the loop finishes, if onnumber is True, append repr(result + current) to curstring without adding a trailing space. → curstring
+9. Return curstring. → return
+   ? If a numeric phrase is currently in progress because onnumber is True, flush the accumulated numeric value by appending repr(result + current) and a trailing space to curstring.
+   ? Append the non-numeric word and a trailing space to curstring.
+   ? Reset numeric accumulation state by setting result to 0, current to 0, and onnumber to False.
+   ? Treat the token as an ordinal numeric increment by using scale 1 and increment self.ordinal_words[word], then update current to current * 1 + increment.
+   ? Mark that numeric parsing is active by setting onnumber to True.
+   ? Load scale and increment from self.numwords[word] and update current to current * scale + increment.
+   ? If scale > 100, fold the accumulated current into result by setting result to result + current and then reset current to 0.
+   ? Mark that numeric parsing is active by setting onnumber to True.
+

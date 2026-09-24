@@ -1,0 +1,408 @@
+# FILE: django/db/models/functions/datetime.py
+# CLASS TimezoneMixin
+
+[DEFINE_WORKER: "Returns the timezone name for the object, preferring the current Django timezone name when timezone support is enabled and no explicit tzinfo is attached, and otherwise deriving the name from the attached tzinfo; returns None when timezone support is disabled." get_tzname]
+    [INPUTS]
+        <REF> self </REF>: object "The datetime-like instance whose tzinfo attribute is inspected to determine the timezone name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> tzname </REF>: string|null "The resolved timezone name, or None if settings.USE_TZ is disabled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize tzname to None. RESULT tzname]
+            [COMMAND Evaluate settings.USE_TZ to determine whether timezone support is enabled. RESULT use_tz]
+            [COMMAND If use_tz is truthy, check whether self.tzinfo is None. RESULT tzinfo_is_none]
+            [COMMAND If use_tz is truthy and tzinfo_is_none is true, assign tzname = timezone.get_current_timezone_name(). RESULT tzname]
+            [COMMAND If use_tz is truthy and tzinfo_is_none is false, assign tzname = timezone._get_timezone_name(self.tzinfo). RESULT tzname]
+            [COMMAND Return tzname. RESULT tzname]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When settings.USE_TZ is disabled/falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave tzname as its initialized value None. RESULT tzname]
+            [COMMAND Return tzname. RESULT tzname]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS Extract
+
+[DEFINE_WORKER: "Initializes this object by resolving lookup_name from an existing instance value or the provided argument, raising ValueError if lookup_name cannot be resolved, storing tzinfo, and delegating the expression and extra keywords to the parent initializer." __init__]
+    [INPUTS]
+        <REF> expression </REF>: object "Expression passed through to the parent class initializer."
+        <REF> lookup_name </REF>: string or None "Optional lookup name used only when self.lookup_name is not already set."
+        <REF> tzinfo </REF>: timezone object or None "Optional timezone object stored on self.tzinfo."
+        <REF> extra </REF>: keyword arguments dictionary "Additional keyword arguments forwarded to the parent class initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.lookup_name is None, set self.lookup_name to the provided lookup_name. RESULT self.lookup_name]
+            [COMMAND Assign the provided tzinfo value, which may be None, to self.tzinfo. RESULT self.tzinfo]
+            [COMMAND Call the parent class initializer with the expression and **extra. RESULT parent_initializer_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: After the optional assignment, self.lookup_name is still None.]
+        [LOG "lookup_name must be provided"]
+        [THROW ValueError "The lookup_name could not be resolved because neither the instance attribute nor the constructor argument provided a value."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compiles the left-hand expression and rewrites its SQL using the database backend's date/time extraction helper selected by lhs.output_field, returning the updated SQL and unchanged parameters." as_sql]
+    [INPUTS]
+        <REF> self </REF>: object "Expression object providing lhs, lookup_name, and get_tzname()."
+        <REF> compiler </REF>: SQLCompiler "Compiler used to compile self.lhs into a SQL string and parameters."
+        <REF> connection </REF>: DatabaseConnection "Database connection whose ops provide extraction SQL helpers and whose features indicate native duration field support."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: str "SQL fragment for the extracted date/time component."
+        <REF> params </REF>: list "Query parameters for the SQL fragment, unchanged from compiling self.lhs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compile self.lhs using compiler.compile and unpack the returned tuple into sql and params. RESULT sql, params]
+            [COMMAND Read self.lhs.output_field and store it as lhs_output_field. RESULT lhs_output_field]
+            [COMMAND Evaluate the alternative_flows in order, select the first matching condition, and run its steps to update sql. If a matching exception_flow condition occurs, raise the corresponding exception instead. RESULT sql]
+            [COMMAND Return the final sql and params tuple. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: lhs_output_field is an instance of DateTimeField.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_tzname() and store the timezone name as tzname. RESULT tzname]
+            [COMMAND Set sql to connection.ops.datetime_extract_sql(self.lookup_name, sql, tzname). RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lhs_output_field is an instance of DateField but not DateTimeField.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set sql to connection.ops.date_extract_sql(self.lookup_name, sql). RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lhs_output_field is an instance of TimeField and neither the DateTimeField nor DateField branch matched.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set sql to connection.ops.time_extract_sql(self.lookup_name, sql). RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: lhs_output_field is an instance of DurationField, none of the previous branches matched, and connection.features.has_native_duration_field is True.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set sql to connection.ops.time_extract_sql(self.lookup_name, sql). RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: lhs_output_field is an instance of DurationField and connection.features.has_native_duration_field is False.]
+        [LOG "Extract requires native DurationField database support."]
+        [THROW ValueError "Raised when extracting from a DurationField but the database backend lacks native duration field support."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: lhs_output_field is not an instance of DateTimeField, DateField, TimeField, or DurationField.]
+        [LOG "Tried to Extract from an invalid type."]
+        [THROW AssertionError "Assertion failure signaling an invalid output field type; expected to be unreachable because resolve_expression validates the output field."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the expression via the parent implementation, validates that its output field is a supported date/time/duration field, rejects invalid time or duration component extractions, and returns the resolved copy." resolve_expression]
+    [INPUTS]
+        <REF> query </REF>: object|None "Query object or None; passed to super().resolve_expression()."
+        <REF> allow_joins </REF>: bool "If True, joins are allowed during expression resolution; default True."
+        <REF> reuse </REF>: set|None "Optional reusable aliases or expressions; default None."
+        <REF> summarize </REF>: bool "If True, use aggregate summarization during resolution; default False."
+        <REF> for_save </REF>: bool "If True, resolve the expression for save operations; default False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> copy </REF>: Expression "The resolved expression after field and lookup component validation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().resolve_expression with query, allow_joins, reuse, summarize, and for_save, and assign the result to copy. RESULT copy]
+            [COMMAND Read copy.lhs.output_field and assign it to field. RESULT field]
+            [COMMAND If field is not an instance of DateField, DateTimeField, TimeField, or DurationField, raise ValueError; otherwise continue. RESULT field_type_validated]
+            [COMMAND If type(field) is exactly DateField and copy.lookup_name is in ('hour', 'minute', 'second'), raise ValueError; otherwise continue. RESULT date_time_component_check_passed]
+            [COMMAND If field is a DurationField instance and copy.lookup_name is in ('year', 'iso_year', 'month', 'week', 'week_day', 'iso_week_day', 'quarter'), raise ValueError; otherwise continue. RESULT duration_component_check_passed]
+            [COMMAND Return copy as the resolved expression. RESULT copy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: field is not an instance of DateField, DateTimeField, TimeField, or DurationField.]
+        [LOG "Extract input expression must be DateField, DateTimeField, TimeField, or DurationField."]
+        [THROW ValueError "Indicates that the resolved expression's output field is not a supported date/time/duration field type."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: type(field) is exactly DateField and copy.lookup_name is in ('hour', 'minute', 'second').]
+        [LOG "Cannot extract time component '<lookup_name>' from DateField '<field.name>'."]
+        [THROW ValueError "Indicates an attempt to extract a time component from a DateField, which is invalid."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: field is an instance of DurationField and copy.lookup_name is in ('year', 'iso_year', 'month', 'week', 'week_day', 'iso_week_day', 'quarter').]
+        [LOG "Cannot extract component '<lookup_name>' from DurationField '<field.name>'."]
+        [THROW ValueError "Indicates an attempt to extract a date-like component from a DurationField, which is invalid."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS ExtractYear
+
+# CLASS ExtractIsoYear
+
+# CLASS ExtractMonth
+
+# CLASS ExtractDay
+
+# CLASS ExtractWeek
+
+# CLASS ExtractWeekDay
+
+# CLASS ExtractIsoWeekDay
+
+# CLASS ExtractQuarter
+
+# CLASS ExtractHour
+
+# CLASS ExtractMinute
+
+# CLASS ExtractSecond
+
+# CLASS Now
+
+[DEFINE_WORKER: "Renders the SQL expression for PostgreSQL as STATEMENT_TIMESTAMP() by delegating to self.as_sql with a fixed template, so the result matches the current statement time rather than the transaction start time." as_postgresql]
+    [INPUTS]
+        <REF> self </REF>: object "Database expression instance that exposes an as_sql method, typically a Django Func expression."
+        <REF> compiler </REF>: SQLCompiler "SQL compiler used to render sub-expressions and placeholders."
+        <REF> connection </REF>: DatabaseConnection "Database connection used for dialect-specific SQL rendering."
+        <REF> extra_context </REF>: dict "Additional keyword arguments forwarded to as_sql and used as template context overrides."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A (sql, params) tuple, normally ('STATEMENT_TIMESTAMP()', []) when no extra context or child expressions change the rendering."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Receive compiler, connection, and extra_context; set the SQL template to the literal constant 'STATEMENT_TIMESTAMP()'. RESULT template]
+            [COMMAND Call self.as_sql(compiler, connection, template='STATEMENT_TIMESTAMP()', **extra_context), expanding extra_context as additional keyword arguments. RESULT sql_output]
+            [COMMAND Immediately return the value produced by self.as_sql, preserving its (sql, params) tuple structure. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS TruncBase
+
+[DEFINE_WORKER: "Initializes the instance by copying tzinfo and is_dst into instance attributes, then forwards expression, output_field, and extra keyword arguments to the parent initializer." __init__]
+    [INPUTS]
+        <REF> expression </REF>: object "Required positional expression to pass to the parent initializer."
+        <REF> output_field </REF>: object "Optional output field to pass to the parent initializer; defaults to None."
+        <REF> tzinfo </REF>: object "Optional timezone information to store on self.tzinfo; defaults to None."
+        <REF> is_dst </REF>: object "Optional daylight-saving time flag to store on self.is_dst; defaults to None."
+        <REF> extra </REF>: dict "Additional keyword arguments forwarded to the parent initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set the instance attribute self.tzinfo to the incoming tzinfo value, preserving None when no tzinfo argument is supplied. RESULT self.tzinfo]
+            [COMMAND Set the instance attribute self.is_dst to the incoming is_dst value, preserving None when no is_dst argument is supplied. RESULT self.is_dst]
+            [COMMAND Call the parent class initializer with expression as a positional argument, output_field as a keyword argument defaulting to None, and all extra keyword arguments expanded in place. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compiles the left-hand expression and returns the appropriate database-specific SQL truncation expression and parameters for DateTimeField, DateField, or TimeField output fields, raising ValueError for unsupported field types." as_sql]
+    [INPUTS]
+        <REF> self </REF>: Trunc "The Trunc expression instance providing lhs, output_field, kind, and get_tzname()."
+        <REF> compiler </REF>: SQLCompiler "The Django SQL compiler used to compile self.lhs."
+        <REF> connection </REF>: DatabaseWrapper "The database connection whose ops provide database-specific SQL truncation functions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (sql, inner_params) containing the generated SQL fragment and the inner compiled parameters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compile self.lhs by calling compiler.compile(self.lhs) and unpack the returned two-element value into inner_sql and inner_params. RESULT inner_sql, inner_params]
+            [COMMAND Branch on the type of self.output_field and choose the corresponding time truncation SQL generation path. RESULT sql]
+            [COMMAND Return the tuple (sql, inner_params) as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.output_field is an instance of DateTimeField, checked first so DateTimeField is not treated as plain DateField.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the DateTimeField branch, call self.get_tzname() to obtain the timezone name. RESULT tzname]
+            [COMMAND Within the DateTimeField branch, set sql to connection.ops.datetime_trunc_sql(self.kind, inner_sql, tzname). RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.output_field is an instance of DateField but not DateTimeField.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the DateField branch, set sql to connection.ops.date_trunc_sql(self.kind, inner_sql). RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.output_field is an instance of TimeField.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the TimeField branch, set sql to connection.ops.time_trunc_sql(self.kind, inner_sql). RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.output_field is not an instance of DateTimeField, DateField, or TimeField.]
+        [LOG "Trunc only valid on DateField, TimeField, or DateTimeField."]
+        [THROW ValueError "Raised when self.output_field is not a supported DateTimeField, DateField, or TimeField."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a date/time truncation expression by delegating to the parent implementation, then validates that the underlying field and output field are compatible date/time types before returning the copied expression." resolve_expression]
+    [INPUTS]
+        <REF> query </REF>: Query object or None "Query context passed through to the parent resolve_expression method."
+        <REF> allow_joins </REF>: bool "Whether joins are allowed during resolution; defaults to True."
+        <REF> reuse </REF>: object or None "Reusable expression aliases or state passed through to the parent method; defaults to None."
+        <REF> summarize </REF>: bool "Whether the expression is being resolved for a summarization query; defaults to False."
+        <REF> for_save </REF>: bool "Whether the expression is being resolved for a save operation; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> copy </REF>: resolved expression object "The validated expression copy returned by the parent resolve_expression method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().resolve_expression(query, allow_joins, reuse, summarize, for_save) and store the returned expression as copy. RESULT copy]
+            [COMMAND Extract copy.lhs.output_field and store it as field. RESULT field]
+            [COMMAND Assert that field is an instance of DateField or TimeField, with DateTimeField counted as a DateField; if not, raise an AssertionError. RESULT field]
+            [COMMAND Validate that copy.output_field is an instance of DateField, DateTimeField, or TimeField; if not, raise a ValueError. RESULT copy.output_field]
+            [COMMAND Set class_output_field to self.__class__.output_field if it is an instance of Field, otherwise set it to None. RESULT class_output_field]
+            [COMMAND Set output_field to class_output_field if class_output_field is truthy, otherwise set it to copy.output_field. RESULT output_field]
+            [COMMAND Set has_explicit_output_field to class_output_field if class_output_field is truthy, otherwise set it to the boolean result of whether field.__class__ is not copy.output_field.__class__. RESULT has_explicit_output_field]
+            [COMMAND If type(field) is exactly DateField and, with short-circuit OR, output_field is an instance of DateTimeField or copy.kind is one of 'hour', 'minute', 'second', or 'time', raise a ValueError. RESULT copy]
+            [COMMAND Else, if field is an instance of TimeField and, with short-circuit OR, output_field is an instance of DateTimeField or copy.kind is one of 'year', 'quarter', 'month', 'week', 'day', or 'date', raise a ValueError. RESULT copy]
+            [COMMAND Return the validated copy expression. RESULT copy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: field is not an instance of DateField or TimeField (DateTimeField is accepted because it is a DateField subclass).]
+        [LOG "AssertionError: '<field.name>' isn't a DateField, TimeField, or DateTimeField."]
+        [THROW AssertionError "The lhs field of the resolved expression is not a supported date/time field."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: copy.output_field is not an instance of DateField, DateTimeField, or TimeField.]
+        [LOG "ValueError: output_field must be either DateField, TimeField, or DateTimeField."]
+        [THROW ValueError "The resolved expression's output_field is not a supported date/time field."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: type(field) is exactly DateField and, with short-circuit OR, output_field is an instance of DateTimeField or copy.kind is one of 'hour', 'minute', 'second', or 'time'.]
+        [LOG "ValueError: Cannot truncate DateField '<field.name>' to '<the output field class name if has_explicit_output_field is truthy, otherwise DateTimeField>'."]
+        [THROW ValueError "A DateField cannot be truncated to DateTimeField or to a time granularity."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: The preceding DateField check did not raise, field is an instance of TimeField, and, with short-circuit OR, output_field is an instance of DateTimeField or copy.kind is one of 'year', 'quarter', 'month', 'week', 'day', or 'date'.]
+        [LOG "ValueError: Cannot truncate TimeField '<field.name>' to '<the output field class name if has_explicit_output_field is truthy, otherwise DateTimeField>'."]
+        [THROW ValueError "A TimeField cannot be truncated to DateTimeField or to a date granularity."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes the expression object by storing the kind attribute and forwarding the expression, output field, timezone, daylight-saving-time flag, and extra keyword arguments to the parent initializer." __init__]
+    [INPUTS]
+        <REF> expression </REF>: object "The expression forwarded to the parent initializer."
+        <REF> kind </REF>: object "The kind value assigned to self.kind."
+        <REF> output_field </REF>: object "Optional output field forwarded to the parent initializer; defaults to None."
+        <REF> tzinfo </REF>: object "Optional timezone information forwarded to the parent initializer; defaults to None."
+        <REF> is_dst </REF>: object "Optional daylight-saving-time flag forwarded to the parent initializer; defaults to None."
+        <REF> extra </REF>: dict "Additional keyword arguments forwarded to the parent initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the kind parameter to the instance attribute self.kind. RESULT self.kind]
+            [COMMAND Invoke the parent class initializer with expression passed positionally and output_field, tzinfo, is_dst, and all extra keyword arguments forwarded as keyword arguments. RESULT parent_initializer_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS TruncYear
+
+# CLASS TruncQuarter
+
+# CLASS TruncMonth
+
+# CLASS TruncWeek
+
+# CLASS TruncDay
+
+# CLASS TruncDate
+
+[DEFINE_WORKER: "Builds the backend-specific SQL fragment and parameters needed to cast the left-hand side expression to a date, preserving the original compiled parameters." as_sql]
+    [INPUTS]
+        <REF> compiler </REF>: SQLCompiler "The Django SQL compiler used to compile the left-hand side expression."
+        <REF> connection </REF>: DatabaseConnection "The database connection whose backend operations provide the date cast SQL."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql, lhs_params </REF>: tuple "A tuple containing the generated SQL string that casts the left-hand side to a date, and the compiled parameters for that SQL."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compile the left-hand side expression using the compiler, unpacking the returned SQL fragment and parameters into lhs and lhs_params. RESULT lhs, lhs_params]
+            [COMMAND Evaluate settings.USE_TZ; if true, set tzname to timezone.get_current_timezone_name(), otherwise set tzname to None. RESULT tzname]
+            [COMMAND Build the backend-specific SQL that casts the lhs expression to a date by calling connection.ops.datetime_cast_date_sql(lhs, tzname). RESULT sql]
+            [COMMAND Return the generated sql and the original lhs_params as the final tuple. RESULT sql, lhs_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS TruncTime
+
+[DEFINE_WORKER: "Compiles the left-hand expression, respects the active timezone setting when choosing the timezone name, and returns the database-specific SQL to cast the expression to time rather than truncating it, along with its compiled parameters." as_sql]
+    [INPUTS]
+        <REF> self </REF>: object "The current expression instance; provides the left-hand side expression lhs."
+        <REF> compiler </REF>: object "The SQL compiler used to compile the left-hand side expression."
+        <REF> connection </REF>: object "The database connection whose operations provide the datetime cast-to-time SQL function."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple (sql, lhs_params) containing the SQL fragment that casts lhs to time and the query parameters associated with the compiled lhs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compile self.lhs using compiler.compile and unpack the result into lhs and lhs_params. RESULT lhs, lhs_params]
+            [COMMAND Determine tzname by using timezone.get_current_timezone_name() when settings.USE_TZ is truthy, otherwise using None. RESULT tzname]
+            [COMMAND Compute sql by calling connection.ops.datetime_cast_time_sql with lhs and tzname to cast lhs to time rather than truncating it. RESULT sql]
+            [COMMAND Return the tuple (sql, lhs_params) as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS TruncHour
+
+# CLASS TruncMinute
+
+# CLASS TruncSecond

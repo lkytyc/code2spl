@@ -1,0 +1,94 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: FitnessTracker
+# Fields: height, age, sex, weight, BMI_std
+# Calls: calculate_calorie_intake→condition_judge, condition_judge→get_BMI
+
+## __init__(height: any, weight: any, age: any, sex: str)
+Summary: Initializes a health-profile instance by binding four caller-supplied parameters to instance attributes and setting a hardcoded BMI normal-range lookup table keyed by sex.
+#   height: any — The individual's height value, passed through directly with no transformation
+#   weight: any — The individual's weight value, passed through directly with no transformation
+#   age: any — The individual's age value, passed through directly with no transformation
+#   sex: str — The individual's sex; expected to be exactly 'male' or 'female' to match keys in BMI_std; no validation is performed at assignment time
+1. Bind the parameter height to the instance attribute self.height with no transformation → self.height
+2. Bind the parameter weight to the instance attribute self.weight with no transformation → self.weight
+3. Bind the parameter age to the instance attribute self.age with no transformation → self.age
+4. Bind the parameter sex to the instance attribute self.sex with no transformation; downstream logic implicitly requires this value to be 'male' or 'female' → self.sex
+5. Assign the hardcoded literal list [{"male": [20, 25]}, {"female": [19, 24]}] to self.BMI_std, encoding the inclusive normal BMI range [lower, upper] for each sex key; male lower bound is 20, upper bound is 25; female lower bound is 19, upper bound is 24; this value is identical across all instances and has no runtime dependency → self.BMI_std
+
+## calculate_calorie_intake() → number
+Summary: Calculates daily calorie intake by first computing the Mifflin-St. Jeor BMR based on biological sex, then scaling it by an activity multiplier derived from the result of condition_judge().
+#   → calorie_intake: number — Estimated daily calorie intake in kilocalories after applying the appropriate activity multiplier to BMR
+1. Check whether self.sex equals the string 'male' using exact case-sensitive equality → sex_condition
+2. If sex_condition is true, compute BMR as (10 * self.weight) + (6.25 * self.height) - (5 * self.age) + 5 (male constant) → BMR
+3. If sex_condition is false, compute BMR as (10 * self.weight) + (6.25 * self.height) - (5 * self.age) - 161 (female constant) → BMR
+4. Call self.condition_judge() to obtain the activity level indicator; compare the return value to the integer 1 using exact equality → activity_condition_sedentary
+5. If activity_condition_sedentary is true, set calorie_intake to BMR * 1.2 (sedentary lifestyle multiplier) → calorie_intake
+6. If activity_condition_sedentary is false, call self.condition_judge() a second time and compare the new return value to the integer -1 using exact equality → activity_condition_active
+7. If activity_condition_active is true, set calorie_intake to BMR * 1.6 (active lifestyle multiplier) → calorie_intake
+8. If activity_condition_active is false (else branch), set calorie_intake to BMR * 1.4 (moderate lifestyle multiplier) → calorie_intake
+9. Return calorie_intake → calorie_intake
+   ? Compute BMR using the female Mifflin-St. Jeor formula: (10 * self.weight) + (6.25 * self.height) - (5 * self.age) - 161
+   ? Set calorie_intake to BMR * 1.4, treating the unrecognized activity indicator as a moderate lifestyle by default
+   ? The second call to self.condition_judge() is evaluated independently; if its return value is -1 regardless of what the first call returned, set calorie_intake to BMR * 1.6
+
+## condition_judge(self: object) → integer
+Summary: Classifies a person's BMI as above normal (1), below normal (-1), or within the normal range (0) by comparing the computed BMI against a sex-appropriate reference range.
+#   self: object — Instance providing get_BMI(), sex (string), and BMI_std (list of two dicts with keys 'male' and 'female', each mapping to a two-element numeric range [lower, upper])
+#   → result: integer — 1 if BMI strictly exceeds the upper bound, -1 if BMI is strictly below the lower bound, or 0 if BMI falls within the closed interval [lower, upper]
+1. Call self.get_BMI() and assign the return value to BMI; no transformation or null guard is applied at the call site → BMI
+2. Check whether self.sex equals the string 'male' exactly → sex_is_male
+3. If sex_is_male is true, assign self.BMI_std[0]['male'] to BMI_range; otherwise assign self.BMI_std[1]['female'] to BMI_range (any value of self.sex that is not 'male' — including None or unexpected strings — falls to the female branch) → BMI_range
+4. If BMI is strictly greater than BMI_range[1] (upper bound exclusive of 'too fat' boundary), return 1 immediately → early_return_1
+5. Else if BMI is strictly less than BMI_range[0] (lower bound exclusive of 'too thin' boundary), return -1 immediately → early_return_minus1
+6. Otherwise (BMI is within the closed interval [BMI_range[0], BMI_range[1]], inclusive of both boundary values), return 0 → return_0
+
+## get_BMI() → float
+Summary: Computes and returns the Body Mass Index by dividing the instance's weight by the square of its height.
+#   → bmi: float — The computed BMI value as a float (Python 3 true division); not stored on the instance, returned directly to the caller
+1. Read self.height and compute its square using exponentiation (self.height ** 2); exponentiation is evaluated first due to operator precedence → height_squared
+2. Divide self.weight by height_squared using Python 3 true division to produce a float BMI value → bmi
+3. Return bmi directly to the caller without storing it on the instance or producing any side effects → return_value
+   ! log: "Division by zero: self.height evaluated to 0, making height_squared equal to 0 and causing the division to fail"
+   ! raise: ZeroDivisionError "Raised by Python when self.weight is divided by a height_squared value of 0; not caught here and propagates to the caller"
+   ! log: "Type mismatch: the exponentiation or division operator received a non-numeric operand"
+   ! raise: TypeError "Raised by Python when the ** or / operator is applied to an incompatible type; propagates to the caller"
+   ! log: "Missing attribute: one of the required instance attributes does not exist on self"
+   ! raise: AttributeError "Raised by Python when attribute lookup on self fails because weight or height was never set; propagates to the caller"
+

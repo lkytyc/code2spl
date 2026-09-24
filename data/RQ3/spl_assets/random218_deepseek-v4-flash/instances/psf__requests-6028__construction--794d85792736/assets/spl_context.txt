@@ -1,0 +1,1072 @@
+# FILE: requests/utils.py
+[DEFINE_WORKER: "Conditionally converts a dictionary-like object to its items view when the object has an items attribute, then returns the resulting value." dict_to_sequence]
+    [INPUTS]
+        <REF> d </REF>: object "Input object to normalize; expected to be dictionary-like or already an iterable sequence."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> d </REF>: object "The original d if it had no items attribute, or a dict_items view of the dictionary if it did."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the object d has an attribute named 'items'. RESULT has_items_attr]
+            [COMMAND If has_items_attr is true, within the if block, call d.items() and rebind d to the returned items view. RESULT d]
+            [COMMAND Return d. RESULT d]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the remaining length of an object by subtracting its current position from its total length, using __len__, len, or file descriptor size, and returning at least zero." super_len]
+    [INPUTS]
+        <REF> o </REF>: object "Object whose effective remaining length is to be computed; may be sized, expose a len attribute, or be file-like."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> remaining_length </REF>: integer "max(0, total_length - current_position)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize total_length to None and current_position to 0. RESULT total_length, current_position]
+            [COMMAND If o has the __len__ attribute, set total_length to len(o). RESULT total_length]
+            [COMMAND Else if o does not have __len__ but has the len attribute, set total_length to the raw value of o.len. RESULT total_length]
+            [COMMAND Else if o does not have __len__ or len but has the fileno attribute, call o.fileno() and assign the result to fileno. RESULT fileno]
+            [COMMAND If the o.fileno() call raises io.UnsupportedOperation or AttributeError, leave total_length unchanged. RESULT total_length]
+            [COMMAND If the o.fileno() call succeeds, set total_length to os.fstat(fileno).st_size. RESULT total_length]
+            [COMMAND Within the successful fileno branch, if 'b' is not in o.mode, issue a FileModeWarning with the message 'Requests has determined the content-length for this request using the binary size of the file: however, the file has been opened in text mode (i.e. without the 'b' flag in the mode). This may lead to an incorrect content-length. In Requests 3.0, support will be removed for files in text mode.' RESULT warning_emitted]
+            [COMMAND If o has the tell method, attempt to set current_position to o.tell(); otherwise keep current_position at 0. RESULT current_position]
+            [COMMAND If o.tell() raises OSError or IOError, set current_position to total_length only if total_length is not None; otherwise keep current_position at 0. RESULT current_position]
+            [COMMAND If o.tell() succeeds and o has the seek method and total_length is None, perform o.seek(0, 2), set total_length to o.tell(), then perform o.seek(current_position or 0). RESULT total_length]
+            [COMMAND If the seek/tell sequence in the previous step raises OSError or IOError, set total_length to 0. RESULT total_length]
+            [COMMAND If total_length is None, set total_length to 0. RESULT total_length]
+            [COMMAND Return max(0, total_length - current_position). RESULT remaining_length]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Finds a netrc file from the NETRC environment variable or default NETRC_FILES locations, looks up the URL's host, and returns the netrc authentication tuple (login, password) if found; otherwise returns None, with optional raising of parsing and I/O errors." get_netrc_auth]
+    [INPUTS]
+        <REF> url </REF>: str "URL string whose netloc host is used to look up netrc credentials."
+        <REF> raise_errors </REF>: bool "If True, re-raise netrc parsing and I/O errors instead of silently skipping netrc authentication; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple | None "Returns a (login, password) tuple if netrc authentication is found, otherwise returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the NETRC environment variable into netrc_file using os.environ.get('NETRC'), defaulting to None when the variable is not set. RESULT netrc_file]
+            [COMMAND If netrc_file is not None, set netrc_locations to a tuple containing netrc_file; otherwise set netrc_locations to a lazy generator over '~/{}'.format(f) for each f in NETRC_FILES. RESULT netrc_locations]
+            [COMMAND Inside the outer try block that also catches ImportError and AttributeError, import netrc and NetrcParseError from the netrc module, and initialize netrc_path to None. RESULT netrc_path]
+            [COMMAND For each f in netrc_locations, expand the user path with os.path.expanduser(f) and, if the expanded path loc exists, assign netrc_path = loc and break out of the loop. RESULT netrc_path]
+            [COMMAND If netrc_path is still None after the loop, return None early. RESULT None]
+            [COMMAND Parse the input url with urlparse(url) and store the parsed result as ri. RESULT ri]
+            [COMMAND Set splitstr to b':' and, if url is a str, decode it to ':'; then set host to ri.netloc.split(splitstr)[0] to strip the port number. RESULT host]
+            [COMMAND Inside the inner try block that catches NetrcParseError and IOError, call netrc(netrc_path).authenticators(host) and store the result in _netrc. RESULT _netrc]
+            [COMMAND If _netrc is truthy, set login_i to 0 when _netrc[0] is truthy, otherwise to 1, and return the tuple (_netrc[login_i], _netrc[2]). RESULT auth_tuple]
+            [COMMAND After the try/except structure, if no explicit return was executed, return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: os.path.expanduser(f) raises KeyError while iterating netrc_locations because $HOME is undefined or the user lookup fails.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The inner try block raises NetrcParseError or IOError and raise_errors is False.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Suppress the netrc parsing or I/O exception, skip netrc authentication, and fall through to the implicit return of None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The outer try block raises ImportError or AttributeError while importing netrc or accessing netrc attributes.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ignore the exception for App Engine compatibility and fall through to the implicit return of None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The inner try block raises NetrcParseError or IOError and raise_errors is True.]
+        [LOG "Netrc file parsing failed or an I/O error occurred while reading the netrc file."]
+        [THROW NetrcParseError or IOError "Re-raises the original exception from netrc file parsing or file access because raise_errors is True."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Tries to guess the filename of the given object by returning os.path.basename(obj.name) when obj.name is a non-empty basestring that does not start with '<' or end with '>'; otherwise it returns None." guess_filename]
+    [INPUTS]
+        <REF> obj </REF>: object "Object whose 'name' attribute is read using getattr with a default of None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string or None "os.path.basename(obj.name) if the guard condition is satisfied; otherwise None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the 'name' attribute from obj using getattr(obj, 'name', None) and store it as name. RESULT name]
+            [COMMAND Evaluate the short-circuit guard condition in order: name must be truthy, name must be an instance of basestring, name[0] must not be '<', and name[-1] must not be '>'. If all conditions are true, return os.path.basename(name) immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The guard condition is false because name is falsy, is not a basestring, starts with '<', or ends with '>'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fall through to the end of the function and return None implicitly. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Given a path that may refer to a file inside a zip archive, this function returns the path unchanged if it exists, otherwise finds the containing zip archive and returns the path to an extracted temporary copy of the requested member (or the original path if no valid archive member is found)." extract_zipped_paths]
+    [INPUTS]
+        <REF> path </REF>: str "Filesystem path to test and possibly resolve through a zip archive member."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Existing path, original path, or extracted temporary file path."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split the original path into archive (head) and member (tail) using os.path.split(path). RESULT archive_member]
+            [COMMAND While archive is non-empty and archive does not exist on the filesystem, repeatedly split archive into a new archive and prefix; if prefix is empty, break; otherwise prepend prefix to member using '/'. This climbs to the nearest existing ancestor path. RESULT archive_member]
+            [COMMAND Verify that the resolved archive path is a valid zip file using zipfile.is_zipfile(archive). RESULT archive_is_zipfile]
+            [COMMAND Open the zip archive with zipfile.ZipFile(archive) and store the ZipFile object. RESULT zip_file]
+            [COMMAND Verify that member is present in zip_file.namelist(). RESULT member_exists]
+            [COMMAND Get the system temporary directory using tempfile.gettempdir(). RESULT tmp]
+            [COMMAND Set extracted_path to os.path.join(tmp, member.split('/')[-1]). RESULT extracted_path]
+            [COMMAND If extracted_path does not already exist, atomically open it with atomic_open(extracted_path) and write the full content of member read from the zip archive into it. RESULT extracted_path]
+            [COMMAND Return extracted_path. RESULT extracted_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The original path already exists on the filesystem.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the original path unchanged as a valid existing path. RESULT path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The resolved archive is not a valid zip file (zipfile.is_zipfile(archive) is false).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the original path unchanged. RESULT path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The resolved member is not present in the zip archive's namelist.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the original path unchanged. RESULT path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a temporary file next to the destination, yields it to the caller as a writable binary file, and atomically replaces the destination on success; on any failure, removes the temporary file and re-raises the original exception." atomic_open]
+    [INPUTS]
+        <REF> filename </REF>: str "Destination file path that will be atomically replaced after the yielded temporary file is written."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Generator "Generator object that yields a writable binary file object; completing the generator atomically replaces filename with the temporary file."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a generator object for atomic_open(filename); do not execute the body until the generator is first advanced. RESULT generator_object]
+            [COMMAND On first advance, determine replacer by setting it to os.rename if sys.version_info[0] == 2; otherwise set it to os.replace. RESULT replacer]
+            [COMMAND On first advance, create a temporary file in the same directory as filename using tempfile.mkstemp(dir=os.path.dirname(filename)) and assign the returned file descriptor and path to tmp_descriptor and tmp_name. RESULT tmp_descriptor, tmp_name]
+            [COMMAND Enter the try block and open tmp_descriptor in binary write mode using os.fdopen(tmp_descriptor, 'wb') as tmp_handler. RESULT tmp_handler]
+            [COMMAND Inside the with block, yield tmp_handler to the caller; after the caller resumes, exit the with block and close tmp_handler. RESULT tmp_handler]
+            [COMMAND After the with block completes, call replacer(tmp_name, filename) to atomically replace filename with the temporary file. RESULT replacement_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Any BaseException occurs while opening tmp_descriptor, while the generator is suspended at the yield, while exiting the with block, or while calling replacer(tmp_name, filename).]
+        [LOG "Atomic write failed; removing temporary file tmp_name with os.remove(tmp_name)."]
+        [THROW BaseException "The original exception is re-raised unchanged after the temporary file is removed."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a mapping or iterable of key-value pairs into an OrderedDict, returns None for None input, and rejects unsupported scalar built-in types with ValueError." from_key_val_list]
+    [INPUTS]
+        <REF> value </REF>: object "Object to test and convert; may be None, a mapping, or an iterable of 2-tuples."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ordered_dict </REF>: OrderedDict "OrderedDict built from value, or None if value is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether value is None. RESULT value_is_none]
+            [COMMAND If value is not None, check whether value is an instance of str, bytes, bool, or int. RESULT is_unsupported_scalar]
+            [COMMAND If value is not None and is not a str, bytes, bool, or int, return OrderedDict(value). RESULT ordered_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without further processing. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: isinstance(value, (str, bytes, bool, int))]
+        [LOG "ValueError: cannot encode objects that are not 2-tuples"]
+        [THROW ValueError "Raised when value is a string, bytes, boolean, or integer because these scalar types cannot be encoded as key-value pairs."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts an object to a list of key-value tuples, returning None for None input and raising ValueError for str, bytes, bool, or int inputs." to_key_val_list]
+    [INPUTS]
+        <REF> value </REF>: object "Object to convert into a list of (key, value) tuples; can be a Mapping, an iterable of 2-tuples, or None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list|None "List of key-value tuples, or None if input is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If value is a Mapping, convert it to an items view RESULT value]
+            [COMMAND Convert value to a list using the list() constructor RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: value is an instance of str, bytes, bool, or int]
+        [LOG "ValueError: cannot encode objects that are not 2-tuples"]
+        [THROW ValueError "Raised to indicate that the value is not suitable for conversion to 2-tuples."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a list header string into a list of items, removing surrounding double quotes from quoted items while preserving item order and case sensitivity." parse_list_header]
+    [INPUTS]
+        <REF> value </REF>: str "A string containing a list header as described by RFC 2068 Section 2."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of parsed header items; quoted items are unquoted using unquote_header_value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize result as an empty list. RESULT result]
+            [COMMAND For each item produced by _parse_list_header(value), if item[:1] == item[-1:] == '"', replace item with unquote_header_value(item[1:-1]). RESULT item]
+            [COMMAND Within the same loop over _parse_list_header(value), append the current item to result on every iteration. RESULT result]
+            [COMMAND Return result after the loop completes. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses an RFC 2068-style dictionary header string into a dictionary, mapping keys without '=' to None and unquoting quoted values." parse_dict_header]
+    [INPUTS]
+        <REF> value </REF>: str "A string containing a dictionary header as described by RFC 2068 Section 2."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "A dictionary mapping parsed header keys to values; keys without an '=' sign map to None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize result as an empty dictionary. RESULT result]
+            [COMMAND For each item in the list returned by _parse_list_header(value), using the original header string value, process item according to its content. RESULT item]
+            [COMMAND Within the for loop over item, if '=' is not present in item, set result[item] to None and continue to the next iteration. RESULT result]
+            [COMMAND Within the for loop over item, when '=' is present, split item on the first '=' only, assigning the part before the separator to name and the part after it to value. RESULT name, value]
+            [COMMAND Within the for loop over item, if value starts and ends with a double quote character (equivalently, the first character value[:1] equals the last character value[-1:] and that character is a double quote), take value[1:-1], pass it to unquote_header_value, and assign the decoded result back to value. RESULT value]
+            [COMMAND Within the for loop over item, set result[name] to the processed value. RESULT result]
+            [COMMAND After the loop completes, return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Unquotes a header value by removing surrounding double quotes and unescaping backslash sequences, while preserving UNC-style filenames from unescaping when is_filename is true." unquote_header_value]
+    [INPUTS]
+        <REF> value </REF>: str "The header value to unquote."
+        <REF> is_filename </REF>: bool "Whether the value is a filename; defaults to false. If true, a quoted value starting with two backslashes is preserved as a UNC path."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> unquoted_value </REF>: str "The unquoted and, where appropriate, unescaped header value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the short-circuit outer condition: value is truthy and its first and last characters are both double quotes. RESULT is_quoted]
+            [COMMAND If is_quoted is true, remove the surrounding double quotes by assigning value = value[1:-1]. RESULT value]
+            [COMMAND Determine whether the early unescape return applies: is_quoted must be true and either not is_filename or the current value does not start with two backslashes. RESULT should_unescape]
+            [COMMAND If should_unescape is true, return value after replacing every occurrence of two consecutive backslashes with one backslash, and every occurrence of a backslash immediately followed by a double quote with just a double quote. RESULT early_return_value]
+            [COMMAND Return value as the final result after the outer if block. RESULT final_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a CookieJar into a dictionary mapping each cookie's name to its value." dict_from_cookiejar]
+    [INPUTS]
+        <REF> cj </REF>: CookieJar "CookieJar object to extract cookies from."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Dictionary mapping cookie names to cookie values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary named cookie_dict. RESULT cookie_dict]
+            [COMMAND For each cookie in CookieJar cj, set cookie_dict[cookie.name] to cookie.value. RESULT cookie_dict]
+            [COMMAND Return cookie_dict. RESULT cookie_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Populates the supplied CookieJar with cookies from a dictionary and returns the resulting CookieJar." add_dict_to_cookiejar]
+    [INPUTS]
+        <REF> cj </REF>: CookieJar "CookieJar to insert cookies into."
+        <REF> cookie_dict </REF>: dict "Dictionary of key/value pairs to insert into the CookieJar."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cookie_jar </REF>: CookieJar "The CookieJar populated with cookies from cookie_dict."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of calling cookiejar_from_dict(cookie_dict, cj), where cookiejar_from_dict populates cj with the cookie entries from cookie_dict, creating a new CookieJar first if cj is None, and returns the populated CookieJar. RESULT cookie_jar]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Scans HTML or XML content for character encoding declarations and returns the identified encoding names in meta charset, meta pragma, and XML declaration order." get_encodings_from_content]
+    [INPUTS]
+        <REF> content </REF>: string "Content string, documented in the original method as a bytestring, to search for charset declarations."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "List of encoding names extracted from the content; empty if no charset declarations are found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Issue a DeprecationWarning, with a message stating that get_encodings_from_content will be removed in requests 3.0, referencing issue #2266 and noting the warning should only appear once. RESULT warning_issued]
+            [COMMAND Compile the HTML meta charset regex pattern r'<meta.*?charset=["\']*(.+?)["\'>]' with the case-insensitive flag into charset_re. RESULT charset_re]
+            [COMMAND Compile the HTML meta pragma charset regex pattern r'<meta.*?content=["\']*;?charset=(.+?)["\'>]' with the case-insensitive flag into pragma_re. RESULT pragma_re]
+            [COMMAND Compile the XML declaration encoding regex pattern r'^<\?xml.*?encoding=["\']*(.+?)["\'>]' into xml_re. RESULT xml_re]
+            [COMMAND Find all non-overlapping charset captures in content using charset_re. RESULT charset_matches]
+            [COMMAND Find all non-overlapping charset captures in content using pragma_re. RESULT pragma_matches]
+            [COMMAND Find all non-overlapping charset captures in content using xml_re. RESULT xml_matches]
+            [COMMAND Return the concatenation of charset_matches, pragma_matches, and xml_matches in that order. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a Content-Type header into a trimmed content type string and a dictionary of parameters, where parameter names are lowercased and parameters without an '=' are treated as boolean flags with value True." _parse_content_type_header]
+    [INPUTS]
+        <REF> header </REF>: string "Raw Content-Type header string containing semicolon-separated content type and parameters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> content_type, params_dict </REF>: tuple[str, dict] "Tuple containing the trimmed content type and the parsed parameter dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split the input header string on semicolons and assign the resulting list to tokens. RESULT tokens]
+            [COMMAND Assign content_type to tokens[0].strip() and params to tokens[1:]. RESULT content_type, params]
+            [COMMAND Initialize params_dict as an empty dictionary and items_to_strip as the string containing double quote, single quote, and space. RESULT params_dict, items_to_strip]
+            [COMMAND For each param in params, strip leading and trailing whitespace from param; if the stripped param is empty, skip it. RESULT param]
+            [COMMAND Within the loop for a non-empty param, set key to param and value to True. RESULT key, value]
+            [COMMAND Within that loop, find the first '=' in param; if found, set key to the substring before the first '=' stripped using items_to_strip, and value to the substring after the first '=' stripped using items_to_strip. RESULT key, value]
+            [COMMAND Within that loop, store params_dict[key.lower()] = value. RESULT params_dict]
+            [COMMAND Return the tuple containing content_type and params_dict. RESULT content_type, params_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines the character encoding from an HTTP Content-Type header by using an explicit charset parameter, defaulting text media types to ISO-8859-1 and application/json to UTF-8, and returning None when the header is absent or no rule matches." get_encoding_from_headers]
+    [INPUTS]
+        <REF> headers </REF>: dictionary "HTTP headers dictionary from which the method reads the 'content-type' key using a case-sensitive lookup."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> encoding </REF>: string or None "The detected encoding string, or None when the Content-Type header is absent/falsy or no encoding rule matches."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the 'content-type' header from the headers dictionary and assign its value to content_type; the lookup is case-sensitive and returns None if the exact key is absent. RESULT content_type]
+            [COMMAND If content_type is falsy (None or empty string), execute alternative_flow_0 and discontinue the remaining steps. RESULT alternative_flow_0]
+            [COMMAND Parse content_type using _parse_content_type_header, assigning the first returned tuple value to content_type and the second returned tuple value to params. RESULT content_type, params]
+            [COMMAND If params contains the exact key 'charset', execute alternative_flow_1 and discontinue the remaining steps. RESULT alternative_flow_1]
+            [COMMAND If the parsed content_type string contains the exact case-sensitive substring 'text', execute alternative_flow_2 and discontinue the remaining steps. RESULT alternative_flow_2]
+            [COMMAND If the parsed content_type string contains the exact case-sensitive substring 'application/json', execute alternative_flow_3 and discontinue the remaining steps. RESULT alternative_flow_3]
+            [COMMAND If no alternative flow was executed, fall through and return None implicitly. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: content_type is falsy (None, empty string, or otherwise false) after the initial header lookup.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None because no Content-Type header is available from which to derive an encoding. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: params contains the exact key 'charset'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of params['charset'] after stripping leading and trailing single or double quote characters. RESULT charset_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The parsed content_type string contains the exact case-sensitive substring 'text'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return 'ISO-8859-1' as the default encoding for text media types. RESULT iso_8859_1_encoding]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The parsed content_type string contains the exact case-sensitive substring 'application/json'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return 'utf-8' as the assumed encoding for application/json content, based on RFC 4627 when no charset was set. RESULT utf8_encoding]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Streams decoded Unicode from an iterator according to r.encoding, passing chunks through unchanged when encoding is None and incrementally decoding them otherwise." stream_decode_response_unicode]
+    [INPUTS]
+        <REF> iterator </REF>: iterator "Source of chunks or items to stream decode or yield through unchanged."
+        <REF> r </REF>: object "Response-like object whose encoding attribute determines the incremental decoder to use."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> yielded </REF>: generator "Yields unmodified items from iterator when r.encoding is None; otherwise yields non-empty decoded strings from the incremental decoder, including the final flushed output."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If r.encoding is not None, create an incremental decoder by calling codecs.getincrementaldecoder(r.encoding)(errors='replace') and assign it to decoder. RESULT decoder]
+            [COMMAND For each chunk in iterator, decode the chunk with decoder.decode(chunk), assign the result to rv, and if rv is truthy, yield rv. RESULT rv]
+            [COMMAND After the for loop finishes, call decoder.decode(b'', final=True) to flush any remaining buffered data, assign the result to rv, and if rv is truthy, yield rv. RESULT rv]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: r.encoding is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each item in iterator, yield item. RESULT item]
+            [COMMAND After the for loop exhausts iterator, execute return to stop the generator. RESULT generator_termination]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over a string in consecutive, non-overlapping chunks of a given maximum length, yielding each slice and allowing the final slice to be shorter." iter_slices]
+    [INPUTS]
+        <REF> string </REF>: str "The source string to be sliced."
+        <REF> slice_length </REF>: int | None "Desired chunk size. If None or non-positive, it is replaced by the length of string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> yielded_slices </REF>: Iterator[str] "An iterator of consecutive non-overlapping substrings of string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set pos to 0. RESULT pos]
+            [COMMAND If slice_length is None or slice_length <= 0, set slice_length to len(string). RESULT slice_length]
+            [COMMAND While pos < len(string), execute the loop body below. RESULT pos]
+            [COMMAND Within the while loop, yield the substring of string from pos to pos + slice_length, clamped to the end of the string. RESULT chunk]
+            [COMMAND Within the while loop, after yielding, increase pos by slice_length. RESULT pos]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Decodes the response content into unicode by first using the encoding from response headers and then falling back to replacement decoding or to the raw content when decoding is impossible." get_unicode_from_response]
+    [INPUTS]
+        <REF> r </REF>: Response "Response object containing the headers used to determine the encoding and the content to decode."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Unicode string decoded from the response content, or the raw response content if the fallback decoding raises TypeError."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit a DeprecationWarning with the message that get_unicode_from_response will be removed in requests 3.0, referencing issue #2266 and noting that this warning should only appear once RESULT warning_emitted]
+            [COMMAND Initialize tried_encodings as an empty list RESULT tried_encodings]
+            [COMMAND Call get_encoding_from_headers(r.headers) and store the returned encoding in encoding RESULT encoding]
+            [COMMAND If encoding is truthy, try to return str(r.content, encoding); a successful return exits the method immediately RESULT decoded_content]
+            [COMMAND If the first decoding attempt is skipped or raises UnicodeError, move to the fallback try block and try to return str(r.content, encoding, errors='replace'); a successful return exits the method immediately RESULT decoded_content]
+            [COMMAND If the fallback decoding raises TypeError, return r.content directly RESULT r.content]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When encoding is truthy but str(r.content, encoding) raises UnicodeError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append encoding to tried_encodings and then continue with the fallback decoding step RESULT tried_encodings]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When encoding is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the first decoding attempt and proceed directly to the fallback decoding step RESULT fallback]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Decodes percent-escape sequences in a URI only when the escaped character is an unreserved character, leaving reserved, illegal, and non-ASCII percent-escapes encoded." unquote_unreserved]
+    [INPUTS]
+        <REF> uri </REF>: str "Input URI string that may contain percent-escape sequences."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The URI string with percent-escape sequences for unreserved characters decoded and all other percent-escapes preserved."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Split the input uri string on every literal '%' character, not including the '%' separators in the resulting substrings, and assign the list to parts. RESULT parts]
+            [COMMAND Begin a for loop over i using range(1, len(parts)), so i runs from 1 to len(parts)-1 inclusive and parts[0] is skipped; evaluate the range once when the loop starts. RESULT i]
+            [COMMAND Within the for loop over i, extract the first two characters of parts[i] into h using parts[i][0:2]; if parts[i] has fewer than two characters, h contains that shorter suffix. RESULT h]
+            [COMMAND Within the for loop over i, evaluate the condition len(h) == 2 and h.isalnum(), applying short-circuit evaluation so h.isalnum() is called only when len(h) equals 2. RESULT is_potential_escape]
+            [COMMAND Within the for loop over i, in the true branch when is_potential_escape is true, attempt to interpret h as a base-16 integer with int(h, 16) and convert that integer to a character with chr, assigning the character to c. RESULT c]
+            [COMMAND Within the for loop over i, after c is successfully decoded, determine whether c is a member of UNRESERVED_SET. RESULT is_unreserved]
+            [COMMAND Within the for loop over i, when is_unreserved is true, replace parts[i] with c plus the remaining characters after the two hex digits, i.e. parts[i] = c + parts[i][2:]. RESULT parts]
+            [COMMAND After the loop completes, join all elements of parts with an empty separator using ''.join(parts) and return the resulting string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over i, len(h) is not 2 or h.isalnum() is false after short-circuit evaluation.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the for loop over i, restore the '%' character that was removed by split by setting parts[i] = '%' + parts[i], then continue to the next iteration. RESULT parts]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over i, h is valid hexadecimal, but the decoded character c is not in UNRESERVED_SET.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the for loop over i, leave the escape sequence encoded by setting parts[i] = '%' + parts[i], then continue to the next iteration. RESULT parts]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within the for loop over i, int(h, 16) raises ValueError because h is exactly two alphanumeric characters but not a valid hexadecimal string.]
+        [LOG "Invalid percent-escape sequence: the two characters following '%' are not valid hexadecimal."]
+        [THROW InvalidURL "Raised when a percent-escape sequence is invalid because the two characters after '%' are alphanumeric but not valid hexadecimal; this aborts the loop and propagates out of the function."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Re-quotes a URI by first unquoting unreserved characters and then quoting illegal characters while preserving allowed reserved characters and percent signs, with a fallback that quotes the original URI if unquoting fails." requote_uri]
+    [INPUTS]
+        <REF> uri </REF>: string "URI to re-quote."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> quoted_uri </REF>: string "Fully and consistently quoted URI."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set safe_with_percent to the string "!#$%&'()*+,/:;=?@[]~". RESULT safe_with_percent]
+            [COMMAND Set safe_without_percent to the string "!#$&'()*+,/:;=?@[]~". RESULT safe_without_percent]
+            [COMMAND Within the try block, call unquote_unreserved(uri), then pass the result to quote with safe=safe_with_percent, and return the quoted string. RESULT quoted_uri]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The call to unquote_unreserved(uri) raises InvalidURL.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call quote(uri, safe=safe_without_percent) and return the resulting string. RESULT quoted_uri]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether an IPv4 address belongs to a network subnet by comparing the masked IP address with the masked network address." address_in_network]
+    [INPUTS]
+        <REF> ip </REF>: string "IPv4 address in dotted-quad notation, e.g. '192.168.1.1'"
+        <REF> net </REF>: string "IPv4 network in CIDR notation, e.g. '192.168.1.0/24'"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if the given IP address belongs to the given network subnet; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the input IP address string ip to its 32-bit integer representation using socket.inet_aton and struct.unpack, storing the result in ipaddr. RESULT ipaddr]
+            [COMMAND Split the CIDR string net on '/' into network address netaddr and prefix length bits. RESULT netaddr, bits]
+            [COMMAND Convert prefix length bits to an integer, derive the dotted-quad netmask using dotted_netmask, then convert that netmask to a 32-bit integer netmask. RESULT netmask]
+            [COMMAND Convert netaddr to a 32-bit integer and bitwise AND it with netmask to compute the normalized network address. RESULT network]
+            [COMMAND Return the boolean result of (ipaddr & netmask) == (network & netmask). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts a CIDR prefix length into a dotted-decimal IPv4 netmask by building a 32-bit bitmask and formatting it with socket.inet_ntoa." dotted_netmask]
+    [INPUTS]
+        <REF> mask </REF>: int "CIDR prefix length from 0 to 32; the method does not explicitly validate this range."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "Dotted-decimal IPv4 netmask string corresponding to the prefix length."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the integer bitmask using bits = 0xffffffff ^ ((1 << (32 - mask)) - 1). This keeps the highest mask bits set and clears the lower bits, so mask=24 produces 0xffffff00, mask=32 produces 0xffffffff, and mask=0 produces 0. RESULT bits]
+            [COMMAND Pack bits as an unsigned 32-bit integer in network byte order using struct.pack('>I', bits). RESULT packed_bytes]
+            [COMMAND Convert packed_bytes to a dotted-decimal string using socket.inet_ntoa(packed_bytes) and return the resulting string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the input string is a valid IPv4 address by attempting socket.inet_aton and returning False if socket.error is raised." is_ipv4_address]
+    [INPUTS]
+        <REF> string_ip </REF>: string "IP address string to validate."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if string_ip is a valid IPv4 address; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Try to parse string_ip as an IPv4 address by calling socket.inet_aton(string_ip) and discarding the returned packed address. RESULT socket_result]
+            [COMMAND If socket.inet_aton completes without raising socket.error, return True. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: socket.inet_aton(string_ip) raises socket.error]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the except socket.error block, return False. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a string is a valid IPv4 CIDR notation by requiring exactly one slash, an integer subnet mask between 1 and 32, and a valid IPv4 address before the slash." is_valid_cidr]
+    [INPUTS]
+        <REF> string_network </REF>: str "The string to validate as an IPv4 CIDR network, e.g. '192.168.1.0/24'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the input is a valid IPv4 CIDR network; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Count the number of '/' characters in string_network and determine whether it is exactly one. RESULT slash_count_ok]
+            [COMMAND In the path where slash_count_ok is true, split string_network on '/' and extract the substring after the slash as the mask portion. RESULT mask_substring]
+            [COMMAND In the path where slash_count_ok is true, convert mask_substring to an integer with int(). RESULT mask_value]
+            [COMMAND In the path where slash_count_ok is true and mask_value was parsed successfully, check that mask_value is at least 1 and at most 32. RESULT mask_range_ok]
+            [COMMAND In the path where slash_count_ok is true and mask_range_ok is true, take the substring before the '/' as the IP portion and validate it by calling socket.inet_aton(ip_substring). RESULT ip_valid]
+            [COMMAND After all validations pass, return True from the method. RESULT return_true]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: string_network.count('/') is not equal to 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False from the method. RESULT early_return_false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: int(mask_substring) raises ValueError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch ValueError and return False from the method. RESULT early_return_false_mask_parse]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: mask_value is less than 1 or greater than 32]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False from the method. RESULT early_return_false_mask_range]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: socket.inet_aton(ip_substring) raises socket.error]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch socket.error and return False from the method. RESULT early_return_false_ip]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets an environment variable just before yielding and restores its previous value after the yield; leaves the environment unchanged when value is None." set_environ]
+    [INPUTS]
+        <REF> env_name </REF>: str "Name of the environment variable to set."
+        <REF> value </REF>: str | None "Value to assign to the environment variable; if None, no environment change is made."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: Generator[None, None, None] "A generator that yields None once while the environment variable change is active."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute whether value is not None and store the boolean result as value_changed. RESULT value_changed]
+            [COMMAND Since value_changed is true, save old_value from os.environ.get(env_name) and then set os.environ[env_name] to value. RESULT old_value]
+            [COMMAND Enter the try block and yield control to the caller, suspending the generator until resumed or closed. RESULT yield_point]
+            [COMMAND In the finally block, if old_value is None, delete os.environ[env_name]; otherwise restore os.environ[env_name] to old_value. RESULT env_restored]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: value_changed is false (value is None)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip saving old_value and skip setting os.environ[env_name]. RESULT no_env_change]
+            [COMMAND Enter the try block and yield control to the caller. RESULT yield_point]
+            [COMMAND In the finally block, take no environment restoration action. RESULT final_noop]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a URL should bypass proxies by checking hostname, IP, and CIDR matches in the supplied or environment-based no_proxy list, then falling back to the platform proxy_bypass routine." should_bypass_proxies]
+    [INPUTS]
+        <REF> url </REF>: string "The URL to check."
+        <REF> no_proxy </REF>: string or null "The explicit no_proxy list, or null to read it from the environment."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if proxies should be bypassed for the URL, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define get_proxy as a lambda that takes k and returns os.environ.get(k) if truthy, otherwise os.environ.get(k.upper()). RESULT get_proxy]
+            [COMMAND Store the caller-provided no_proxy value in no_proxy_arg before any environment fallback. RESULT no_proxy_arg]
+            [COMMAND Resolve no_proxy for later checks: when no_proxy is None, replace it with get_proxy('no_proxy'). RESULT no_proxy]
+            [COMMAND Parse url with urlparse and store the resulting parsed URL in parsed. RESULT parsed]
+            [COMMAND Check whether parsed.hostname is None; the parsed.hostname is None alternative flow handles the early return. RESULT hostname_check]
+            [COMMAND Check whether no_proxy is truthy; the no_proxy truthy alternative flow handles matching entries. RESULT no_proxy_check]
+            [COMMAND Within the set_environ('no_proxy', no_proxy_arg) context, try to assign bypass = proxy_bypass(parsed.hostname). RESULT bypass]
+            [COMMAND Return False as the default result when no alternative flow has returned True. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: no_proxy is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set no_proxy to the result of get_proxy('no_proxy'). RESULT no_proxy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: parsed.hostname is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return True because URLs without hostnames bypass proxies. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: no_proxy is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Rebind no_proxy to a generator yielding non-empty hosts from no_proxy.replace(' ', '').split(','). RESULT no_proxy]
+            [COMMAND When is_ipv4_address(parsed.hostname) is true, iterate over proxy_ip in no_proxy; if is_valid_cidr(proxy_ip) is true and address_in_network(parsed.hostname, proxy_ip) is true, return True; otherwise, if parsed.hostname == proxy_ip, return True. RESULT ipv4_bypass]
+            [COMMAND When is_ipv4_address(parsed.hostname) is false, initialize host_with_port as parsed.hostname, and if parsed.port is truthy append ':{}'.format(parsed.port). RESULT host_with_port]
+            [COMMAND When is_ipv4_address(parsed.hostname) is false, iterate over host in no_proxy and return True if parsed.hostname.endswith(host) or host_with_port.endswith(host). RESULT hostname_bypass]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: proxy_bypass(parsed.hostname) raises TypeError or socket.gaierror]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the exception and set bypass to False. RESULT bypass]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: bypass is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return True. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Return an environment proxy dict, using an empty dict when the URL should bypass proxies and using getproxies() otherwise." get_environ_proxies]
+    [INPUTS]
+        <REF> url </REF>: string "The URL used to determine proxy bypass behavior."
+        <REF> no_proxy </REF>: string or None "Optional proxy bypass list; default is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> proxy_dict </REF>: dict "The environment proxy mapping. Empty dict if the URL should bypass proxies; otherwise the system proxy settings from getproxies()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate should_bypass_proxies(url, no_proxy=no_proxy) and store whether the URL should bypass proxies. RESULT bypass_proxies]
+            [COMMAND If bypass_proxies is true, return an empty dict as the environment proxy mapping. RESULT proxy_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If bypass_proxies is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of getproxies() as the environment proxy mapping. RESULT proxy_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Selects a proxy for a URL by preferring a scheme-and-host match and falling back to scheme-only or catch-all keys." select_proxy]
+    [INPUTS]
+        <REF> url </REF>: string "The URL for which a proxy is being selected."
+        <REF> proxies </REF>: dictionary or None "A dictionary mapping URL schemes or scheme-and-host keys to proxy URLs; may be None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string or None "The selected proxy URL, or None when no matching proxy key exists."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize proxies to an empty dictionary if it is falsy; otherwise keep the existing proxies dictionary. RESULT proxies]
+            [COMMAND Parse the url string with urlparse() and store the parsed result. RESULT urlparts]
+            [COMMAND Check whether urlparts.hostname is None; if it is, branch to the early-return alternative flow. RESULT hostname_is_none]
+            [COMMAND When urlparts.hostname is not None, construct the ordered proxy_keys list containing scheme://hostname, scheme, all://hostname, and all. RESULT proxy_keys]
+            [COMMAND When urlparts.hostname is not None, initialize proxy to None. RESULT proxy]
+            [COMMAND When urlparts.hostname is not None, iterate over proxy_keys in order and for each proxy_key, if proxy_key is a key in proxies, assign proxy = proxies[proxy_key] and break out of the loop. RESULT proxy]
+            [COMMAND When urlparts.hostname is not None, return the final proxy value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: urlparts.hostname is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return proxies.get(urlparts.scheme, proxies.get('all')). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the effective proxy mapping for a request by normalizing the provided proxies and optionally supplementing them from environment proxy settings, unless the URL is excluded by no_proxy." resolve_proxies]
+    [INPUTS]
+        <REF> request </REF>: Request or PreparedRequest "Request object whose url is used to determine the scheme and no_proxy matching."
+        <REF> proxies </REF>: dict or None "Dictionary of schemes or schemes and hosts to proxy URLs; may be None."
+        <REF> trust_env </REF>: bool "Boolean declaring whether to trust environment configs; defaults to True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "Resolved proxy mapping, including the no_proxy key and any environment proxy added only when not bypassed and not already present."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If proxies is None, set proxies to an empty dict; otherwise retain the provided proxies reference. RESULT proxies]
+            [COMMAND Extract the URL string from request.url and store it as url. RESULT url]
+            [COMMAND Parse the URL scheme by calling urlparse(url).scheme and store it as scheme; if url is malformed or empty, scheme may be an empty string. RESULT scheme]
+            [COMMAND Read the value of the 'no_proxy' key from proxies using proxies.get('no_proxy'), defaulting to None if absent. RESULT no_proxy]
+            [COMMAND Create a shallow copy of proxies and store it as new_proxies. RESULT new_proxies]
+            [COMMAND Evaluate the guard condition: trust_env is truthy and, with short-circuit evaluation, should_bypass_proxies(url, no_proxy=no_proxy) returns a false value. If the condition is false, skip the environment-proxy block and proceed directly to the final return. RESULT guard_condition]
+            [COMMAND Within the outer guard-condition branch, call get_environ_proxies(url, no_proxy=no_proxy) and store the returned dictionary as environ_proxies. RESULT environ_proxies]
+            [COMMAND Within the outer guard-condition branch, select the environment proxy value as environ_proxies.get(scheme, environ_proxies.get('all')), evaluating the 'all' fallback even when scheme exists, and store it as proxy. RESULT proxy]
+            [COMMAND Within the outer guard-condition branch and the inner 'if proxy:' branch, call new_proxies.setdefault(scheme, proxy), which sets the scheme key to proxy only when that key is not already present in new_proxies, and discard the return value. RESULT new_proxies]
+            [COMMAND Return new_proxies as the resolved proxy mapping. RESULT new_proxies]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The outer guard condition is false because trust_env is false or should_bypass_proxies(url, no_proxy=no_proxy) returns true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the environment-proxy lookup and keep new_proxies exactly as it is after the initial normalization and copy. RESULT new_proxies]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the default user agent string by formatting the provided name, which defaults to 'python-requests', and the module-level __version__ using the '%s/%s' template." default_user_agent]
+    [INPUTS]
+        <REF> name </REF>: str "User agent name to place before the slash; defaults to 'python-requests'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The formatted user agent string in the form '<name>/<version>'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If no explicit name argument is passed, use the default value 'python-requests' as the resolved name. RESULT resolved_name]
+            [COMMAND Retrieve the module-level __version__ variable from the surrounding scope. RESULT version]
+            [COMMAND Format the user agent string by substituting the string representations of resolved_name and version into the positional format template '%s/%s'. RESULT user_agent]
+            [COMMAND Return the formatted user agent string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a case-insensitive dictionary containing default HTTP headers including a dynamically resolved user agent, the module-level accept-encoding constant, and fixed Accept and Connection values." default_headers]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: CaseInsensitiveDict "Returns a CaseInsensitiveDict representing the default HTTP headers."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate default_user_agent() and store the returned string as user_agent_value. RESULT user_agent_value]
+            [COMMAND Read the module-level constant DEFAULT_ACCEPT_ENCODING as accept_encoding_value. RESULT accept_encoding_value]
+            [COMMAND Create a plain dictionary headers_dict with keys 'User-Agent', 'Accept-Encoding', 'Accept', and 'Connection' mapped to user_agent_value, accept_encoding_value, '*/*', and 'keep-alive' respectively. RESULT headers_dict]
+            [COMMAND Pass headers_dict to the CaseInsensitiveDict constructor to create case_insensitive_headers. RESULT case_insensitive_headers]
+            [COMMAND Return case_insensitive_headers as the function result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses a Link header string into a list of link dictionaries, extracting each URL and its semicolon-separated key/value parameters while skipping malformed parameters." parse_header_links]
+    [INPUTS]
+        <REF> value </REF>: string "Raw Link header value, e.g. '<http://...>; rel=front,<http://...>; rel=back'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> links </REF>: list[dict] "Each parsed link dictionary contains a 'url' key and zero or more stripped parameter keys."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize links as an empty list. RESULT links]
+            [COMMAND Set replace_chars to a string containing a space, a single quote, and a double quote. RESULT replace_chars]
+            [COMMAND Strip any leading or trailing characters in replace_chars from value and store the result back in value. RESULT value]
+            [COMMAND Check whether stripped value is empty; if true, follow the empty-value alternative path; otherwise continue. RESULT value_empty]
+            [COMMAND Split value using the regular expression ', *<' into segments, and start the outer for loop with each segment assigned to val. RESULT segments]
+            [COMMAND Within the outer for loop over val, try to split val on the first semicolon using val.split(';', 1) to produce url and params; if no semicolon exists, follow the no-semicolon alternative. RESULT url_and_params]
+            [COMMAND Within the outer for loop, create link as a dictionary with key 'url' and value url stripped of leading/trailing angle brackets, spaces, single quotes, and double quotes. RESULT link]
+            [COMMAND Within the outer for loop, split params on semicolons to create param_list; if params is empty, the split still returns one empty parameter. RESULT param_list]
+            [COMMAND Within the inner for loop over each param, try to split param on '=' to assign key and value; if param has zero or more than one '=', follow the malformed-parameter alternative. RESULT key_value_pair]
+            [COMMAND Within the inner for loop, add the parameter to link using the stripped key as the dictionary key and the stripped parameter value as the value; note that this value assignment shadows the original value variable. RESULT link]
+            [COMMAND After the inner parameter loop finishes or breaks, append link to links. RESULT links]
+            [COMMAND After the outer loop completes, return links. RESULT links]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The stripped value is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the current links list, which is still empty. RESULT links]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: val contains no semicolon, so val.split(';', 1) raises ValueError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set url to val and params to an empty string, then continue with link creation. RESULT url_and_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: param does not contain exactly one '=' sign, so param.split('=') raises ValueError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Break out of the inner parameter loop, skipping all remaining parameters for the current link. RESULT inner_loop_exit]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepends the provided scheme to a URL only when the URL has no existing scheme, without replacing any existing scheme, and returns the reconstructed URL string." prepend_scheme_if_needed]
+    [INPUTS]
+        <REF> url </REF>: str "The input URL, which may or may not already include a scheme."
+        <REF> new_scheme </REF>: str "The scheme to prepend if url has no scheme; an existing scheme is never replaced."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The reconstructed URL string with the new scheme prepended if the original URL had no scheme, otherwise with its original scheme preserved."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse the input url using parse_url and store the result as parsed. RESULT parsed]
+            [COMMAND Unpack parsed into scheme, auth, host, port, path, query, and fragment; auth, host, and port are not used later. RESULT scheme, auth, host, port, path, query, fragment]
+            [COMMAND Set netloc to parsed.netloc directly. RESULT netloc]
+            [COMMAND If netloc is falsy, swap netloc and path so netloc receives the old path and path becomes the old netloc; this preserves backwards compatibility with the urlparse defect where netloc is missing. RESULT netloc, path]
+            [COMMAND If scheme is None, set scheme to new_scheme. RESULT scheme]
+            [COMMAND If path is None, set path to an empty string. RESULT path]
+            [COMMAND Return urlunparse((scheme, netloc, path, '', query, fragment)). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Extracts the username and password from a URL and returns them as a tuple of decoded strings, falling back to empty strings when authentication components are missing or invalid." get_auth_from_url]
+    [INPUTS]
+        <REF> url </REF>: str "The URL string from which authentication components should be extracted."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> auth </REF>: (str, str) "A tuple containing the unquoted username and password, or empty strings when no valid authentication components are present."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse the input URL with urlparse and store the parse result. RESULT parsed]
+            [COMMAND Attempt to set auth to a tuple of unquote(parsed.username) and unquote(parsed.password) in the try block. RESULT auth]
+            [COMMAND Return auth. RESULT auth]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The try block raises AttributeError because parsed.username or parsed.password is missing, or raises TypeError because unquote receives a non-string value.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set auth to ('', '') in the except block. RESULT auth]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes the fragment and any authentication/userinfo portion from a URL by parsing it, restoring a missing network location, stripping userinfo after the last '@', and rebuilding the URL without a fragment." urldefragauth]
+    [INPUTS]
+        <REF> url </REF>: str "Input URL string from which the fragment and authentication part should be removed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The rebuilt URL string with the fragment removed and no authentication/userinfo in the network location."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse the input url into scheme, netloc, path, params, query, and fragment using urlparse(url). RESULT parsed_components]
+            [COMMAND Set netloc_path_adjusted to the parsed netloc and path values; if netloc is empty, use the alternative flow to swap them. RESULT netloc_path_adjusted]
+            [COMMAND Remove the authentication part from netloc by taking the substring after the last '@' using netloc.rsplit('@', 1)[-1]. RESULT netloc_without_auth]
+            [COMMAND Return urlunparse((scheme, netloc, path, params, query, '')) to rebuild the URL with an empty fragment. RESULT final_url]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: netloc is empty after parsing]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Swap netloc and path so the parsed path becomes the network location and path becomes empty. RESULT netloc_path_adjusted]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Rewinds a prepared request body to its recorded starting position so it can be read again on redirect." rewind_body]
+    [INPUTS]
+        <REF> prepared_request </REF>: PreparedRequest "The prepared request whose body should be rewound; must expose body and _body_position attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the seek attribute from prepared_request.body with getattr using default None, and assign it to body_seek. RESULT body_seek]
+            [COMMAND If body_seek is not None and prepared_request._body_position is an instance of integer_types, call body_seek(prepared_request._body_position) to move the request body pointer back to its recorded starting position. RESULT rewound_body]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: body_seek is None or prepared_request._body_position is not an instance of integer_types]
+        [LOG "Unable to rewind request body for redirect."]
+        [THROW UnrewindableBodyError "Raised when the request body cannot be rewound because it is not seekable or the recorded position is invalid."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: body_seek is not None, prepared_request._body_position is an instance of integer_types, and calling body_seek(prepared_request._body_position) raises IOError or OSError]
+        [LOG "An error occurred when rewinding request body for redirect."]
+        [THROW UnrewindableBodyError "Raised when an IOError or OSError occurs while rewinding the request body."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

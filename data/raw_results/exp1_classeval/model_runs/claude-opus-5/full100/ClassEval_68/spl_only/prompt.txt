@@ -1,0 +1,162 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `PageUtil.__init__`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Initializes a paginator by storing the data collection and page size, then computing total item count and total page count using ceiling division." __init__]
+    [INPUTS]
+        <REF> data </REF>: sequence "A sized collection of items to be paginated; must support len()"
+        <REF> page_size </REF>: int "Number of items per page; must be a positive integer to avoid division by zero or nonsensical results"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the parameter data to the instance attribute self.data RESULT self.data]
+            [COMMAND Assign the parameter page_size to the instance attribute self.page_size RESULT self.page_size]
+            [COMMAND Compute the total number of items by calling len() on the data parameter and assign the result to self.total_items RESULT self.total_items]
+            [COMMAND Compute the total number of pages using ceiling division: evaluate (self.total_items + page_size - 1) // page_size using the raw page_size parameter (not self.page_size) and assign the integer result to self.total_pages RESULT self.total_pages]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: page_size is 0 at the time of the ceiling division in step 4]
+        [LOG "ZeroDivisionError raised because the expression (self.total_items + page_size - 1) // page_size divides by zero"]
+        [THROW ZeroDivisionError "Raised implicitly by Python integer floor division when page_size equals 0; no explicit guard is present in the code"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `PageUtil.get_page`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Returns a slice of the data list corresponding to the requested 1-based page number, or an empty list if the page number is out of the valid range." get_page]
+    [INPUTS]
+        <REF> page_number </REF>: int "1-based page number requested by the caller; must be between 1 and total_pages inclusive to return data"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> page_data </REF>: list "Sublist of self.data covering the requested page window, or an empty list when page_number is out of bounds"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute start_index as (page_number minus 1) multiplied by self.page_size, converting the 1-based page_number to a 0-based start offset into self.data RESULT start_index]
+            [COMMAND Compute end_index as start_index plus self.page_size, establishing the exclusive upper bound of the page window so that the slice is exactly self.page_size items wide RESULT end_index]
+            [COMMAND Return the slice self.data[start_index:end_index] as the page contents RESULT page_data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: page_number is less than 1 or page_number is greater than self.total_pages]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately without computing any indices RESULT page_data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `PageUtil.get_page_info`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes and returns a pagination metadata dictionary for the requested page, including the sliced data items and boolean navigation flags, or returns an empty dict for out-of-range page numbers." get_page_info]
+    [INPUTS]
+        <REF> page_number </REF>: int "1-based index of the requested page; values less than 1 or greater than total_pages trigger an early return"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> page_info </REF>: dict "Dictionary containing current_page, per_page, total_pages, total_items, has_previous, has_next, and data; empty dict when page_number is out of range"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute start_index as (page_number - 1) multiplied by self.page_size, yielding the zero-based offset of the first item on the requested page RESULT start_index]
+            [COMMAND Compute end_index as the minimum of (start_index + self.page_size) and self.total_items, clamping the slice boundary so the last partial page does not overrun the sequence RESULT end_index]
+            [COMMAND Slice self.data from start_index to end_index to obtain the items for the current page RESULT page_data]
+            [COMMAND Assemble page_info dict with keys: current_page set to page_number; per_page set to self.page_size; total_pages set to self.total_pages; total_items set to self.total_items; has_previous set to the boolean result of page_number greater than 1; has_next set to the boolean result of page_number less than self.total_pages; data set to page_data RESULT page_info]
+            [COMMAND Return page_info RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: page_number is less than 1 or page_number is greater than self.total_pages]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty dict immediately, skipping all computation RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `PageUtil.search`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Filters all items in the data collection whose string representation contains the given keyword, then computes pagination metadata and returns the keyword, matched items, total result count, and total page count as a single dictionary." search]
+    [INPUTS]
+        <REF> keyword </REF>: string "The substring to search for within the string representation of each item in self.data"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> search_info </REF>: dict "Dictionary containing 'keyword' (the search term), 'total_results' (count of matched items), 'total_pages' (ceiling-divided page count), and 'results' (list of matched items by reference)"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over every item in self.data; for each item, coerce it to a string via str() and test whether keyword appears as a substring; collect all matching items into a new list and assign it to results RESULT results]
+            [COMMAND Compute the count of items in results using len() and assign the integer value to num_results RESULT num_results]
+            [COMMAND Compute the ceiling-divided page count as (num_results + self.page_size - 1) // self.page_size, which correctly rounds up without using math.ceil, and assign the result to num_pages; self.page_size must be a positive non-zero integer or a ZeroDivisionError will be raised; when num_results is 0 the result is 0 RESULT num_pages]
+            [COMMAND Construct a dictionary with four keys — 'keyword' bound to the input keyword, 'total_results' bound to num_results, 'total_pages' bound to num_pages, and 'results' bound to the results list by reference (mutations to the list after this point will be visible through search_info['results']) — and assign it to search_info RESULT search_info]
+            [COMMAND Return search_info to the caller RESULT search_info]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.page_size is 0 when num_pages is being computed]
+        [LOG "ZeroDivisionError raised by the expression (num_results + self.page_size - 1) // self.page_size because self.page_size is 0; self.page_size must be a positive non-zero integer"]
+        [THROW ZeroDivisionError "Raised implicitly by Python integer floor-division when self.page_size equals zero; there is no explicit guard in this method"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+

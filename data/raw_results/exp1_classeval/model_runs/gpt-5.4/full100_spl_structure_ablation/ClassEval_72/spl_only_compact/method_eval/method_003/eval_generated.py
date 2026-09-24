@@ -1,0 +1,90 @@
+class RegexUtils:
+    def extract_email(self, text: str) -> list:
+        pattern = self.generate_email_pattern()
+        return self.findall(pattern, text)
+
+    @staticmethod
+    def findall(pattern, text: str) -> list:
+        import re
+        result = re.findall(pattern, text)
+        return result
+
+    @staticmethod
+    def generate_email_pattern() -> str:
+        pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+        return pattern
+
+    @staticmethod
+    def generate_phone_number_pattern() -> str:
+        pattern = r"\b\d{3}-\d{3}-\d{4}\b"
+        return pattern
+
+    @staticmethod
+    def generate_split_sentences_pattern() -> str:
+        pattern = r"[.!?][\s]{1,2}(?=[A-Z])"
+        return pattern
+
+    @staticmethod
+    def match(pattern: str, text: str) -> bool:
+        import re
+        ans = re.match(pattern, text)
+        if ans:
+            return True
+        return False
+
+    @staticmethod
+    def split(pattern, text: str) -> list:
+        import re
+        split_result = re.split(pattern, text)
+        return split_result
+
+    def split_sentences(self, text: str) -> list:
+        pattern = self.generate_split_sentences_pattern()
+        return self.split(pattern, text)
+
+    @staticmethod
+    def sub(pattern, replacement, text: str) -> str:
+        import re
+        substitution_result = re.sub(pattern, replacement, text)
+        return substitution_result
+
+    def validate_phone_number(self, phone_number) -> bool:
+        pattern = self.generate_phone_number_pattern()
+        return self.match(pattern, phone_number)
+
+import unittest
+
+class RegexUtilsTestSub(unittest.TestCase):
+    def test_sub_1(self):
+        ru = RegexUtils()
+        res = ru.sub(r'\b\d{3}-\d{3}-\d{4}\b', 'phone num',
+                     "123-456-7890 abiguygusu 876-286-9876 kjgufwycs 987-762-9767")
+        self.assertEqual(res, 'phone num abiguygusu phone num kjgufwycs phone num')
+
+    def test_sub_2(self):
+        ru = RegexUtils()
+        res = ru.sub(r'\b\d{3}-\d{3}-\d{4}\b', 'phone num',
+                     "1234567890 abiguygusu 8762869876 kjgufwycs 9877629767")
+        self.assertEqual(res, "1234567890 abiguygusu 8762869876 kjgufwycs 9877629767")
+
+    def test_sub_3(self):
+        ru = RegexUtils()
+        res = ru.sub(r'\b\d{3}-\d{3}-\d{4}\b', 'phone num',
+                     "123456-7890 abiguygusu 876-286-9876 kjgufwycs 987-762-9767")
+        self.assertEqual(res, '123456-7890 abiguygusu phone num kjgufwycs phone num')
+
+    def test_sub_4(self):
+        ru = RegexUtils()
+        res = ru.sub(r'\b\d{3}-\d{3}-\d{4}\b', 'phone num',
+                     "123-456-789a abiguygusu 876-286-9876 kjgufwycs 987-762-9767")
+        self.assertEqual(res, '123-456-789a abiguygusu phone num kjgufwycs phone num')
+
+    def test_sub_5(self):
+        ru = RegexUtils()
+        res = ru.sub(r'\b\d{3}-\d{3}-\d{4}\b', 'phone num',
+                     "123-456-780 abiguygusu 876-286-9876 kjgufwycs 987-762-9767")
+        self.assertEqual(res, '123-456-780 abiguygusu phone num kjgufwycs phone num')
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

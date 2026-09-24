@@ -1,0 +1,1299 @@
+# FILE: sklearn/feature_extraction/text.py
+# CLASS VectorizerMixin
+
+[DEFINE_WORKER: "Loads a document from a filename or file-like object according to self.input, decodes bytes with the configured encoding, and returns the resulting unicode string while rejecting the np.nan sentinel." decode]
+    [INPUTS]
+        <REF> doc </REF>: object "Document to decode: a filesystem path, file-like object, bytes object, or already-decoded unicode string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> decoded_doc </REF>: string "Decoded unicode string content of the document."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.input equals exactly 'filename', treat doc as a filesystem path, open it in binary read mode using a with block, read the entire file content with fh.read(), and assign the resulting bytes to doc. RESULT doc]
+            [COMMAND After the loading branch is complete, if doc is an instance of bytes, decode it using self.encoding and self.decode_error and assign the decoded unicode string to doc. RESULT doc]
+            [COMMAND Check whether doc is exactly the np.nan object; if so, trigger the ValueError exception flow instead of returning. RESULT doc]
+            [COMMAND Return doc as the decoded unicode document. RESULT decoded_doc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.input equals exactly 'file' and the 'filename' branch was not taken]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the full content from the file-like object doc by calling doc.read() and assign the returned content to doc. RESULT doc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.input is neither 'filename' nor 'file']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave doc unchanged and continue to the bytes check. RESULT doc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: doc is exactly the np.nan object (identity check)]
+        [LOG "np.nan is an invalid document, expected byte or unicode string."]
+        [THROW ValueError "Raised when doc is the np.nan singleton, indicating that an invalid missing document was supplied."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Filters tokens by an optional stop-word collection and expands them into a list of space-joined n-grams for every size in the configured ngram_range." _word_ngrams]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance whose ngram_range attribute supplies the inclusive min and max n-gram sizes."
+        <REF> tokens </REF>: list of str "Token sequence to convert into n-grams; it may be filtered and reassigned."
+        <REF> stop_words </REF>: iterable of str or None "Optional word collection; if provided, tokens contained in it are removed before n-gram generation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> tokens </REF>: list of str "List of n-gram strings, including unigrams when min_n is 1, formed by space-joining consecutive original tokens."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If stop_words is not None, rebuild tokens as a list containing each w from the current tokens only when w is not in stop_words. RESULT tokens]
+            [COMMAND Unpack self.ngram_range into min_n and max_n. RESULT min_n, max_n]
+            [COMMAND If max_n == 1, skip n-gram generation and return tokens unchanged. RESULT tokens]
+            [COMMAND In the max_n != 1 branch, save original_tokens as the current tokens list. RESULT original_tokens]
+            [COMMAND In the max_n != 1 branch, if min_n == 1, set tokens to list(original_tokens) and increment min_n by 1; otherwise set tokens to an empty list. RESULT tokens, min_n]
+            [COMMAND In the max_n != 1 branch, compute n_original_tokens as the length of original_tokens. RESULT n_original_tokens]
+            [COMMAND In the max_n != 1 branch, bind tokens.append to tokens_append and " ".join to space_join. RESULT tokens_append, space_join]
+            [COMMAND In the max_n != 1 branch, for each n from min_n to min(max_n, n_original_tokens) inclusive, and for each i from 0 to n_original_tokens - n inclusive, append space_join(original_tokens[i:i + n]) to tokens. RESULT tokens]
+            [COMMAND Return tokens as the final n-gram sequence. RESULT tokens]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Tokenizes a text document into a list of contiguous character n-grams over the configured ngram range, after normalizing whitespace." _char_ngrams]
+    [INPUTS]
+        <REF> self </REF>: object "Class instance providing self._white_spaces as a compiled whitespace substitution pattern and self.ngram_range as a 2-element tuple (min_n, max_n)."
+        <REF> text_document </REF>: str "Input text to be normalized and tokenized into character n-grams."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ngrams </REF>: list[str] "List of character n-grams from text_document, covering lengths from the configured minimum to maximum n, bounded by text length."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize whitespace in text_document by replacing each regex match from self._white_spaces with a single space. RESULT text_document]
+            [COMMAND Compute text_len as len(text_document). RESULT text_len]
+            [COMMAND Unpack self.ngram_range into min_n and max_n. RESULT min_n, max_n]
+            [COMMAND If min_n equals 1, set ngrams to the list of individual characters in text_document and increment min_n by 1; otherwise set ngrams to an empty list. RESULT ngrams, min_n]
+            [COMMAND Bind ngrams.append to ngrams_append for reuse in the loop. RESULT ngrams_append]
+            [COMMAND Loop over n-gram length n from min_n through min(max_n, text_len) inclusive, using the original stop boundary min(max_n + 1, text_len + 1); for each n, loop over start index i from 0 through text_len - n inclusive, using the original stop boundary text_len - n + 1, and append the text_document substring starting at i of length n to ngrams_append. RESULT ngrams]
+            [COMMAND Return ngrams. RESULT return value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Tokenizes a text document into whitespace-sensitive character n-grams by padding each word with spaces and sliding windows of each configured n-gram size over the padded word." _char_wb_ngrams]
+    [INPUTS]
+        <REF> text_document </REF>: string "Input text document to be tokenized."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ngrams </REF>: list of strings "Generated character n-grams, including leading and trailing spaces for word boundaries."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize all whitespace sequences in text_document to single spaces using self._white_spaces.sub(' ', text_document), and store the result back into text_document. RESULT text_document]
+            [COMMAND Unpack the inclusive n-gram size range from self.ngram_range into min_n and max_n. RESULT min_n, max_n]
+            [COMMAND Initialize ngrams as an empty list to accumulate the character n-grams. RESULT ngrams]
+            [COMMAND Bind ngrams.append to ngrams_append so appends inside the loops reuse the cached method reference. RESULT ngrams_append]
+            [COMMAND For each whitespace-separated word w from text_document.split(), pad w as ' ' + w + ' ', compute w_len as the length of the padded word, and process n-gram sizes for this word. RESULT w]
+            [COMMAND Within the outer word loop, for each n in the inclusive range from min_n through max_n constructed as xrange(min_n, max_n + 1), set offset to 0 and append w[offset:offset+n] to ngrams through ngrams_append; if n is at least w_len this slice is the whole padded word. RESULT offset]
+            [COMMAND Within the same n loop, while offset + n is strictly less than w_len, increment offset by 1 and append w[offset:offset+n] to ngrams, producing overlapping sliding windows that stop when the window end reaches w_len. RESULT ngram]
+            [COMMAND After the while loop for the current n, if offset is still 0 because n is greater than or equal to w_len, break out of the inner n loop to avoid appending the same whole padded word again for larger n values; this does not stop the outer word loop. RESULT loop_control]
+            [COMMAND Return the completed ngrams list as the final result. RESULT ngrams]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a text preprocessing callable, using a preconfigured preprocessor if present, and otherwise composing a configured accent-stripping function with an optional lowercase step." build_preprocessor]
+    [INPUTS]
+        <REF> self </REF>: object "Instance containing preprocessor, strip_accents, and lowercase attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> preprocessor </REF>: callable "A function that preprocesses text before tokenization."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND With self.preprocessor unset, define noop as an identity function that returns its argument unchanged. RESULT noop]
+            [COMMAND Determine strip_accents from self.strip_accents: if falsy use noop; if callable use self.strip_accents; if equals 'ascii' use strip_accents_ascii; if equals 'unicode' use strip_accents_unicode; otherwise raise ValueError. RESULT strip_accents]
+            [COMMAND If self.lowercase is truthy, return a lambda that lowercases its input and then applies strip_accents; otherwise return strip_accents. RESULT preprocessor]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.preprocessor is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.preprocessor immediately as the preprocessor. RESULT preprocessor]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.strip_accents is truthy, not callable, and not equal to the exact strings 'ascii' or 'unicode'.]
+        [LOG "Invalid value for 'strip_accents': {self.strip_accents}"]
+        [THROW ValueError "Raised when strip_accents is configured with a value that is not falsy, callable, 'ascii', or 'unicode'."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured tokenizer if one exists; otherwise compiles the token pattern and returns a lambda that uses the compiled regex to find all token matches in a document." build_tokenizer]
+    [INPUTS]
+        <REF> tokenizer </REF>: callable or None "self.tokenizer attribute; when not None, it is used and returned directly."
+        <REF> token_pattern </REF>: str, bytes, or compiled regex "self.token_pattern attribute; it is compiled with re.compile to build the default tokenizer when self.tokenizer is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> tokenizer </REF>: callable "A function that splits a string document into tokens. It is either the existing self.tokenizer or a closure over the compiled token_pattern that returns token_pattern.findall(doc)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self.tokenizer is None; if it is not None, follow the alternative early-return flow. RESULT tokenizer_is_none]
+            [COMMAND Because self.tokenizer is None, compile self.token_pattern using re.compile into a compiled regular expression object. RESULT compiled_token_pattern]
+            [COMMAND Return a lambda function that accepts doc and calls token_pattern.findall(doc), capturing the compiled token_pattern in the closure. RESULT tokenizer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.tokenizer is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.tokenizer immediately as the tokenizer. RESULT tokenizer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.tokenizer is None and self.token_pattern is an invalid regular expression string]
+        [LOG "Compilation of self.token_pattern fails because the provided pattern is not a valid regular expression."]
+        [THROW re.error "Raised by re.compile when the token pattern is malformed."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.tokenizer is None and self.token_pattern is None]
+        [LOG "re.compile is called with None as the pattern, which is not supported."]
+        [THROW TypeError "Raised because re.compile expects a string, bytes, or compiled regex pattern, not None."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the effective stop words list by delegating to _check_stop_list with the current stop_words attribute." get_stop_words]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> effective_stop_words </REF>: list "The effective stop words list returned by _check_stop_list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _check_stop_list with self.stop_words as its argument and return the resulting value directly. RESULT effective_stop_words]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a document analyzer callable that, depending on the configured analyzer mode, preprocesses and tokenizes input into character, character-word-boundary, or word n-grams, while returning a supplied callable analyzer unchanged if self.analyzer is callable." build_analyzer]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> analyzer </REF>: callable "Callable that accepts a document and returns configured character n-grams, character-word-boundary n-grams, word n-grams, or the originally supplied callable analyzer."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check the early-return guard: if self.analyzer is callable, take the callable analyzer alternative instead of building a new analyzer. RESULT callable_guard]
+            [COMMAND Create the preprocessing callable by assigning preprocess from self.build_preprocessor(). RESULT preprocess]
+            [COMMAND Select the analyzer implementation by comparing self.analyzer first to char, then to char_wb, then to word; if none match, use the ValueError exception flow. RESULT analyzer_dispatch]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.analyzer is callable]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.analyzer unchanged as the analyzer callable. RESULT analyzer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.analyzer == 'char']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a lambda that accepts doc, computes preprocess(self.decode(doc)), and passes that result to self._char_ngrams. RESULT analyzer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.analyzer == 'char_wb']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a lambda that accepts doc, computes preprocess(self.decode(doc)), and passes that result to self._char_wb_ngrams. RESULT analyzer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.analyzer == 'word']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute stop_words = self.get_stop_words() and tokenize = self.build_tokenizer(). RESULT stop_words_and_tokenize]
+            [COMMAND Return a lambda that accepts doc, computes tokenize(preprocess(self.decode(doc))), and calls self._word_ngrams with the tokens and stop_words. RESULT analyzer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self.analyzer is not callable and is not equal to 'char', 'char_wb', or 'word']
+        [LOG "ValueError: <analyzer> is not a valid tokenization scheme/analyzer"]
+        [THROW ValueError "Raised when the configured analyzer is not a callable or one of the supported string analyzer modes."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a supplied vocabulary by normalizing sets or iterables into term-to-index mappings, checking Mapping index completeness, and marking the vocabulary as fixed only when non-empty, otherwise setting the fixed flag to False." _validate_vocabulary]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.vocabulary into the local variable vocabulary. RESULT vocabulary]
+            [COMMAND Check whether vocabulary is not None; if true, continue with the validation steps; if false, use the alternative flow for the None vocabulary case. RESULT condition_branch]
+            [COMMAND In the outer 'vocabulary is not None' branch, if vocabulary is a set, sort it into a list and assign the sorted result back to vocabulary. RESULT vocabulary]
+            [COMMAND In the outer 'vocabulary is not None' branch, evaluate whether vocabulary is not a Mapping. RESULT vocabulary_is_not_mapping]
+            [COMMAND In the 'vocabulary is not a Mapping' branch, initialize an empty dictionary named vocab. RESULT vocab]
+            [COMMAND In the 'vocabulary is not a Mapping' branch, iterate over vocabulary using enumerate with zero-based index i and term t; call vocab.setdefault(t, i) and compare the returned existing index to i. RESULT setdefault_return]
+            [COMMAND In the 'vocabulary is not a Mapping' branch, if setdefault_return differs from i, route to the duplicate-term ValueError flow. RESULT duplicate_term_detected]
+            [COMMAND In the 'vocabulary is not a Mapping' branch, after the enumeration loop completes, assign vocabulary = vocab. RESULT vocabulary]
+            [COMMAND In the Mapping branch of the outer 'vocabulary is not None' branch, collect all values of the Mapping vocabulary into a set named indices. RESULT indices]
+            [COMMAND In the Mapping branch, if len(indices) is not equal to len(vocabulary), route to the repeated-indices ValueError flow. RESULT repeated_indices_detected]
+            [COMMAND In the Mapping branch, iterate i through xrange(len(vocabulary)), which covers i from 0 to len(vocabulary) - 1 inclusive, and check whether i is in indices. RESULT expected_index_present]
+            [COMMAND In the Mapping branch, if any expected index i is not present in indices, route to the missing-index ValueError flow. RESULT missing_index_detected]
+            [COMMAND After the set/non-Mapping/Mapping normalization, in the outer 'vocabulary is not None' branch, check whether vocabulary is empty; if it is empty, route to the empty-vocabulary ValueError flow. RESULT empty_vocabulary_detected]
+            [COMMAND In the outer 'vocabulary is not None' branch, set self.fixed_vocabulary_ = True. RESULT self.fixed_vocabulary_]
+            [COMMAND In the outer 'vocabulary is not None' branch, set self.vocabulary_ = dict(vocabulary) to store a copy of the canonical term-to-index mapping. RESULT self.vocabulary_]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: vocabulary is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.fixed_vocabulary_ = False. RESULT self.fixed_vocabulary_]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: In the 'vocabulary is not a Mapping' branch, vocab.setdefault(t, i) returns an existing index different from i, meaning the same term t appears at two different positions.]
+        [LOG "Duplicate term in vocabulary: %r"]
+        [THROW ValueError "Raised when a non-Mapping vocabulary contains duplicate terms."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the Mapping branch, the number of unique index values in indices is not equal to the number of vocabulary entries.]
+        [LOG "Vocabulary contains repeated indices."]
+        [THROW ValueError "Raised when a Mapping vocabulary assigns the same index to more than one term."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the Mapping branch, an expected index i from 0 to len(vocabulary) - 1 inclusive is not found in indices.]
+        [LOG "Vocabulary of size %d doesn't contain index %d."]
+        [THROW ValueError "Raised when a Mapping vocabulary is missing one or more indices in the required zero-based range."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: In the outer 'vocabulary is not None' branch, after normalization, the resulting vocabulary is empty.]
+        [LOG "empty vocabulary passed to fit"]
+        [THROW ValueError "Raised when the supplied vocabulary contains no terms."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that the estimator has a fitted vocabulary_ attribute and raises a ValueError if that fitted vocabulary is empty." _check_vocabulary]
+    [INPUTS]
+        <REF> self </REF>: object "Estimator instance on which the vocabulary_ attribute is checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: None "Returns None after the vocabulary is confirmed to be fitted and non-empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define msg as the format template string '%(name)s - Vocabulary wasn't fitted.'. RESULT msg]
+            [COMMAND Invoke check_is_fitted(self, 'vocabulary_', msg=msg) to verify that the vocabulary_ attribute exists. RESULT fitted_status]
+            [COMMAND Compute the number of entries in self.vocabulary_ using len(self.vocabulary_). RESULT vocabulary_length]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The vocabulary_ attribute is missing, causing check_is_fitted(self, 'vocabulary_', msg=msg) to raise an error.]
+        [LOG "Vocabulary wasn't fitted."]
+        [THROW NotFittedError "Raised when the estimator has not been fitted and therefore has no vocabulary_ attribute."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: vocabulary_length == 0]
+        [LOG "Vocabulary is empty"]
+        [THROW ValueError "Raised when the fitted vocabulary_ attribute exists but contains no entries."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that the lower bound of self.ngram_range is not greater than its upper bound, raising ValueError when the range is invalid." _validate_params]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.ngram_range and unpack its two elements into min_n and max_m. RESULT min_n, max_m]
+            [COMMAND Evaluate whether min_n is greater than max_m. RESULT is_invalid_range]
+            [COMMAND If is_invalid_range is false, continue normally without taking any validation action. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: min_n > max_m]
+        [LOG "Invalid value for ngram_range={self.ngram_range} lower boundary larger than the upper boundary."]
+        [THROW ValueError "Raised when the lower boundary of ngram_range is greater than its upper boundary."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS HashingVectorizer
+
+[DEFINE_WORKER: "Initializes an object by storing each supplied constructor parameter in the corresponding instance attribute, preserving all configuration values for later use." __init__]
+    [INPUTS]
+        <REF> input </REF>: string "Field name in the raw documents to use as content; default is 'content'."
+        <REF> encoding </REF>: string "Encoding used to decode input text; default is 'utf-8'."
+        <REF> decode_error </REF>: string "Decoding error handling policy; default is 'strict'."
+        <REF> strip_accents </REF>: string or None "Accent stripping strategy, such as None, 'ascii', or 'unicode'; default is None."
+        <REF> lowercase </REF>: boolean "Whether to convert tokens to lowercase before processing; default is True."
+        <REF> preprocessor </REF>: callable or None "Callable that overrides the preprocessing step, or None; default is None."
+        <REF> tokenizer </REF>: callable or None "Callable that overrides the tokenization step, or None; default is None."
+        <REF> stop_words </REF>: string, list, or None "Configured stop-word handling; can be None, a list of stop words, or 'english'; default is None."
+        <REF> token_pattern </REF>: string "Regular expression used to select tokens; default is r'(?u)\b\w\w+\b'."
+        <REF> ngram_range </REF>: tuple "Lower and upper boundary of n-gram sizes; default is (1, 1)."
+        <REF> analyzer </REF>: string or callable "Feature analyzer, such as 'word', 'char', 'char_wb', or a callable; default is 'word'."
+        <REF> n_features </REF>: integer "Number of features in the hashed output; default is 2 ** 20, i.e. 1,048,576."
+        <REF> binary </REF>: boolean "Whether to use binary occurrence counts instead of raw counts; default is False."
+        <REF> norm </REF>: string or None "Normalization norm, such as 'l1', 'l2', or None; default is 'l2'."
+        <REF> alternate_sign </REF>: boolean "Whether to alternate the sign of hash values to reduce bias; default is True."
+        <REF> non_negative </REF>: boolean "Whether to convert feature values to non-negative magnitudes; default is False."
+        <REF> dtype </REF>: numpy dtype "Numeric data type for feature vectors; default is numpy.float64."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the supplied input argument in self.input. RESULT self.input]
+            [COMMAND Store the supplied encoding argument in self.encoding. RESULT self.encoding]
+            [COMMAND Store the supplied decode_error argument in self.decode_error. RESULT self.decode_error]
+            [COMMAND Store the supplied strip_accents argument in self.strip_accents. RESULT self.strip_accents]
+            [COMMAND Store the supplied preprocessor argument in self.preprocessor. RESULT self.preprocessor]
+            [COMMAND Store the supplied tokenizer argument in self.tokenizer. RESULT self.tokenizer]
+            [COMMAND Store the supplied analyzer argument in self.analyzer. RESULT self.analyzer]
+            [COMMAND Store the supplied lowercase argument in self.lowercase. RESULT self.lowercase]
+            [COMMAND Store the supplied token_pattern argument in self.token_pattern. RESULT self.token_pattern]
+            [COMMAND Store the supplied stop_words argument in self.stop_words. RESULT self.stop_words]
+            [COMMAND Store the supplied n_features argument in self.n_features. RESULT self.n_features]
+            [COMMAND Store the supplied ngram_range argument in self.ngram_range. RESULT self.ngram_range]
+            [COMMAND Store the supplied binary argument in self.binary. RESULT self.binary]
+            [COMMAND Store the supplied norm argument in self.norm. RESULT self.norm]
+            [COMMAND Store the supplied alternate_sign argument in self.alternate_sign. RESULT self.alternate_sign]
+            [COMMAND Store the supplied non_negative argument in self.non_negative. RESULT self.non_negative]
+            [COMMAND Store the supplied dtype argument in self.dtype. RESULT self.dtype]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Accepts additional data without performing any computation and returns self to indicate that the transformer is stateless and supports streaming." partial_fit]
+    [INPUTS]
+        <REF> X </REF>: array-like "Input data samples; ignored by this method."
+        <REF> y </REF>: array-like or None "Target labels; ignored by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: object "The transformer instance itself."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self unconditionally without modifying state or performing any computation. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fit the transformer by guarding against string input, validating parameters, fitting the internal hasher on X with optional y, and returning self." fit]
+    [INPUTS]
+        <REF> X </REF>: iterable of raw text documents "Input documents to fit the hasher; must not be a single string."
+        <REF> y </REF>: array-like or None "Optional target values passed to the hasher's fit method; not used to store state."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: object "The fitted transformer instance, returned for method chaining."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether X is a string-like object using isinstance(X, six.string_types); if it is, trigger the ValueError exception flow. RESULT string_check]
+            [COMMAND After the string guard passes, validate the transformer parameters by calling self._validate_params(). RESULT validated_params]
+            [COMMAND Obtain the hasher by calling self._get_hasher() and call its fit method with X and y=y. RESULT hasher]
+            [COMMAND Return self as the fitted transformer. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: X is a string-like object according to six.string_types.]
+        [LOG "Raise ValueError because fit expects an iterable of raw text documents, but received a string object."]
+        [THROW ValueError "X is a string object; an iterable of raw text documents is required."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Transforms an iterable of raw text documents into a hashed document-term matrix, then optionally applies binary term-weighting and normalization." transform]
+    [INPUTS]
+        <REF> X </REF>: iterable of raw text documents "Samples of length n_samples, where each sample is a text document (bytes, unicode string, file name, or file object) that will be tokenized and hashed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X </REF>: scipy.sparse matrix "Document-term matrix of shape (n_samples, self.n_features)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate the vectorizer parameters by calling self._validate_params(). RESULT self]
+            [COMMAND Build the text analyzer by calling self.build_analyzer() and store it as analyzer. RESULT analyzer]
+            [COMMAND Transform the original X by iterating over each document, calling analyzer(doc), passing the resulting generator to self._get_hasher().transform(...), and assigning the returned matrix back to X. RESULT X]
+            [COMMAND If self.binary is true, fill X.data with 1 to convert the matrix to binary term-frequency indicators. RESULT X]
+            [COMMAND If self.norm is not None, normalize X with normalize(X, norm=self.norm, copy=False) and assign the normalized matrix back to X. RESULT X]
+            [COMMAND Return X. RESULT X]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: At the start of the method, X is an instance of six.string_types.]
+        [LOG "Iterable over raw text documents expected, string object received."]
+        [THROW ValueError "Raised when a string is passed as X because a raw string would be incorrectly treated as an iterable of documents."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns a FeatureHasher configured to hash string-valued inputs using the instance attributes n_features, dtype, alternate_sign, and non_negative." _get_hasher]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing n_features (positive integer), dtype (numeric dtype such as float64), alternate_sign (boolean), and non_negative (boolean; when True, alternate_sign should be False)."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: FeatureHasher "Configured FeatureHasher instance that expects iterables of strings as input."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct a FeatureHasher with n_features set to self.n_features, input_type set to 'string', dtype set to self.dtype, alternate_sign set to self.alternate_sign, and non_negative set to self.non_negative, then return it. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS CountVectorizer
+
+[DEFINE_WORKER: "Initializes a vectorizer configuration object by copying all constructor arguments into instance attributes and enforcing nonnegative max_df/min_df and positive-integer-or-None max_features validation." __init__]
+    [INPUTS]
+        <REF> input </REF>: str "Source content field name; default 'content'."
+        <REF> encoding </REF>: str "Text encoding used to decode input; default 'utf-8'."
+        <REF> decode_error </REF>: str "Decoding error handling mode; default 'strict'."
+        <REF> strip_accents </REF>: str or callable or None "Accent stripping strategy or callable; default None."
+        <REF> lowercase </REF>: bool "Whether to convert tokens to lowercase; default True."
+        <REF> preprocessor </REF>: callable or None "Override preprocessor; default None."
+        <REF> tokenizer </REF>: callable or None "Override tokenizer; default None."
+        <REF> stop_words </REF>: str, list, or None "Stop words handling; default None."
+        <REF> token_pattern </REF>: str "Regular expression used to tokenize text; default is r'(?u)\b\w\w+\b'."
+        <REF> ngram_range </REF>: tuple of int "Lower and upper boundary of n-gram range; default (1, 1)."
+        <REF> analyzer </REF>: str or callable "Feature analyzer; default 'word'."
+        <REF> max_df </REF>: float or int "Maximum document frequency threshold for vocabulary; default 1.0. Validated to be nonnegative."
+        <REF> min_df </REF>: float or int "Minimum document frequency threshold for vocabulary; default 1. Validated to be nonnegative."
+        <REF> max_features </REF>: int or None "Maximum number of features; default None. Must be None or a positive integer."
+        <REF> vocabulary </REF>: mapping, iterable, or None "Predefined vocabulary mapping or iterable; default None."
+        <REF> binary </REF>: bool "Whether to use binary occurrence counts; default False."
+        <REF> dtype </REF>: type or numpy.dtype "Data type for the feature matrix; default numpy.int64."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.input to the value of the input parameter. RESULT self.input]
+            [COMMAND Set self.encoding to the value of the encoding parameter. RESULT self.encoding]
+            [COMMAND Set self.decode_error to the value of the decode_error parameter. RESULT self.decode_error]
+            [COMMAND Set self.strip_accents to the value of the strip_accents parameter. RESULT self.strip_accents]
+            [COMMAND Set self.preprocessor to the value of the preprocessor parameter. RESULT self.preprocessor]
+            [COMMAND Set self.tokenizer to the value of the tokenizer parameter. RESULT self.tokenizer]
+            [COMMAND Set self.analyzer to the value of the analyzer parameter. RESULT self.analyzer]
+            [COMMAND Set self.lowercase to the value of the lowercase parameter. RESULT self.lowercase]
+            [COMMAND Set self.token_pattern to the value of the token_pattern parameter. RESULT self.token_pattern]
+            [COMMAND Set self.stop_words to the value of the stop_words parameter. RESULT self.stop_words]
+            [COMMAND Set self.max_df to the value of the max_df parameter. RESULT self.max_df]
+            [COMMAND Set self.min_df to the value of the min_df parameter. RESULT self.min_df]
+            [COMMAND Verify that max_df is not less than 0 and min_df is not less than 0. RESULT None]
+            [COMMAND Set self.max_features to the value of the max_features parameter. RESULT self.max_features]
+            [COMMAND Within the outer guard where max_features is not None, check that max_features is an instance of numbers.Integral and is greater than 0; otherwise the validation raises ValueError. RESULT None]
+            [COMMAND Set self.ngram_range to the value of the ngram_range parameter. RESULT self.ngram_range]
+            [COMMAND Set self.vocabulary to the value of the vocabulary parameter. RESULT self.vocabulary]
+            [COMMAND Set self.binary to the value of the binary parameter. RESULT self.binary]
+            [COMMAND Set self.dtype to the value of the dtype parameter. RESULT self.dtype]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: max_df < 0 or min_df < 0]
+        [LOG "negative value for max_df or min_df"]
+        [THROW ValueError "Raised when either max_df or min_df is negative."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: max_features is not None and (not isinstance(max_features, numbers.Integral) or max_features <= 0)]
+        [LOG "max_features=%r, neither a positive integer nor None"]
+        [THROW ValueError "Raised when max_features is neither None nor a positive integer."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sorts the vocabulary by feature name, constructs a reindexing array, remaps the sparse matrix indices, and returns the modified matrix." _sort_features]
+    [INPUTS]
+        <REF> X </REF>: scipy.sparse matrix with an indices attribute "Sparse matrix whose indices array is remapped according to the sorted vocabulary."
+        <REF> vocabulary </REF>: dict "Dictionary mapping feature names to old integer indices; it is updated in place to map feature names to new sequential indices."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X </REF>: scipy.sparse matrix "The same sparse matrix X with its indices array transformed to use the new sorted-feature indices."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Sort the items from vocabulary using six.iteritems and sorted(), producing sorted_features as a list of (term, old_val) pairs ordered by feature name. RESULT sorted_features]
+            [COMMAND Allocate map_index as an int32 NumPy array with length equal to len(sorted_features). RESULT map_index]
+            [COMMAND Iterate over enumerate(sorted_features), where new_val runs from 0 through len(sorted_features)-1 and each item is unpacked as (term, old_val); for every iteration set vocabulary[term] = new_val and map_index[old_val] = new_val. RESULT vocabulary_and_map_index]
+            [COMMAND Reassign X.indices to map_index.take(X.indices, mode='clip'), flattening map_index in row-major order and for each old index i clipping i to [0, map_index.size - 1] before gathering the replacement index from map_index. RESULT X]
+            [COMMAND Return X. RESULT X]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prunes features from a document-term matrix by document-frequency high/low bounds and an optional top-term-frequency limit, updating the vocabulary in place and returning the pruned matrix plus removed terms." _limit_features]
+    [INPUTS]
+        <REF> X </REF>: array-like or sparse matrix of shape (n_samples, n_features) "Document-term matrix whose columns are features to be pruned."
+        <REF> vocabulary </REF>: dict "Mapping from feature terms to their current integer column indices; mutated in place during pruning."
+        <REF> high </REF>: int or None "Maximum document frequency threshold; features with dfs <= high are kept."
+        <REF> low </REF>: int or None "Minimum document frequency threshold; features with dfs >= low are kept."
+        <REF> limit </REF>: int or None "Maximum number of features to retain after frequency pruning; if more features survive, the top limit by term frequency are kept."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X_pruned </REF>: same type as X "The input matrix restricted to kept feature columns."
+        <REF> removed_terms </REF>: set "Terms removed from vocabulary due to pruning."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether high, low, and limit are all None. If they are, trigger the early-return alternative flow; otherwise continue with pruning. RESULT not_all_none]
+            [COMMAND Compute dfs = _document_frequency(X), tfs = the column sums of X raveled to one dimension, and initialize mask to an all-True boolean array of length len(dfs). RESULT dfs_tfs_mask]
+            [COMMAND Apply high-frequency pruning: if high is not None, AND mask with the condition dfs <= high, inclusive. RESULT mask_after_high]
+            [COMMAND Apply low-frequency pruning: if low is not None, AND mask with the condition dfs >= low, inclusive. RESULT mask_after_low]
+            [COMMAND If limit is not None and mask.sum() > limit, select the top limit features among the currently selected ones by descending tfs, build a new all-False mask, set those top-limit positions to True, and replace mask with the new mask. RESULT limited_mask]
+            [COMMAND Compute new_indices = np.cumsum(mask) - 1 to map old feature indices to compressed indices, and initialize removed_terms as an empty set. RESULT mapping_and_removed_terms]
+            [COMMAND For each term and old_index in a materialized list(six.iteritems(vocabulary)) snapshot: if mask[old_index] is True, set vocabulary[term] = new_indices[old_index]; otherwise delete vocabulary[term] and add term to removed_terms. RESULT updated_vocabulary]
+            [COMMAND Compute kept_indices = np.where(mask)[0] to obtain the integer positions of all features that remain selected. RESULT kept_indices]
+            [COMMAND Check whether kept_indices is empty; if it is empty, trigger the ValueError exception flow; otherwise continue. RESULT nonempty_guard]
+            [COMMAND Return X[:, kept_indices] and removed_terms as the final result. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: high is None and low is None and limit is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return X unchanged and an empty set as removed_terms. RESULT early_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: After pruning, kept_indices is empty (len(kept_indices) == 0)]
+        [LOG "After pruning, no terms remain. Try a lower min_df or a higher max_df."]
+        [THROW ValueError "Raised to signal that all features were pruned and no terms remain."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a sparse document-feature matrix in CSR format from raw documents, using either an existing fixed vocabulary or a newly learned vocabulary that assigns sequential integer IDs, and returns both the vocabulary and the matrix." _count_vocab]
+    [INPUTS]
+        <REF> raw_documents </REF>: Iterable "Iterable of raw documents to analyze and count features for."
+        <REF> fixed_vocab </REF>: bool "Whether to use self.vocabulary_ as the fixed vocabulary instead of learning a new vocabulary."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> vocabulary </REF>: dict "Vocabulary mapping terms to integer feature indices; equals self.vocabulary_ when fixed_vocab is true, otherwise a newly learned plain dict."
+        <REF> X </REF>: scipy.sparse.csr_matrix "Sparse document-feature matrix in CSR format with dtype self.dtype."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If fixed_vocab is truthy, set vocabulary = self.vocabulary_; otherwise create vocabulary as a defaultdict, set vocabulary.default_factory = vocabulary.__len__, so each unseen feature is assigned the current length of the vocabulary as its integer id. RESULT vocabulary]
+            [COMMAND Create the analyzer by calling self.build_analyzer(). RESULT analyze]
+            [COMMAND Initialize j_indices = [], indptr = [], values = _make_int_array(); then append 0 to indptr as the initial row pointer. RESULT j_indices, indptr, values]
+            [COMMAND Start the outer loop over each doc in raw_documents; for each document, reset feature_counter = {}. RESULT feature_counter]
+            [COMMAND Within the outer loop, iterate over each feature returned by analyze(doc) and attempt to get feature_idx = vocabulary[feature]. RESULT feature_idx]
+            [COMMAND Within the same feature loop, if vocabulary[feature] raises KeyError, ignore that out-of-vocabulary feature and continue with the next feature; this is the intended handling for fixed_vocab=True. RESULT ignored_feature]
+            [COMMAND Within the same feature loop, after a successful lookup, if feature_idx is not in feature_counter, set feature_counter[feature_idx] = 1; otherwise increment feature_counter[feature_idx] by 1. RESULT feature_counter]
+            [COMMAND After the inner feature loop completes for the current document, extend j_indices with feature_counter.keys(), extend values with feature_counter.values(), and append len(j_indices) to indptr as the end pointer for this document's row. RESULT j_indices, values, indptr]
+            [COMMAND After all documents are processed, if fixed_vocab is false, convert vocabulary from defaultdict to a plain dict to disable default_factory behavior; if the resulting vocabulary is empty, raise ValueError('empty vocabulary; perhaps the documents only contain stop words'). RESULT vocabulary]
+            [COMMAND Determine the index dtype from the total non-zero count: if indptr[-1] > 2147483648, then if sp_version >= (0, 14) set indices_dtype = np.int64, otherwise raise ValueError; if indptr[-1] <= 2147483648, set indices_dtype = np.int32. RESULT indices_dtype]
+            [COMMAND Convert j_indices to np.asarray(j_indices, dtype=indices_dtype), indptr to np.asarray(indptr, dtype=indices_dtype), and values to np.frombuffer(values, dtype=np.intc). RESULT j_indices, indptr, values]
+            [COMMAND Construct X = sp.csr_matrix((values, j_indices, indptr), shape=(len(indptr) - 1, len(vocabulary)), dtype=self.dtype). RESULT X]
+            [COMMAND Call X.sort_indices() to sort column indices within each row of the sparse matrix. RESULT X]
+            [COMMAND Return the tuple (vocabulary, X). RESULT vocabulary, X]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: fixed_vocab is false and, after converting the vocabulary to a plain dict, the vocabulary is empty.]
+        [LOG "Empty vocabulary; perhaps the documents only contain stop words."]
+        [THROW ValueError "Raised because no vocabulary terms were collected when a new vocabulary was being built."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: indptr[-1] > 2147483648 and sp_version < (0, 14).]
+        [LOG "Sparse CSR array has more than 2147483648 non-zero elements and requires 64-bit indexing, which is unsupported by the installed SciPy version; upgrade to scipy >=0.14."]
+        [THROW ValueError "Raised because 64-bit sparse indexing is unsupported with the current SciPy version."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fits the estimator by delegating to fit_transform on the raw documents and then returns self as the fitted estimator." fit]
+    [INPUTS]
+        <REF> raw_documents </REF>: iterable "An iterable yielding strings, unicode objects, or file objects."
+        <REF> y </REF>: default None "Ignored parameter present for API compatibility; not used in the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: object "The fitted estimator instance."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call fit_transform on self with raw_documents as the argument and discard the returned value. RESULT self]
+            [COMMAND Return self as the fitted estimator. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Learns vocabulary from raw documents and returns a document-term matrix, with input validation, optional binary counting, and frequency-based vocabulary pruning." fit_transform]
+    [INPUTS]
+        <REF> raw_documents </REF>: iterable "An iterable which yields either str, unicode, or file objects."
+        <REF> y </REF>: None or ignored "Ignored parameter present for API compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X </REF>: array, [n_samples, n_features] "Document-term matrix."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that raw_documents is not a string instance; if it is, the validation failure is handled separately as an exception. RESULT raw_documents_validated]
+            [COMMAND Call self._validate_params() to validate estimator parameters. RESULT params_validated]
+            [COMMAND Call self._validate_vocabulary() to validate the existing vocabulary. RESULT vocabulary_validated]
+            [COMMAND Copy self.max_df, self.min_df, and self.max_features into local variables max_df, min_df, and max_features. RESULT max_df_min_df_max_features]
+            [COMMAND Call self._count_vocab(raw_documents, self.fixed_vocabulary_) and unpack the returned tuple into vocabulary and X. RESULT vocabulary_X]
+            [COMMAND If self.binary is true, fill X.data with 1. RESULT X_binary]
+            [COMMAND If self.fixed_vocabulary_ is false, sort X by calling self._sort_features(X, vocabulary) and assign the result back to X. RESULT X_sorted]
+            [COMMAND Within the not-fixed-vocabulary branch, set n_doc to X.shape[0]. RESULT n_doc]
+            [COMMAND Within the not-fixed-vocabulary branch, set max_doc_count to max_df if max_df is an instance of numbers.Integral, otherwise max_df * n_doc. RESULT max_doc_count]
+            [COMMAND Within the not-fixed-vocabulary branch, set min_doc_count to min_df if min_df is an instance of numbers.Integral, otherwise min_df * n_doc. RESULT min_doc_count]
+            [COMMAND Within the not-fixed-vocabulary branch, verify that max_doc_count is not less than min_doc_count; otherwise the comparison failure is handled as an exception. RESULT counts_validated]
+            [COMMAND Within the not-fixed-vocabulary branch, call self._limit_features(X, vocabulary, max_doc_count, min_doc_count, max_features) and unpack the result into X and self.stop_words_. RESULT X_stop_words]
+            [COMMAND Within the not-fixed-vocabulary branch, assign self.vocabulary_ = vocabulary. RESULT vocabulary_learned]
+            [COMMAND Return X. RESULT X]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: raw_documents is an instance of six.string_types.]
+        [LOG "Iterable over raw text documents expected, string object received."]
+        [THROW ValueError "Rejects a single string because raw_documents must be an iterable of documents, not a string document."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the not-fixed-vocabulary branch, max_doc_count is less than min_doc_count.]
+        [LOG "max_df corresponds to < documents than min_df"]
+        [THROW ValueError "Indicates that the maximum document frequency bound is lower than the minimum document frequency bound."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Transforms raw text documents into a sparse document-term matrix using the fitted vocabulary, with term counts optionally converted to binary indicators." transform]
+    [INPUTS]
+        <REF> raw_documents </REF>: iterable of str, unicode, or file objects "An iterable yielding raw text documents to be tokenized and counted using the vocabulary."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X </REF>: sparse matrix "Document-term matrix with shape [n_samples, n_features] containing token counts, or binary indicators when self.binary is true."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether raw_documents is a string-like object as defined by six.string_types; if it is, trigger the ValueError exception flow and stop, otherwise continue. RESULT validation_passed]
+            [COMMAND If self.vocabulary_ is not set, call self._validate_vocabulary() to establish a valid vocabulary. RESULT vocabulary_ready]
+            [COMMAND Call self._check_vocabulary() to verify that the existing vocabulary is consistent with the configured analyzer. RESULT vocabulary_checked]
+            [COMMAND Call self._count_vocab(raw_documents, fixed_vocab=True), discard the first returned value into _, and assign the second returned value to X. RESULT X]
+            [COMMAND If self.binary is true, execute the binary transformation alternative flow; otherwise leave X unchanged. RESULT X]
+            [COMMAND Return X as the document-term matrix. RESULT X]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.binary is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fill every non-zero entry in X.data with 1 by executing X.data.fill(1). RESULT X]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: raw_documents is an instance of six.string_types instead of an iterable of text documents]
+        [LOG "Iterable over raw text documents expected, string object received."]
+        [THROW ValueError "Raised to reject a single string input and require an iterable of raw text documents."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns, for each document in X, the vocabulary terms corresponding to its non-zero feature entries." inverse_transform]
+    [INPUTS]
+        <REF> X </REF>: array or sparse matrix "Input matrix of shape (n_samples, n_features) whose non-zero entries are mapped back to vocabulary terms."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X_inv </REF>: list of numpy arrays "List of length n_samples; each element is a 1D array of terms for the non-zero entries in the corresponding row of X."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate the fitted vocabulary by calling self._check_vocabulary(). RESULT _]
+            [COMMAND Check whether X is sparse by evaluating sp.issparse(X). RESULT is_sparse]
+            [COMMAND If is_sparse is true, convert X to CSR format with X.tocsr() for fast row manipulations. RESULT X]
+            [COMMAND After the sparsity branch completes (sparse conversion to CSR or dense conversion to NumPy matrix), set n_samples to X.shape[0]. RESULT n_samples]
+            [COMMAND Create terms as np.array(list(self.vocabulary_.keys())). RESULT terms]
+            [COMMAND Create indices as np.array(list(self.vocabulary_.values())). RESULT indices]
+            [COMMAND Create inverse_vocabulary by indexing terms with np.argsort(indices), so inverse_vocabulary[k] is the term whose vocabulary index is the k-th smallest index. RESULT inverse_vocabulary]
+            [COMMAND Return a list comprehension for i from 0 to n_samples - 1: for each row X[i, :], get non-zero column indices via X[i, :].nonzero()[1], index inverse_vocabulary with those indices, and call .ravel() on the result. RESULT X_inv]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_sparse is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert X to a NumPy matrix using np.asmatrix(X) so that indexing X[i, :] returns 2D objects. RESULT X]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the feature names from the vocabulary sorted by their integer feature indices, after ensuring the vocabulary is computed." get_feature_names]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> feature_names </REF>: list of strings "List of feature names sorted by ascending integer feature index."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._check_vocabulary() to ensure the vocabulary is initialized and valid. RESULT _check_vocabulary_done]
+            [COMMAND Iterate over self.vocabulary_ to obtain (token, index) pairs using six.iteritems. RESULT _vocab_items]
+            [COMMAND Sort the (token, index) pairs by the index value, which is the second element, in ascending order using itemgetter(1). RESULT _sorted_vocab_items]
+            [COMMAND Extract the token from each sorted pair and return the resulting list of feature names; if the vocabulary is empty, return an empty list. RESULT feature_names]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS TfidfTransformer
+
+[DEFINE_WORKER: "Initializes the vectorizer instance by storing the constructor parameters for normalization, IDF usage, IDF smoothing, and sublinear TF scaling as instance attributes." __init__]
+    [INPUTS]
+        <REF> norm </REF>: str "Normalization strategy; defaults to 'l2'."
+        <REF> use_idf </REF>: bool "Whether to enable inverse document frequency weighting; defaults to True."
+        <REF> smooth_idf </REF>: bool "Whether to apply IDF smoothing to prevent zero divisions; defaults to True."
+        <REF> sublinear_tf </REF>: bool "Whether to apply sublinear TF scaling; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the constructor argument norm (default 'l2') as self.norm. RESULT self.norm]
+            [COMMAND Store the constructor argument use_idf (default True) as self.use_idf. RESULT self.use_idf]
+            [COMMAND Store the constructor argument smooth_idf (default True) as self.smooth_idf. RESULT self.smooth_idf]
+            [COMMAND Store the constructor argument sublinear_tf (default False) as self.sublinear_tf. RESULT self.sublinear_tf]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Converts the input to a sparse CSC matrix and, when IDF weighting is enabled, learns and stores an inverse document frequency diagonal matrix, then returns self." fit]
+    [INPUTS]
+        <REF> X </REF>: sparse matrix "A matrix of term/token counts with shape [n_samples, n_features]."
+        <REF> y </REF>: None or array-like "Optional parameter accepted for API compatibility; ignored by the method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: object "The fitted transformer instance with possibly updated _idf_diag."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If X is not sparse, convert X to a sparse CSC matrix using sp.csc_matrix(X) and assign the result back to X. RESULT X]
+            [COMMAND If self.use_idf is truthy, compute the smoothed IDF diagonal matrix: unpack n_samples and n_features from X.shape; compute df = _document_frequency(X); add int(self.smooth_idf) to both df and n_samples; compute idf = np.log(float(n_samples) / df) + 1.0; and store sp.spdiags(idf, diags=0, m=n_features, n=n_features, format='csr') as self._idf_diag. RESULT self._idf_diag]
+            [COMMAND Return self. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Transforms a count matrix into a tf or tf-idf sparse matrix by converting X to CSR, optionally applying sublinear term-frequency scaling, fitted IDF weighting, and normalization." transform]
+    [INPUTS]
+        <REF> X </REF>: sparse matrix, [n_samples, n_features] "A matrix of term/token counts to transform."
+        <REF> copy </REF>: boolean "Whether to copy X and operate on the copy or perform in-place operations. Default is True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X </REF>: sparse matrix, [n_samples, n_features] "Transformed tf or tf-idf weighted sparse matrix."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert X to a SciPy CSR matrix. If X has a dtype attribute and np.issubdtype(X.dtype, np.floating) returns true, preserve the floating-point dtype family by assigning X = sp.csr_matrix(X, copy=copy). Otherwise, convert counts or binary occurrences to float64 by assigning X = sp.csr_matrix(X, dtype=np.float64, copy=copy). The condition short-circuits so np.issubdtype is only evaluated when X has dtype. RESULT X]
+            [COMMAND Unpack X.shape into n_samples and n_features; this requires exactly two dimensions. RESULT n_samples, n_features]
+            [COMMAND If self.sublinear_tf is true, apply in-place sublinear term-frequency scaling to X.data: first execute np.log(X.data, X.data), then execute X.data += 1, so each stored nonzero value becomes log(value) + 1. RESULT X.data]
+            [COMMAND Only if self.use_idf is true, verify the model is fitted by calling check_is_fitted(self, '_idf_diag', 'idf vector is not fitted'), then read expected_n_features = self._idf_diag.shape[0]. If self.use_idf is false, skip this validation and IDF weighting. RESULT expected_n_features]
+            [COMMAND Within the if self.use_idf true branch, if n_features != expected_n_features, raise ValueError; otherwise apply IDF weighting by assigning X = X * self._idf_diag. RESULT X]
+            [COMMAND If self.norm is truthy, normalize X by assigning X = normalize(X, norm=self.norm, copy=False); otherwise leave X unchanged. RESULT X]
+            [COMMAND Return X as the transformed sparse matrix. RESULT X]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.use_idf is true and self._idf_diag is not fitted]
+        [LOG "idf vector is not fitted"]
+        [THROW NotFittedError "The transformer has not been fitted, so the IDF vector is unavailable."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.use_idf is true and n_features != expected_n_features]
+        [LOG "Input has n_features=%d while the model has been trained with n_features=%d"]
+        [THROW ValueError "The number of features in the input does not match the number of features used during fitting."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the inverse document frequency vector by summing the IDF diagonal matrix along axis 0 and flattening the result into a one-dimensional numpy array." idf_]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> idf_vector </REF>: numpy.ndarray "One-dimensional contiguous numpy array containing the column-wise sums of the IDF diagonal matrix, i.e. the inverse document frequency values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the attribute _idf_diag on self, which holds the IDF diagonal matrix. RESULT idf_diag]
+            [COMMAND Sum the IDF diagonal matrix along axis 0 to produce the column-wise IDF sums. RESULT column_sums]
+            [COMMAND Flatten the column-wise sums into a contiguous one-dimensional numpy array using numpy.ravel and return it. RESULT idf_vector]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self._idf_diag is not set when this method accesses it]
+        [LOG "AttributeError: self._idf_diag is not set; the idf_ property is unavailable until the IDF diagonal matrix has been computed."]
+        [THROW AttributeError "Indicates that the IDF diagonal matrix is not available on this instance."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS TfidfVectorizer
+
+[DEFINE_WORKER: "Initializes a TfidfVectorizer by forwarding all vectorizer configuration options to the parent CountVectorizer initializer and then constructing a TfidfTransformer with the term-weighting settings." TfidfVectorizer.__init__]
+    [INPUTS]
+        <REF> input </REF>: str "Input source type; 'filename', 'file', or 'content'. Default is 'content'."
+        <REF> encoding </REF>: str "Encoding used to decode the input. Default is 'utf-8'."
+        <REF> decode_error </REF>: str "Decoding error handling policy. Default is 'strict'."
+        <REF> strip_accents </REF>: str, callable, or None "Unicode normalization or callable used to strip accents. Default is None."
+        <REF> lowercase </REF>: bool "Whether to convert tokens to lowercase. Default is True."
+        <REF> preprocessor </REF>: callable or None "Overrides the preprocessing step. Default is None."
+        <REF> tokenizer </REF>: callable or None "Overrides the tokenization step. Default is None."
+        <REF> analyzer </REF>: str or callable "Determines whether features are word, character, or custom-defined. Default is 'word'."
+        <REF> stop_words </REF>: str, list, or None "Stop words to remove from the input. Default is None."
+        <REF> token_pattern </REF>: str "Regular expression tokenize words when analyzer is 'word'. Default is r'(?u)\b\w\w+\b'."
+        <REF> ngram_range </REF>: tuple "Lower and upper boundary of n-gram sizes. Default is (1, 1)."
+        <REF> max_df </REF>: float or int "Maximum document frequency threshold for ignoring terms. Default is 1.0."
+        <REF> min_df </REF>: float or int "Minimum document frequency threshold for ignoring terms. Default is 1."
+        <REF> max_features </REF>: int or None "Limits the number of features by term frequency. Default is None."
+        <REF> vocabulary </REF>: Mapping, iterable, or None "Predefined mapping or iterable of terms to feature indices. Default is None."
+        <REF> binary </REF>: bool "Whether to use binary term occurrence instead of raw counts. Default is False."
+        <REF> dtype </REF>: type "Data type of the feature matrix. Default is numpy.int64."
+        <REF> norm </REF>: str or None "Normalization scheme for TF-IDF vectors. Default is 'l2'."
+        <REF> use_idf </REF>: bool "Whether to enable inverse document frequency weighting. Default is True."
+        <REF> smooth_idf </REF>: bool "Whether to apply smoothing to idf weights. Default is True."
+        <REF> sublinear_tf </REF>: bool "Whether to apply sublinear term frequency scaling. Default is False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super(TfidfVectorizer, self).__init__ with the current values of input, encoding, decode_error, strip_accents, lowercase, preprocessor, tokenizer, analyzer, stop_words, token_pattern, ngram_range, max_df, min_df, max_features, vocabulary, binary, and dtype to initialize the inherited CountVectorizer state. RESULT self]
+            [COMMAND Create a TfidfTransformer object using norm=norm, use_idf=use_idf, smooth_idf=smooth_idf, and sublinear_tf=sublinear_tf, and assign it to self._tfidf. RESULT self._tfidf]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the norm parameter stored in the underlying TF-IDF transformer without modifying state." norm]
+    [INPUTS]
+        <REF> self </REF>: object "The object instance that must have an initialized _tfidf attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string or None "The norm value stored on self._tfidf, commonly 'l1', 'l2', or None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the _tfidf attribute of self. RESULT tfidf_transformer]
+            [COMMAND Read the norm attribute from tfidf_transformer. RESULT norm_value]
+            [COMMAND Return norm_value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the norm attribute of the internal TfidfTransformer object to the supplied value." norm]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the value parameter to the norm attribute of self._tfidf. RESULT self._tfidf.norm]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the use_idf flag from the underlying TfidfVectorizer object to indicate whether inverse document frequency weighting is enabled." use_idf]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> use_idf_value </REF>: bool "The value of self._tfidf.use_idf, indicating whether inverse document frequency weighting is enabled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the value of the use_idf attribute from the TfidfVectorizer instance stored in self._tfidf and return it. RESULT use_idf_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the use_idf attribute of the underlying TfidfVectorizer object to the provided value, enabling or disabling inverse document frequency weighting." use_idf]
+    [INPUTS]
+        <REF> value </REF>: bool "The value to assign to self._tfidf.use_idf; typically True to enable IDF weighting or False to disable it. No type conversion is performed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the provided value directly to self._tfidf.use_idf, unconditionally overwriting the previous attribute value. RESULT self._tfidf.use_idf]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the smooth_idf flag stored on the internal TfidfTransformer instance." smooth_idf]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if smoothing of idf weights is enabled, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the smooth_idf attribute from the internal TfidfTransformer stored as self._tfidf. RESULT smooth_idf_value]
+            [COMMAND Return smooth_idf_value as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets the smooth_idf attribute of the internal TfidfTransformer referenced by self._tfidf to the supplied value." smooth_idf]
+    [INPUTS]
+        <REF> self </REF>: object "Instance whose self._tfidf transformer attribute is updated."
+        <REF> value </REF>: any "Value assigned to self._tfidf.smooth_idf; typically a boolean controlling IDF smoothing."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the input value to the smooth_idf attribute of the object stored in self._tfidf, overwriting any previous value. RESULT self._tfidf.smooth_idf]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the stored sublinear_tf flag from the wrapped TfidfVectorizer." sublinear_tf]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "The value of self._tfidf.sublinear_tf, indicating whether sublinear tf scaling is enabled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self._tfidf.sublinear_tf and return its value unchanged. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets whether sublinear term-frequency scaling is enabled on the underlying TfidfVectorizer by assigning the provided value to its sublinear_tf attribute." sublinear_tf]
+    [INPUTS]
+        <REF> value </REF>: bool "Boolean flag indicating whether sublinear term-frequency scaling should be enabled."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the provided value to the sublinear_tf attribute of the underlying TfidfVectorizer object referenced by self._tfidf. RESULT self._tfidf.sublinear_tf]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the precomputed inverse document frequency array from the fitted TfidfVectorizer stored in self._tfidf." idf_]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: numpy.ndarray "The inverse document frequency array with shape (n_features,) containing the learned IDF weights."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the idf_ attribute of the fitted TfidfVectorizer referenced by self._tfidf and return it as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Fits a TfidfVectorizer by building a document-term count matrix from raw_documents via the parent class, fitting the internal TfidfTransformer to learn idf weights, and returning self." fit]
+    [INPUTS]
+        <REF> raw_documents </REF>: iterable of str, unicode, or file objects "Training documents used to build the vocabulary and document frequencies."
+        <REF> y </REF>: None "Ignored parameter; present for compatibility with the scikit-learn estimator API."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self </REF>: TfidfVectorizer "The fitted vectorizer instance with updated vocabulary and internal IDF transformer."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super(TfidfVectorizer, self).fit_transform(raw_documents) to fit the parent class transformer and produce a document-term count matrix; store the resulting matrix as X. RESULT X]
+            [COMMAND Fit the internal TfidfTransformer on the count matrix X to learn the inverse document frequency weights. RESULT self._tfidf]
+            [COMMAND Return the fitted TfidfVectorizer instance self. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Learn vocabulary and IDF weights from raw documents and return a TF-IDF-weighted document-term matrix as a single combined operation." fit_transform]
+    [INPUTS]
+        <REF> raw_documents </REF>: iterable "An iterable that yields either str, unicode, or file objects representing documents."
+        <REF> y </REF>: ignored "Optional target values; accepted for API compatibility and ignored by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> X </REF>: sparse matrix "Tf-idf-weighted document-term matrix of shape [n_samples, n_features]."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super(TfidfVectorizer, self).fit_transform(raw_documents) to fit the vocabulary and build a raw term-count document-term matrix from raw_documents; assign the resulting sparse matrix to X. RESULT X]
+            [COMMAND Fit the internal TfidfTransformer self._tfidf on X to learn document frequencies and compute IDF weights. RESULT self._tfidf]
+            [COMMAND Because X is already a transformed view of raw_documents, transform X with self._tfidf using copy=False to compute the TF-IDF weighted document-term matrix without an unnecessary copy. RESULT X_tfidf]
+            [COMMAND Return X_tfidf as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Transforms raw documents into a TF-IDF-weighted document-term matrix using the fitted vocabulary and fitted TF-IDF transformer." transform]
+    [INPUTS]
+        <REF> raw_documents </REF>: iterable "An iterable that yields strings, unicode, or file objects representing documents to be transformed."
+        <REF> copy </REF>: boolean "Accepted for API compatibility but unused; the implementation always calls TfidfTransformer.transform with copy=False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: sparse matrix "TF-IDF-weighted document-term matrix of shape [n_samples, n_features]."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check that the instance is fitted by verifying the '_tfidf' attribute exists; if not, the fitting check fails. RESULT fitted_status]
+            [COMMAND Convert raw_documents into a sparse document-term matrix by calling the parent CountVectorizer transform method and assign the result to X. RESULT X]
+            [COMMAND Apply the fitted TfidfTransformer to X with copy=False, deliberately ignoring the copy parameter, and return the resulting TF-IDF matrix. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The '_tfidf' attribute is missing because the vectorizer has not been fitted.]
+        [LOG "The tfidf vector is not fitted"]
+        [THROW NotFittedError "Raised when transform is called before the vectorizer is fitted."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Applies NFKD Unicode normalization to an input string and returns it unchanged if already normalized, otherwise removes Unicode combining characters to strip accents and diacritical marks." strip_accents_unicode]
+    [INPUTS]
+        <REF> s </REF>: str "Input Unicode string to transform."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "The original string when it is already NFKD-normalized; otherwise the NFKD-normalized string with combining characters removed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the input string s using unicodedata.normalize('NFKD', s) and store the result in normalized. RESULT normalized]
+            [COMMAND Compare normalized with s to determine whether the input string is already NFKD-normalized and store the boolean comparison result in is_same. RESULT is_same]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_same is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the original string s unchanged. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: is_same is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the else branch, iterate over each character c in normalized, keep c only when not unicodedata.combining(c), join the kept characters with an empty string, and return the resulting stripped string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a Unicode string using NFKD decomposition and removes non-ASCII characters by encoding to ASCII with errors ignored, returning an ASCII-only version of the input." strip_accents_ascii]
+    [INPUTS]
+        <REF> s </REF>: str "Input Unicode string to strip accents from."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "ASCII string containing the input with non-ASCII accented characters removed, possibly empty if no ASCII-compatible characters remain."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the input string s using unicodedata.normalize with the 'NFKD' form and assign the result to nkfd_form. RESULT nkfd_form]
+            [COMMAND Encode nkfd_form to bytes using the ASCII codec with errors='ignore', decode the resulting bytes using the ASCII codec, and return the resulting ASCII string. RESULT ascii_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Strips HTML/XML-like tags from a string by replacing each angle-bracket tag with a single space." strip_tags]
+    [INPUTS]
+        <REF> s </REF>: string "Input string from which HTML/XML-like tags are removed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The input string with every tag-like substring <...> replaced by a single space."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compile the regular expression r"<([^>]+)>" with the re.UNICODE flag, then use it to substitute every occurrence of an angle-bracket tag in the input string s with a single space, and return the resulting string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a user-supplied stop-word argument by mapping the string 'english' to ENGLISH_STOP_WORDS, rejecting other strings with ValueError, preserving None as None, and converting any other collection into a frozenset." _check_stop_list]
+    [INPUTS]
+        <REF> stop </REF>: string | collection | None "The stop-word argument to normalize: the exact string 'english', any other string, None, or a collection of items."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> normalized_stop </REF>: frozenset | None "The normalized stop-word collection: ENGLISH_STOP_WORDS for 'english', None for None, or frozenset(stop) for any other collection. Raises ValueError for non-English strings."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the stop argument using the if/elif/else chain from top to bottom, stopping at the first true condition. RESULT normalized_stop]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: In the if branch, stop equals the string "english"]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return ENGLISH_STOP_WORDS. RESULT normalized_stop]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: In the elif branch after the string check fails, stop is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None. RESULT normalized_stop]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: In the else branch after all previous checks fail, stop is assumed to be a collection]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return frozenset(stop). RESULT normalized_stop]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: In the elif branch, stop is an instance of six.string_types and stop is not the string "english"]
+        [LOG "ValueError('not a built-in stop list: %s' % stop)"]
+        [THROW ValueError "Indicates that a user-supplied string is not a built-in stop list."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Counts the number of non-zero values for each feature (column) in a sparse matrix X." _document_frequency]
+    [INPUTS]
+        <REF> X </REF>: scipy.sparse matrix "Sparse matrix whose per-column non-zero entry counts are computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numpy.ndarray "1D array of length X.shape[1] containing the number of non-zero values in each column."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether X is a SciPy CSR sparse matrix by calling sp.isspmatrix_csr(X). RESULT is_csr]
+            [COMMAND If is_csr is true, count the occurrences of each column index in X.indices using np.bincount(X.indices, minlength=X.shape[1]) and return the result. RESULT document_frequency]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: sp.isspmatrix_csr(X) returns False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert X to CSC sparse matrix format with copy=False. RESULT X_csc]
+            [COMMAND Compute the per-column non-zero counts as np.diff(X_csc.indptr) and return the result. RESULT document_frequency]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns an empty array.array of signed 32-bit integers, suitable for scipy.sparse indices." _make_int_array]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: array.array "Empty array.array of signed 32-bit integers suitable for scipy.sparse indices."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct an empty array.array using the type code 'i' and return it. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

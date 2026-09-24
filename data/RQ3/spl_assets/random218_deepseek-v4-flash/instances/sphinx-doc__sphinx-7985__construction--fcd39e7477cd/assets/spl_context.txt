@@ -1,0 +1,369 @@
+# FILE: sphinx/builders/linkcheck.py
+# CLASS AnchorCheckParser
+
+[DEFINE_WORKER: "Initializes a new instance by calling the superclass initializer, storing the provided search_anchor value, and resetting the found flag to False." __init__]
+    [INPUTS]
+        <REF> search_anchor </REF>: str "The anchor string used by the instance for later searches."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the superclass initializer to set up the base object. RESULT self]
+            [COMMAND Assign the value of parameter search_anchor to instance attribute self.search_anchor. RESULT self.search_anchor]
+            [COMMAND Set instance attribute self.found to boolean literal False. RESULT self.found]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Searches attrs for an id or name attribute whose value equals self.search_anchor and, if found, sets self.found to True and stops scanning." handle_starttag]
+    [INPUTS]
+        <REF> tag </REF>: Any "The HTML tag being processed; not used in this method's logic."
+        <REF> attrs </REF>: Any "The sequence of (key, value) attribute pairs to search for a matching id or name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each (key, value) pair in attrs. RESULT current_pair]
+            [COMMAND For the current (key, value) pair, check first whether key is exactly 'id' or 'name'; if it is, check whether value equals self.search_anchor. RESULT is_match]
+            [COMMAND If is_match is true for the current pair, set self.found to True and immediately break out of the for loop; otherwise continue with the next pair. RESULT self.found]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The for loop completes without finding any (key, value) pair where key is 'id' or 'name' and value equals self.search_anchor.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave self.found unchanged and continue execution after the loop. RESULT self.found]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS CheckExternalLinksBuilder
+
+[DEFINE_WORKER: "Initializes the link checker state by compiling ignore and auth regex patterns, resetting result collections and output files, and starting the configured daemon worker threads." init]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compile each regex pattern in self.app.config.linkcheck_ignore and assign the resulting list of compiled patterns to self.to_ignore. RESULT self.to_ignore]
+            [COMMAND Compile each regex pattern in self.app.config.linkcheck_anchors_ignore and assign the resulting list of compiled patterns to self.anchors_ignore. RESULT self.anchors_ignore]
+            [COMMAND For each (pattern, auth_info) pair in self.app.config.linkcheck_auth, compile pattern, keep auth_info unchanged, form the tuple (re.compile(pattern), auth_info), and assign the list of tuples to self.auth. RESULT self.auth]
+            [COMMAND Initialize self.good as an empty set. RESULT self.good]
+            [COMMAND Initialize self.broken as an empty dictionary. RESULT self.broken]
+            [COMMAND Initialize self.redirected as an empty dictionary. RESULT self.redirected]
+            [COMMAND Set the socket default timeout to 5.0 seconds. RESULT _]
+            [COMMAND Create or truncate the file at path.join(self.outdir, 'output.txt') by opening it in write mode and immediately closing it. RESULT _]
+            [COMMAND Create or truncate the file at path.join(self.outdir, 'output.json') by opening it in write mode and immediately closing it. RESULT _]
+            [COMMAND Create a new unbounded FIFO queue.Queue instance and assign it to self.wqueue. RESULT self.wqueue]
+            [COMMAND Create a new unbounded FIFO queue.Queue instance, distinct from self.wqueue, and assign it to self.rqueue. RESULT self.rqueue]
+            [COMMAND Initialize self.workers as an empty list. RESULT self.workers]
+            [COMMAND Within the for loop over i from 0 to self.app.config.linkcheck_workers - 1, create a threading.Thread with target self.check_thread, set it as a daemon via setDaemon(True), start it, and append it to self.workers. RESULT self.workers]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Processes URI work items from the input queue, applies cached/local shortcut classifications and network-based link checks with retries, and enqueues the resulting status tuples." check_thread]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize kwargs as a dictionary with the key 'allow_redirects' set to True. RESULT kwargs]
+            [COMMAND If self.app.config.linkcheck_timeout is truthy, set kwargs['timeout'] to self.app.config.linkcheck_timeout. RESULT kwargs]
+            [COMMAND Define the nested helper get_request_headers so that it parses uri with urlparse, builds candidate keys in order (scheme://netloc, scheme://netloc/, full uri, '*'), iterates over them, and for the first key present in self.config.linkcheck_request_headers returns a copy of DEFAULT_REQUEST_HEADERS updated with that configured header mapping; if no key matches, it returns an empty dictionary. RESULT get_request_headers]
+            [COMMAND Define the nested helper check_uri so that it splits off any '#anchor' from uri, clears the anchor if it matches an entry in self.anchors_ignore, percent-encodes a non-ASCII req_url, selects auth_info from the first matching pattern in self.auth, sets kwargs['headers'] via get_request_headers, and then performs the appropriate HTTP request: if an anchor remains and self.app.config.linkcheck_anchors is enabled, GET the URL and verify the anchor with check_anchor(response, unquote(anchor)), raising Exception if not found; otherwise try HEAD first and, on HTTPError, retry with GET; after any raise_for_status, convert HTTPError responses by status code (401 to ('working', ' - unauthorized', 0), 503 to ('ignored', str(err), 0), other to ('broken', str(err), 0)) and generic exceptions by SSL check (SSL errors to ('ignored', str(err), 0), others to ('broken', str(err), 0)); if the final response URL matches req_url after stripping trailing slashes, return ('working', '', 0); otherwise append the anchor to the new URL, and return ('redirected', new_url, last_history_status_code if response.history else 0). RESULT check_uri]
+            [COMMAND Define the nested helper check so that it first avoids network access by returning ('unchecked', '', 0) for empty URIs or URIs starting with '#', 'mailto:', or 'ftp:'; returning ('local', '', 0) for URIs not starting with 'http:' or 'https:'; returning ('working', 'old', 0) for URIs in self.good; returning ('broken', self.broken[uri], 0) for URIs in self.broken; returning ('redirected', self.redirected[uri][0], self.redirected[uri][1]) for URIs in self.redirected; and returning ('ignored', '', 0) for URIs matching any regex in self.to_ignore. If none apply, it calls check_uri up to self.app.config.linkcheck_retries times, stopping on the first status that is not 'broken', then updates self.good, self.broken, or self.redirected caches according to the resulting status, and returns (status, info, code). RESULT check]
+            [COMMAND Enter an infinite loop and block on self.wqueue.get() to receive the next work item as (uri, docname, lineno). RESULT work_item]
+            [COMMAND Inside the loop, if the received uri is None, break out of the loop and terminate the thread. RESULT None]
+            [COMMAND Inside the loop, for a non-None uri, call check() to obtain (status, info, code). RESULT status_info_code]
+            [COMMAND Inside the loop, put the enriched tuple (uri, docname, lineno, status, info, code) onto self.rqueue. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Processes a link-check result tuple by unpacking it, building link statistics, and performing status-specific logging and record-keeping, with early returns for unchecked and old working results and fallback handling for unknown redirect codes." process_result]
+    [INPUTS]
+        <REF> result </REF>: Tuple[str, str, int, str, str, int] "A six-element tuple containing uri (str), docname (str), lineno (int), status (str), info (str), and code (int)."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: None "The method always returns None; all processing effects occur through logging, write_entry, and write_linkstat side effects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack the result tuple into uri, docname, lineno, status, info, and code. RESULT uri, docname, lineno, status, info, code]
+            [COMMAND Set filename by calling self.env.doc2path(docname, None). RESULT filename]
+            [COMMAND Build linkstat dictionary with filename, lineno, status, code, uri, and info. RESULT linkstat]
+            [COMMAND Apply the early-return guard: if status is exactly 'unchecked', follow the alternative flow for status 'unchecked' and exit the method; otherwise, if status is exactly 'working' and info is exactly 'old', follow the alternative flow for status 'working' with info 'old' and exit the method; otherwise continue. RESULT none]
+            [COMMAND If lineno is truthy, log '(line %4d) ' with the numeric lineno and nonl=True. RESULT none]
+            [COMMAND Evaluate the status dispatch in order and take the first matching alternative flow for status: 'ignored', 'local', 'working', 'broken', or 'redirected'. If status does not match any recognized value, take no action for this dispatch. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: status == 'unchecked']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.write_linkstat(linkstat). RESULT none]
+            [COMMAND Return immediately from process_result. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: status == 'working' and info == 'old']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.write_linkstat(linkstat). RESULT none]
+            [COMMAND Return immediately from process_result. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: status == 'ignored' in the status dispatch]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If info is truthy, log darkgray('-ignored- ') + uri + ': ' + info; otherwise log darkgray('-ignored- ') + uri. RESULT none]
+            [COMMAND Call self.write_linkstat(linkstat). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: status == 'local' in the status dispatch]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log darkgray('-local-   ') + uri. RESULT none]
+            [COMMAND Call self.write_entry('local', docname, filename, lineno, uri). RESULT none]
+            [COMMAND Call self.write_linkstat(linkstat). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: status == 'working' and info != 'old' in the status dispatch]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log darkgreen('ok        ') + uri + info. RESULT none]
+            [COMMAND Call self.write_linkstat(linkstat). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: status == 'broken' in the status dispatch]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self.app.quiet is truthy or self.app.warningiserror is truthy, using short-circuit OR evaluation, log the warning __('broken link: %s (%s)') with uri and info and location=(filename, lineno); otherwise log red('broken    ') + uri + red(' - ' + info). RESULT none]
+            [COMMAND Call self.write_entry('broken', docname, filename, lineno, uri + ': ' + info). RESULT none]
+            [COMMAND Call self.write_linkstat(linkstat). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: status == 'redirected' in the status dispatch]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Try to look up code in the redirect mapping {301: ('permanently', purple), 302: ('with Found', purple), 303: ('with See Other', purple), 307: ('temporarily', turquoise), 308: ('permanently', purple)}. If code is not found, catch KeyError and assign text='with unknown code' and color=purple. RESULT text, color]
+            [COMMAND Set linkstat['text'] = text. RESULT linkstat]
+            [COMMAND Log color('redirect  ') + uri + color(' - ' + text + ' to ' + info). RESULT none]
+            [COMMAND Call self.write_entry('redirected ' + text, docname, filename, lineno, uri + ' to ' + info). RESULT none]
+            [COMMAND Call self.write_linkstat(linkstat). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty string as the target URI regardless of the supplied document name and type." get_target_uri]
+    [INPUTS]
+        <REF> docname </REF>: str "Document name for which the target URI is requested; not used in the current implementation."
+        <REF> typ </REF>: Optional[str] "Optional document type, defaults to None; not used in the current implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Always returns an empty string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty string as the target URI. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the set of documents that have been flagged as outdated in the environment." get_outdated_docs]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Set[str] "The set of outdated documents stored in env.found_docs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the current value of self.env.found_docs RESULT self.env.found_docs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Accepts a set of document names and returns immediately with None, performing no preparation work." prepare_writing]
+    [INPUTS]
+        <REF> docnames </REF>: Set[str] "Set of document names for the writing preparation step."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately from the method with no value (None), performing no further operations. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Traverses the doctree, enqueues reference and image URIs with document name and line numbers onto a work queue, processes one queued result for each enqueued URI, and marks the application status as broken if required." write_doc]
+    [INPUTS]
+        <REF> docname </REF>: str "Document name included in each work queue tuple."
+        <REF> doctree </REF>: Node "Document tree traversed for reference and image nodes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log an empty string via logger.info(''). RESULT none]
+            [COMMAND Initialize the counter n to 0. RESULT n]
+            [COMMAND For each refnode in doctree.traverse(nodes.reference), if 'refuri' is not in refnode then continue to the next refnode; otherwise, set uri to refnode['refuri'], set lineno to get_node_line(refnode), enqueue the tuple (uri, docname, lineno) by calling self.wqueue.put((uri, docname, lineno), False), and after the put returns normally increment n by 1. RESULT n]
+            [COMMAND For each imgnode in doctree.traverse(nodes.image), set uri to imgnode['candidates'].get('?') so a missing '?' candidate yields None; if uri is truthy and, short-circuiting, contains the substring '://', set lineno to get_node_line(imgnode), enqueue the tuple (uri, docname, lineno) by calling self.wqueue.put((uri, docname, lineno), False), and after the put returns normally increment n by 1. RESULT n]
+            [COMMAND Initialize the processed-result counter done to 0. RESULT done]
+            [COMMAND While done is strictly less than n (n is an exclusive upper bound), call self.process_result(self.rqueue.get()) to retrieve one result from the result queue, blocking if empty, and process it, then increment done by 1. RESULT done]
+            [COMMAND If self.broken is true, set self.app.statuscode to 1. RESULT self.app.statuscode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: In either the reference-node loop or the image-node loop, self.wqueue.put((uri, docname, lineno), False) is called while the work queue is full.]
+        [LOG "Non-blocking queue put failed because self.wqueue is full."]
+        [THROW queue.Full "Raised by self.wqueue.put(..., False) when the queue has reached its maximum size."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Appends a formatted log line containing the filename, line number, event type, and URI to output.txt in the output directory." write_entry]
+    [INPUTS]
+        <REF> self </REF>: object "Instance whose outdir attribute is used to construct the output file path."
+        <REF> what </REF>: str "Event type or label written inside square brackets in the log line."
+        <REF> docname </REF>: str "Accepted document name; not used by this method."
+        <REF> filename </REF>: str "Source filename written first in the log line."
+        <REF> line </REF>: int "Source line number written after the filename in the log line."
+        <REF> uri </REF>: str "URI written last in the log line."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: NoneType "Returns None; the method writes to output.txt as a side effect."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct the output file path by joining self.outdir with the constant filename 'output.txt'. RESULT output_path]
+            [COMMAND Open output_path in append mode ('a') as output_file using a with statement. RESULT output_file]
+            [COMMAND Inside the with block, format a log string as '{filename}:{line}: [{what}] {uri}\n' using the supplied arguments. RESULT log_line]
+            [COMMAND Inside the with block, write log_line to output_file and discard the write return value. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Appends the JSON serialization of the provided dictionary as a new line to output.json inside self.outdir." write_linkstat]
+    [INPUTS]
+        <REF> self </REF>: object "Instance of the class providing the outdir attribute."
+        <REF> data </REF>: dict "Dictionary to serialize as JSON and write to the output file."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct the output file path by joining self.outdir with the literal filename 'output.json'. RESULT output_path]
+            [COMMAND Open output_path in append mode 'a' using a context manager so the file remains open during the write operations. RESULT output_file]
+            [COMMAND Serialize data to a JSON string using json.dumps(data). RESULT json_data]
+            [COMMAND Within the open output_file, write json_data to the file. RESULT write_data_result]
+            [COMMAND Within the open output_file, write the newline character '\n' to end the JSON line. RESULT write_newline_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Enqueues a non-blocking shutdown sentinel tuple for every worker in self.workers." finish]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: NoneType "The method always returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each worker in self.workers in iteration order, assigning the current element to the variable worker. RESULT worker]
+            [COMMAND For each worker, without using the worker value, call self.wqueue.put((None, None, None), False) to enqueue the sentinel without blocking. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.wqueue is full when the put operation is attempted, causing the non-blocking put to fail.]
+        [LOG "queue.Full raised while trying to add shutdown sentinel in finish()."]
+        [THROW queue.Full "Raised when the work queue is at capacity and no blocking wait is allowed."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Streams the HTTP response in chunks and returns True if the anchor is found while parsing the HTML content, otherwise False." check_anchor]
+    [INPUTS]
+        <REF> response </REF>: requests.requests.Response "The HTTP response object whose content is read in chunks and searched for the anchor."
+        <REF> anchor </REF>: str "The anchor string to search for within the HTML content."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the parser reported finding the anchor; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create an AnchorCheckParser instance with the target anchor. RESULT parser]
+            [COMMAND Iterate over response.iter_content(chunk_size=4096, decode_unicode=True) to obtain each chunk. RESULT chunk]
+            [COMMAND Within the for loop over chunks, if chunk is an instance of bytes, decode it using chunk.decode(). RESULT chunk]
+            [COMMAND Within the for loop over chunks, feed chunk into parser.feed(chunk). RESULT parser]
+            [COMMAND Within the for loop over chunks, if parser.found is True, break out of the loop. RESULT early_exit]
+            [COMMAND After the loop, close the parser with parser.close(). RESULT closed_parser]
+            [COMMAND Return parser.found as the final boolean result. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers the CheckExternalLinksBuilder and linkcheck configuration defaults with a Sphinx application, then returns metadata declaring the extension as builtin and safe for parallel reads and writes." setup]
+    [INPUTS]
+        <REF> app </REF>: Sphinx "The Sphinx application object receiving builder and configuration registrations."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> metadata </REF>: Dict[str, Any] "Extension metadata dictionary with version 'builtin', parallel_read_safe True, and parallel_write_safe True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Register CheckExternalLinksBuilder with the Sphinx application. RESULT none]
+            [COMMAND Register configuration value 'linkcheck_ignore' with default empty list and rebuild behavior None. RESULT none]
+            [COMMAND Register configuration value 'linkcheck_auth' with default empty list and rebuild behavior None. RESULT none]
+            [COMMAND Register configuration value 'linkcheck_request_headers' with default empty dictionary and rebuild behavior None. RESULT none]
+            [COMMAND Register configuration value 'linkcheck_retries' with default integer 1 and rebuild behavior None. RESULT none]
+            [COMMAND Register configuration value 'linkcheck_timeout' with default None, rebuild behavior None, and type constraint [int]. RESULT none]
+            [COMMAND Register configuration value 'linkcheck_workers' with default integer 5 and rebuild behavior None. RESULT none]
+            [COMMAND Register configuration value 'linkcheck_anchors' with default True and rebuild behavior None. RESULT none]
+            [COMMAND Register configuration value 'linkcheck_anchors_ignore' with default list containing the regular expression '^!' and rebuild behavior None, so anchors starting with '!' are ignored. RESULT none]
+            [COMMAND Return the extension metadata dictionary with version 'builtin', parallel_read_safe True, and parallel_write_safe True. RESULT extension_metadata]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

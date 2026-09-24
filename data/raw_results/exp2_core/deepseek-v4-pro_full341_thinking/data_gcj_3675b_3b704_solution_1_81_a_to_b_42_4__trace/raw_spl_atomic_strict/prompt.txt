@@ -1,0 +1,505 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   def solution(number_of_signs):
+2       a_to_b = []
+3       for i in range(number_of_signs):
+4           sign = raw_input()
+5           d, a, b = sign.split()
+6           d = int(d)
+7           a = int(a)
+8           b = int(b)
+9           a_to_b.append((d + a, d - b))
+10      N = None
+11      M = None
+12      maximum_set_size = 1
+13      number_of_maximum_set_sized = 0
+14      current_set_size = 1
+15      a_for_comparision, b_for_comparision = a_to_b.pop(0)
+16      is_finish = False
+17      while not is_finish and len(a_to_b) > 0:
+18          for index, tup in enumerate(a_to_b):
+19              if index == len(a_to_b) - 1:
+20                  is_finish = True
+21              a, b = tup
+22              if N is not None and M is None:
+23                  if a != a_for_comparision:
+24                      M = b
+25                      b_for_comparision = b
+26                  current_set_size += 1
+27              elif M is not None and N is None:
+28                  if b != b_for_comparision:
+29                      N = a
+30                      a_for_comparision = a
+31                  current_set_size += 1
+32              elif M is not None and N is not None:
+33                  if b != b_for_comparision and a != a_for_comparision:
+34                      if current_set_size > maximum_set_size:
+35                          maximum_set_size = current_set_size
+36                          number_of_maximum_set_sized = 1
+37                      elif current_set_size == maximum_set_size:
+38                          number_of_maximum_set_sized += 1
+39                      current_set_size = 1
+40                      N = None
+41                      M = None
+42                      a_to_b = a_to_b[index:]
+43                      break
+44                      a_for_comparision = a
+45                      b_for_comparision = b
+46                  else:
+47                      current_set_size+=1
+48              elif a == a_for_comparision and b == b_for_comparision:
+49                  if (N is None):
+50                      a_for_comparision = a
+51                  if (M is None):
+52                      b_for_comparision = b
+53                  current_set_size += 1
+54                  continue
+55              elif a == a_for_comparision and b != b_for_comparision:
+56                  if (N is None):
+57                      N = a
+58                      a_for_comparision = N
+59                  b_for_comparision = b
+60                  current_set_size += 1
+61              elif b == b_for_comparision and a != a_for_comparision:
+62                  if (M is None):
+63                      M = b
+64                      b_for_comparision = b
+65                  a_for_comparision = a
+66                  current_set_size += 1
+67              elif b != b_for_comparision and a != a_for_comparision:
+68                  if len(a_to_b) > index:
+69                      if a == a_to_b[index+1][0]:
+70                          N = a_to_b[index +1][0]
+71                          a_for_comparision = a_to_b[index +1][0]
+72                          M = b_for_comparision
+73                          current_set_size+=1
+74                      else:
+75                          M = a_to_b[index +1][1]
+76                          b_for_comparision = a_to_b[index +1][1]
+77                          N = a_for_comparision
+78                          current_set_size+=1
+79                  else:
+80                      current_set_size += 1
+81      return maximum_set_size, number_of_maximum_set_sized
+82  def read_input():
+83      number_of_tests = raw_input()
+84      for test_number in range(int(number_of_tests)):
+85          number_of_signs = raw_input()
+86          try:
+87              print_output(solution(int(number_of_signs)), test_number + 1)
+88          except Exception as exc:
+89              pass
+90  def print_output(answer, test_case):
+91      print "Case #{0}: {1} {2}".format(test_case, answer[0], answer[1])
+92  read_input()
+```
+
+
+**Question**: Does `(a_to_b,15)` have data dependence over `(a_to_b,42)` in function `solution`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: solution
+Target source anchor: variable=a_to_b, line=42
+Trace source anchor: variable=a_to_b, line=15
+Attached SPL owners: solution
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Initialize an empty list named a_to_b. RESULT a_to_b]
+- [COMMAND For each i from 0 to number_of_signs - 1, read a line of input, split it into three parts, convert them to integers d, a, and b, and append the tuple (d + a, d - b) to a_to_b. RESULT a_to_b]
+- [COMMAND While is_finish is False and a_to_b is not empty, iterate over each tuple in a_to_b with its index. For each tuple, if it is the last element, set is_finish to True. Then, based on the current state of N and M, update the comparison values, current_set_size, and potentially reset the state and truncate a_to_b when a new set is detected. RESULT maximum_set_size, number_of_maximum_set_sized]
+- [COMMAND Reset current_set_size to 1, set N and M to None, truncate a_to_b to start from the current index, and break out of the for loop. RESULT current_set_size, N, M, a_to_b]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 2: a_to_b = []
+- line 42: a_to_b = a_to_b[index:]
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": ["a_to_b"], "disposition": "inspect_against_official_dependence_definition", "line": 2, "position": "before_target", "reason": "a_to_b", "relevant_identifiers": ["a_to_b"], "roles": ["definition"], "source_identifiers": ["a_to_b"]}
+- {"definitions": ["a_to_b"], "disposition": "inspect_against_official_dependence_definition", "line": 42, "position": "target", "reason": "a_to_b", "relevant_identifiers": ["a_to_b", "index"], "roles": ["definition", "use"], "source_identifiers": ["a_to_b", "index"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solution`
+- source lines: 1-81
+- source signature: `def solution(number_of_signs):`
+- source content hash: `6e3953a5649d18345dc1044eb840086e00f1ade6a7de2ac0e7bedb2006dac42d`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```python
+   1  def solution(number_of_signs):
+   2      a_to_b = []
+   3      for i in range(number_of_signs):
+   4          sign = raw_input()
+   5          d, a, b = sign.split()
+   6          d = int(d)
+   7          a = int(a)
+   8          b = int(b)
+   9          a_to_b.append((d + a, d - b))
+  10      N = None
+  11      M = None
+  12      maximum_set_size = 1
+  13      number_of_maximum_set_sized = 0
+  14      current_set_size = 1
+  15      a_for_comparision, b_for_comparision = a_to_b.pop(0)
+  16      is_finish = False
+  17      while not is_finish and len(a_to_b) > 0:
+  18          for index, tup in enumerate(a_to_b):
+  19              if index == len(a_to_b) - 1:
+  20                  is_finish = True
+  21              a, b = tup
+  22              if N is not None and M is None:
+  23                  if a != a_for_comparision:
+  24                      M = b
+  25                      b_for_comparision = b
+  26                  current_set_size += 1
+  27              elif M is not None and N is None:
+  28                  if b != b_for_comparision:
+  29                      N = a
+  30                      a_for_comparision = a
+  31                  current_set_size += 1
+  32              elif M is not None and N is not None:
+  33                  if b != b_for_comparision and a != a_for_comparision:
+  34                      if current_set_size > maximum_set_size:
+  35                          maximum_set_size = current_set_size
+  36                          number_of_maximum_set_sized = 1
+  37                      elif current_set_size == maximum_set_size:
+  38                          number_of_maximum_set_sized += 1
+  39                      current_set_size = 1
+  40                      N = None
+  41                      M = None
+  42                      a_to_b = a_to_b[index:]
+  43                      break
+  44                      a_for_comparision = a
+  45                      b_for_comparision = b
+  46                  else:
+  47                      current_set_size+=1
+  48              elif a == a_for_comparision and b == b_for_comparision:
+  49                  if (N is None):
+  50                      a_for_comparision = a
+  51                  if (M is None):
+  52                      b_for_comparision = b
+  53                  current_set_size += 1
+  54                  continue
+  55              elif a == a_for_comparision and b != b_for_comparision:
+  56                  if (N is None):
+  57                      N = a
+  58                      a_for_comparision = N
+  59                  b_for_comparision = b
+  60                  current_set_size += 1
+  61              elif b == b_for_comparision and a != a_for_comparision:
+  62                  if (M is None):
+  63                      M = b
+  64                      b_for_comparision = b
+  65                  a_for_comparision = a
+  66                  current_set_size += 1
+  67              elif b != b_for_comparision and a != a_for_comparision:
+  68                  if len(a_to_b) > index:
+  69                      if a == a_to_b[index+1][0]:
+  70                          N = a_to_b[index +1][0]
+  71                          a_for_comparision = a_to_b[index +1][0]
+  72                          M = b_for_comparision
+  73                          current_set_size+=1
+  74                      else:
+  75                          M = a_to_b[index +1][1]
+  76                          b_for_comparision = a_to_b[index +1][1]
+  77                          N = a_for_comparision
+  78                          current_set_size+=1
+  79                  else:
+  80                      current_set_size += 1
+  81      return maximum_set_size, number_of_maximum_set_sized
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads a list of sign tuples, groups consecutive tuples that share at least one common element, and returns the maximum group size and the count of groups achieving that maximum size." solution]
+    [INPUTS]
+        <REF> number_of_signs </REF>: integer "The number of signs to read from input."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple containing the maximum set size and the number of sets that achieve that maximum size."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list named a_to_b. RESULT a_to_b]
+            [COMMAND For each i from 0 to number_of_signs - 1, read a line of input, split it into three parts, convert them to integers d, a, and b, and append the tuple (d + a, d - b) to a_to_b. RESULT a_to_b]
+            [COMMAND Initialize N to None, M to None, maximum_set_size to 1, number_of_maximum_set_sized to 0, and current_set_size to 1. RESULT state_variables]
+            [COMMAND Pop the first tuple from a_to_b and assign its two elements to a_for_comparision and b_for_comparision. RESULT a_for_comparision, b_for_comparision]
+            [COMMAND Set is_finish to False. RESULT is_finish]
+            [COMMAND While is_finish is False and a_to_b is not empty, iterate over each tuple in a_to_b with its index. For each tuple, if it is the last element, set is_finish to True. Then, based on the current state of N and M, update the comparison values, current_set_size, and potentially reset the state and truncate a_to_b when a new set is detected. RESULT maximum_set_size, number_of_maximum_set_sized]
+            [COMMAND Return the tuple (maximum_set_size, number_of_maximum_set_sized). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When both N and M are not None and a tuple has both a and b different from the comparison values, the current set ends.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If current_set_size is greater than maximum_set_size, update maximum_set_size to current_set_size and set number_of_maximum_set_sized to 1. Else if current_set_size equals maximum_set_size, increment number_of_maximum_set_sized. RESULT maximum_set_size, number_of_maximum_set_sized]
+            [COMMAND Reset current_set_size to 1, set N and M to None, truncate a_to_b to start from the current index, and break out of the for loop. RESULT current_set_size, N, M, a_to_b]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When both a and b differ from the comparison values and there is a next element in a_to_b, a look-ahead strategy is used to determine the new set's fixed values.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If the next tuple's a matches the current a, set N to that a, a_for_comparision to that a, and M to the previous b_for_comparision. Otherwise, set M to the next tuple's b, b_for_comparision to that b, and N to the previous a_for_comparision. Increment current_set_size. RESULT N, M, a_for_comparision, b_for_comparision, current_set_size]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

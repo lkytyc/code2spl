@@ -1,0 +1,63 @@
+# FILE: django/contrib/messages/storage/cookie.py
+The code implements a Django message storage backend that stores messages in a client-side cookie, with signing to prevent tampering. It defines three related components:
+
+- `MessageEncoder`: a JSON encoder that converts `Message` objects into compact JSON arrays. Each message becomes a list beginning with a special key, followed by a flag indicating whether the message content is safe HTML, the message level, the message text, and optionally extra tags. This allows normal JSON serialization of messages.
+- `MessageDecoder`: a JSON decoder that reverses the encoding. It scans parsed JSON and turns arrays with the special key back into `Message` objects, applying `mark_safe` when the safe-content flag is set. It recursively processes nested lists and dictionaries, and otherwise returns the original data.
+- `CookieStorage`: the storage class, subclassing Django’s `BaseStorage`. It reads and writes messages from a cookie named `messages` on the current request/response.
+
+Behavior and interactions:
+
+- On initialization, it creates a `Signer` using `django.core.signing.get_cookie_signer` with a fixed salt, used to sign and verify the cookie’s contents.
+- `_get()` loads cookie data from the request, decodes and verifies it, and returns a list of messages. A special sentinel string (`__messagesnotfinished__`) at the end indicates that not all messages were stored because the cookie size limit was reached; when found, the sentinel is popped and `all_retrieved` is `False`.
+- `_encode()` serializes a message list to compact JSON via `MessageEncoder` and signs the encoded text, returning the signed value as a cookie-safe string. If the message list is empty and `encode_empty` is false, it returns `None`.
+- `_decode()` verifies and unsigns the cookie value. If the signature is invalid, it attempts a legacy hash-based decoding (for pre-Django 3.1 hashes) and falls back to `None` on failure. It then parses the JSON using `MessageDecoder` and returns the message list; on invalid JSON or bad data, it marks the storage as used so the cookie can be removed.
+- `_store()` takes a list of messages and a response object, encodes the messages, and checks whether the encoded cookie value fits within `max_cookie_size` (2048 bytes). If it is too large, it removes messages from the list (either oldest or newest, controlled by `remove_oldest`) until the size fits, collects the removed messages as unstored, and adds the `not_finished` sentinel to the remaining encoded data to signal the partial storage.
+- `_update_cookie()` writes the encoded cookie to the response using settings for session cookie domain, security, `httponly`, and `samesite`. If the encoded data is empty, it deletes the cookie instead.
+- `_legacy_hash()` and `_legacy_decode()` provide backward compatibility with older Django versions by using an HMAC/SHA1 hash computed from the serialized value.
+
+The code handles size constraints, secure signing, safe string preservation, and partial message storage. It also includes a deprecation path for older hashing, but the main flow uses the configured cookie signer to ensure data integrity and authenticity.
+
+# FILE: django/contrib/sessions/middleware.py
+This is Django’s session middleware. It links each HTTP request to a session store and keeps the session cookie on the response up to date.
+
+- In `__init__`, it stores the callable `get_response`, calls Django’s async compatibility check, imports the session engine configured by `settings.SESSION_ENGINE`, and creates a `SessionStore` class for that engine.
+- `process_request` reads the session cookie name from settings, gets its value from the request’s cookies, and attaches a session object to `request.session` using that session key.
+- `process_response` decides whether to update, delete, or leave the session cookie alone:
+  - If the request had a session cookie but the session is now empty, it deletes the session cookie and adds `Cookie` to the `Vary` header.
+  - If the session was accessed, it adds `Cookie` to the `Vary` header.
+  - If the session was modified, or if `SESSION_SAVE_EVERY_REQUEST` is enabled, and the session is not empty, it saves the session data and sets the session cookie with the appropriate age, expiration, domain, path, secure flag, HTTP-only flag, and SameSite setting.
+  - For browser-close sessions, it sets no max-age or expiration; otherwise it computes an expiration timestamp from the session expiry age.
+  - It skips saving the session on HTTP 500 responses.
+  - If saving fails because the session was deleted mid-request, it raises `SuspiciousOperation`.
+
+The middleware’s overall job is to persist session state across requests and ensure the session cookie on the client matches the current session store.
+
+# FILE: django/http/response.py
+This code defines Django’s HTTP response classes, which represent server responses sent to clients. It provides a base class and several specialized subclasses, along with a small exception class.
+
+The core `HttpResponseBase` class handles common response features:
+
+- Stores HTTP headers as lowercase‑keyed entries, preserving original case for backward compatibility.
+- Supports case‑insensitive header lookup, setting, deletion, defaults, and iteration.
+- Validates that header values do not contain newlines, and converts header names/values to ASCII/latin‑1, using MIME encoding when necessary.
+- Determines the response charset from an explicit setting or from the `Content-Type` header, falling back to Django’s `DEFAULT_CHARSET`.
+- Manages cookies via `SimpleCookie`, providing methods to set, sign, and delete cookies, including support for `max_age`, `expires`, `domain`, `secure`, `httponly`, and `samesite`.
+- Serializes headers into a raw HTTP header block as a bytestring.
+- Implements a partial file-like/stream interface: `close` runs resource closers and sends a request‑finished signal; `write`, `flush`, `tell`, `writable`, and `writelines` are either no‑ops or raise errors, depending on the subclass.
+- Converts content values into bytes using the response charset.
+
+`HttpResponse` is a non‑streaming response with content held as a bytestring (or list of bytestring chunks). It supports reassigning the `content` property, appending via `write`, iterating over chunks, retrieving the full value with `getvalue`, and serializing the entire HTTP message (headers plus body).
+
+`StreamingHttpResponse` is designed for streamed content. Instead of a single bytestring, it wraps an iterable of chunks, converting each chunk to bytes lazily. It can only be iterated once, and any close method on the original iterator is added as a resource closer. It forbids direct access to a `content` attribute and provides `streaming_content` instead.
+
+`FileResponse` extends `StreamingHttpResponse` for file streaming. It sets headers based on the file-like object: `Content-Length` from file size, `Content-Type` guessed from the filename (with special mappings for compressed formats, falling back to `application/octet-stream`), and `Content-Disposition` for inline or attachment display, handling non‑ASCII filenames via RFC 5987 encoding. It streams the file in fixed‑size blocks.
+
+Redirect responses (`HttpResponseRedirectBase`, `HttpResponseRedirect`, `HttpResponsePermanentRedirect`) set a `Location` header, validate the scheme against an allowlist (`http`, `https`, `ftp`), and reject unsafe protocols. They provide a `url` property for the redirect target.
+
+Several convenience subclasses set specific status codes:
+- `HttpResponseNotModified` (304) removes `Content-Type` and disallows setting a body.
+- `HttpResponseBadRequest` (400), `HttpResponseNotFound` (404), `HttpResponseForbidden` (403), `HttpResponseNotAllowed` (405, sets an `Allow` header), `HttpResponseGone` (410), and `HttpResponseServerError` (500).
+
+`Http404` is a simple exception class commonly used for 404 errors.
+
+`JsonResponse` is an `HttpResponse` subclass that serializes Python data to JSON using a configurable encoder. It defaults to only allowing dictionaries for safety (set `safe=False` for other types), accepts extra `json.dumps` parameters, and sets `Content-Type` to `application/json` by default.

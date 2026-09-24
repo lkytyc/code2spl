@@ -1,0 +1,115 @@
+# CLASS VectorUtil
+
+[DEFINE_WORKER: "Compute the similarity between two input vectors by normalizing each vector and returning the dot product of the normalized vectors." similarity]
+    [INPUTS]
+        <REF> vector_1 </REF>: vector "The first input vector to normalize and compare."
+        <REF> vector_2 </REF>: vector "The second input vector to normalize and compare."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: scalar "The dot product of the normalized input vectors."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize vector_1 using matutils.unitvec. RESULT normalized_vector_1]
+            [COMMAND Normalize vector_2 using matutils.unitvec. RESULT normalized_vector_2]
+            [COMMAND Compute the dot product of normalized_vector_1 and normalized_vector_2. RESULT dot_product]
+            [COMMAND Return dot_product. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Either input vector cannot be normalized due to invalid, malformed, or zero-magnitude content, depending on the behavior of matutils.unitvec.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt normalization for each input vector according to matutils.unitvec behavior. RESULT normalization_attempt]
+            [COMMAND Propagate the resulting failure or special behavior without applying any fallback in this method. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compute cosine similarity scores between one input vector and each vector in a collection by dividing their dot products by the product of their magnitudes." cosine_similarities]
+    [INPUTS]
+        <REF> vector_1 </REF>: vector "The reference vector whose magnitude is computed and compared against all vectors in the collection."
+        <REF> vectors_all </REF>: matrix "A collection of vectors, typically arranged row-wise, for which per-vector magnitudes and dot products with the reference vector are computed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> similarities </REF>: numeric array "An array of cosine similarity values between the reference vector and each vector in the collection."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the Euclidean norm of vector_1. RESULT norm]
+            [COMMAND Compute the Euclidean norm of each row vector in vectors_all using axis 1. RESULT all_norms]
+            [COMMAND Compute the dot product between each vector in vectors_all and vector_1. RESULT dot_products]
+            [COMMAND Compute cosine similarity values by dividing dot_products element-wise by the product of norm and all_norms. RESULT similarities]
+            [COMMAND Return similarities. RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If vector_1 is a zero vector, then norm equals 0 during the normalization step.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Proceed with the same division without any guard or fallback handling, which can produce inf or nan values in similarities. RESULT similarities]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If any row of vectors_all is a zero vector, then the corresponding entry in all_norms equals 0 during the normalization step.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Proceed with the same element-wise division without any guard or fallback handling, which can produce inf or nan values for the affected similarity entries. RESULT similarities]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validate that both input vector lists are non-empty, then compute and return the dot product of their mean vectors after normalizing each mean to unit length." n_similarity]
+    [INPUTS]
+        <REF> vector_list_1 </REF>: list "First non-empty collection of vectors to convert to an array, average along axis 0, and normalize."
+        <REF> vector_list_2 </REF>: list "Second non-empty collection of vectors to convert to an array, average along axis 0, and normalize."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: scalar "Dot product of the unit-normalized mean vector of the first input and the unit-normalized mean vector of the second input."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether both input lists have length greater than 0 by evaluating whether len(vector_list_1) and len(vector_list_2) are both truthy. RESULT both_lists_non_empty]
+            [COMMAND If both_lists_non_empty is true, convert vector_list_1 to an array and compute its mean along axis 0. RESULT mean_vector_1]
+            [COMMAND If both_lists_non_empty is true, normalize mean_vector_1 to unit length using matutils.unitvec. RESULT unit_mean_vector_1]
+            [COMMAND If both_lists_non_empty is true, convert vector_list_2 to an array and compute its mean along axis 0. RESULT mean_vector_2]
+            [COMMAND If both_lists_non_empty is true, normalize mean_vector_2 to unit length using matutils.unitvec. RESULT unit_mean_vector_2]
+            [COMMAND If both_lists_non_empty is true, compute the dot product of unit_mean_vector_1 and unit_mean_vector_2 and return it immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Either vector_list_1 has length 0 or vector_list_2 has length 0, so the expression not (len(vector_list_1) and len(vector_list_2)) is true.]
+        [LOG "At least one of the passed list is empty."]
+        [THROW ZeroDivisionError "Raised immediately when at least one input list is empty, preventing any further computation."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Compute a dictionary of smoothed inverse-document-frequency weights by preserving input key order, transforming counts with log((total_num + 1) / (count + 1)), and mapping the resulting weights back to their original keys." compute_idf_weight_dict]
+    [INPUTS]
+        <REF> total_num </REF>: number "Total quantity used as the numerator in the smoothed inverse-frequency calculation."
+        <REF> number_dict </REF>: dictionary "Mapping from each original key to its associated count value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dictionary "Mapping from each original key to its computed smoothed log weight."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary index_2_key_map, set index to 0, and initialize an empty list count_list. RESULT index_2_key_map,index,count_list]
+            [COMMAND For each key and count pair produced by number_dict.items(), store the current key in index_2_key_map under the current index, append count to count_list, and then increment index by 1. RESULT index_2_key_map,count_list,index]
+            [COMMAND Convert count_list into a NumPy array named a. RESULT a]
+            [COMMAND Replace a with the element-wise smoothed log values computed as np.log((total_num + 1) / (a + 1)), using +1 in both numerator and denominator to avoid divide-by-zero when counts are 0. RESULT a]
+            [COMMAND Initialize an empty dictionary result. RESULT result]
+            [COMMAND For each index and weight w from enumerate(a), look up the original key from index_2_key_map using that index and assign result[key] = w. RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

@@ -1,0 +1,100 @@
+class BookManagement:
+    """
+    This is a class as managing books system, which supports to add and remove books from the inventory dict, view the inventory, and check the quantity of a specific book.
+    """
+
+    def __init__(self):
+        """
+        Initialize the inventory of Book Manager.
+        """
+        self.inventory = {}
+
+    def add_book(self, title, quantity=1):
+        """
+        Add one or several books to inventory which is sorted by book title.
+        :param title: str, the book title
+        :param quantity: int, default value is 1.
+        """
+        _condition_result = title in self.inventory
+        if _condition_result:
+            self.inventory[title] += quantity
+        else:
+            self.inventory[title] = quantity
+
+    def remove_book(self, title, quantity):
+        """
+        Remove one or several books from inventory which is sorted by book title.
+        Raise false while get invalid input.
+        :param title: str, the book title
+        :param quantity: int
+        """
+        availability_check = (title in self.inventory) and (self.inventory[title] >= quantity)
+        if not availability_check:
+            raise False
+        updated_quantity = self.inventory[title] - quantity
+        self.inventory[title] = updated_quantity
+        zero_quantity_check = updated_quantity == 0
+        if zero_quantity_check:
+            inventory_cleanup = self.inventory.pop(title)
+
+    def view_inventory(self):
+        """
+        Get the inventory of the Book Management.
+        :return self.inventory: dictionary, {title(str): quantity(int), ...}
+        >>> bookManagement = BookManagement()
+        >>> bookManagement.add_book("book1", 1)
+        >>> bookManagement.add_book("book2", 1)
+        >>> bookManagement.view_inventory()
+        {'book1': 1, 'book2': 1}
+        """
+        inventory_value = self.inventory
+        result = inventory_value
+        return result
+
+    def view_book_quantity(self, title):
+        """
+        Get the quantity of a book.
+        :param title: str, the title of the book.
+        :return quantity: the quantity of this book title. return 0 when the title does not exist in self.invenroty
+        >>> bookManagement = BookManagement()
+        >>> bookManagement.add_book("book1", 1)
+        >>> bookManagement.view_book_quantity("book3")
+        0
+        """
+        membership_check = title not in self.inventory
+        if membership_check:
+            return 0
+        return self.inventory[title]
+
+import unittest
+
+class BookManagementTestViewBookQuantity(unittest.TestCase):
+    def test_view_book_quantity_1(self):
+        bookManagement = BookManagement()
+        bookManagement.add_book("book1", 2)
+        self.assertEqual(2, bookManagement.view_book_quantity("book1"))
+
+    def test_view_book_quantity_2(self):
+        bookManagement = BookManagement()
+        self.assertEqual(0, bookManagement.view_book_quantity("book1"))
+
+    def test_view_book_quantity_3(self):
+        bookManagement = BookManagement()
+        bookManagement.add_book("book1", 2)
+        self.assertEqual(2, bookManagement.view_book_quantity("book1"))
+
+    def test_view_book_quantity_4(self):
+        bookManagement = BookManagement()
+        bookManagement.add_book("book1", 2)
+        bookManagement.remove_book("book1", 2)
+        self.assertEqual(0, bookManagement.view_book_quantity("book1"))
+
+    def test_view_book_quantity_5(self):
+        bookManagement = BookManagement()
+        bookManagement.add_book("book1", 3)
+        bookManagement.remove_book("book1", 2)
+        self.assertEqual(1, bookManagement.view_book_quantity("book1"))
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

@@ -1,0 +1,344 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   import sys
+2   import numpy as np
+3   def eprint(*args, **kwargs):
+4       print(*args, file=sys.stderr, **kwargs)
+5   def main():
+6       T = int(raw_input())     
+7       for i in xrange(1, T + 1):
+8           tmp = raw_input()
+9           tmpList = map(int, tmp.split())
+10          N = int(tmpList[0])                          
+11          K = int(tmpList[1])                          
+12          stall_occupied = [True]                 
+13          for j in xrange(N):
+14              stall_occupied.append(False)
+15          stall_occupied.append(True)
+16          Ls = []
+17          Rs = []
+18          Min_s = []
+19          Max_s = []
+20          for j in xrange(N+2):
+21              if stall_occupied[j]:
+22                  Ls.append(-1)
+23                  Rs.append(-1)
+24              else:
+25                  Ls.append(j - 1)
+26                  Rs.append(N - j)
+27              Min_s.append(min(Ls[-1], Rs[-1]))
+28              Max_s.append(max(Ls[-1], Rs[-1]))
+29          for k in xrange(K):
+30              maximal = max(Min_s)
+31              if Min_s.count(maximal) > 1:
+32                  values = np.array(Min_s)
+33                  idxs = np.where(values == maximal)[0]
+34                  max_of_idxs = []
+35                  for j in idxs:
+36                      max_of_idxs.append(Max_s[j])
+37                  max_max = max(max_of_idxs)
+38                  if(max_of_idxs.count(max_max) > 1):
+39                      values1 = np.array(max_of_idxs)
+40                      idxs1 = np.where(values1 == max_max)[0]
+41                      idx = idxs[idxs1[0]]
+42                  else:
+43                      idx = idxs[max_of_idxs.index(max_max)]
+44                  y =  max(Ls[idx], Rs[idx])
+45                  z =  min(Ls[idx], Rs[idx])
+46                  stall_occupied[idx] = True
+47                  Ls[idx] = -1
+48                  Rs[idx] = -1
+49                  Min_s[idx] = -1
+50                  Max_s[idx] = -1
+51                  leftIdx = idx - 1
+52                  while leftIdx > 0:
+53                      if stall_occupied[leftIdx]:
+54                          break
+55                      Rs[leftIdx] = idx - leftIdx - 1
+56                      Min_s[leftIdx] = min(Rs[leftIdx], Ls[leftIdx])
+57                      Max_s[leftIdx] = max(Rs[leftIdx], Ls[leftIdx])
+58                      leftIdx -= 1
+59                  rightIdx = idx + 1
+60                  while rightIdx < N + 2:
+61                      if stall_occupied[rightIdx]:
+62                          break
+63                      Ls[rightIdx] = rightIdx - idx - 1
+64                      Min_s[rightIdx] = min(Rs[rightIdx], Ls[rightIdx])
+65                      Max_s[rightIdx] = max(Rs[rightIdx], Ls[rightIdx])
+66                      rightIdx += 1
+67              else:
+68                  idx = Min_s.index(maximal)
+69                  y =  max(Ls[idx], Rs[idx])
+70                  z =  min(Ls[idx], Rs[idx])
+71                  stall_occupied[idx] = True
+72                  Ls[idx] = -1
+73                  Rs[idx] = -1
+74                  Min_s[idx] = -1
+75                  Max_s[idx] = -1
+76                  leftIdx = idx - 1
+77                  while leftIdx > 0:
+78                      if stall_occupied[leftIdx]:
+79                          break
+80                      Rs[leftIdx] = idx - leftIdx - 1
+81                      Min_s[leftIdx] = min(Rs[leftIdx], Ls[leftIdx])
+82                      Max_s[leftIdx] = max(Rs[leftIdx], Ls[leftIdx])
+83                      leftIdx -= 1
+84                  rightIdx = idx + 1
+85                  while rightIdx < N + 2:
+86                      if stall_occupied[rightIdx]:
+87                          break
+88                      Ls[rightIdx] = rightIdx - idx - 1
+89                      Min_s[rightIdx] = min(Rs[rightIdx], Ls[rightIdx])
+90                      Max_s[rightIdx] = max(Rs[rightIdx], Ls[rightIdx])
+91                      rightIdx += 1
+92          print("Case #{}: {} {}".format(i, y, z))
+93          sys.stdout.flush()
+94  if __name__ == "__main__":
+95      main()
+```
+
+
+**Question**: Does `(tmpList,9)` have data dependence over `(K,11)` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function main: Simulates the Google Code Jam Bathroom Stalls process for each test case by placing K people into N stalls using maximum-minimum-distance selection with max-distance and leftmost tie-breaking, then prints the last selected stall's max and min distances.
+The behaviour proceeds in this order:
+1. Read an integer T from standard input using raw_input() and int(); T is the number of test cases. This produces T.
+2. For each test case i from 1 to T inclusive, read a line tmp from standard input, split it on whitespace, map every token to an integer, and store the resulting list as tmpList. This produces i, tmpList.
+3. Within the outer loop over i, set N = int(tmpList[0]) and K = int(tmpList[1]); N is the number of stalls and K is the number of people to place. This produces N, K.
+4. Within the outer loop over i, initialize stall_occupied as [True] followed by N False entries and then append True, producing N+2 elements with occupied sentinels at indices 0 and N+1. This produces stall_occupied.
+5. Within the outer loop over i, initialize Ls, Rs, Min_s, and Max_s as empty lists. This produces Ls, Rs, Min_s, Max_s.
+6. Within the outer loop over i, for j from 0 to N+1 inclusive, if stall_occupied[j] is True append -1 to Ls and -1 to Rs; otherwise append j-1 to Ls and N-j to Rs. Then append min(Ls[-1], Rs[-1]) to Min_s and max(Ls[-1], Rs[-1]) to Max_s. This produces Ls, Rs, Min_s, Max_s.
+7. Within the outer loop over i, for each placement k from 0 to K-1 inclusive, compute maximal = max(Min_s). This produces maximal.
+8. Within the placement loop over k, if Min_s.count(maximal) is greater than 1, gather all indices idxs in Min_s for which Min_s equals maximal. This produces idxs.
+9. Within the tie-handling path, build max_of_idxs as the list of Max_s[j] for every index j in idxs, then compute max_max = max(max_of_idxs). This produces max_of_idxs, max_max.
+10. Within the tie-handling path, if max_of_idxs.count(max_max) is greater than 1, select idx as the first index in idxs whose Max_s value is max_max; otherwise select idx as the index in idxs corresponding to the unique max_max value. This produces idx.
+11. Within the placement loop over k, if Min_s.count(maximal) equals 1, select idx as the first index in Min_s whose value equals maximal, using Min_s.index(maximal). This produces idx.
+12. After selecting idx in the placement loop over k, set y = max(Ls[idx], Rs[idx]) and z = min(Ls[idx], Rs[idx]), then set stall_occupied[idx] = True and set Ls[idx], Rs[idx], Min_s[idx], and Max_s[idx] all to -1. This produces y, z, stall_occupied, Ls, Rs, Min_s, Max_s.
+13. After occupying idx, update left-side distances: start leftIdx = idx - 1 and while leftIdx > 0, stop if stall_occupied[leftIdx] is True; otherwise assign Rs[leftIdx] = idx - leftIdx - 1, Min_s[leftIdx] = min(Rs[leftIdx], Ls[leftIdx]), Max_s[leftIdx] = max(Rs[leftIdx], Ls[leftIdx]), and decrement leftIdx by 1. This produces Ls, Rs, Min_s, Max_s.
+14. After occupying idx, update right-side distances: start rightIdx = idx + 1 and while rightIdx < N + 2, stop if stall_occupied[rightIdx] is True; otherwise assign Ls[rightIdx] = rightIdx - idx - 1, Min_s[rightIdx] = min(Rs[rightIdx], Ls[rightIdx]), Max_s[rightIdx] = max(Rs[rightIdx], Ls[rightIdx]), and increment rightIdx by 1. This produces Ls, Rs, Min_s, Max_s.
+15. After all K placements for test case i, print the line formatted as Case #i: y z using the last selected y and z, then flush standard output. This produces stdout.

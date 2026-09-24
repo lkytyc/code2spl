@@ -1,0 +1,835 @@
+# FILE: requests/models.py
+# CLASS RequestEncodingMixin
+
+[DEFINE_WORKER: "Builds the path URL string from self.url, defaulting an empty path to '/' and appending a '?' query section when the parsed query is non-empty." path_url]
+    [INPUTS]
+        <REF> self </REF>: object "Object containing the url attribute to be parsed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> joined_url </REF>: string "The constructed path URL string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize url as an empty list. RESULT url]
+            [COMMAND Parse self.url using urlsplit and store the SplitResult in p. RESULT p]
+            [COMMAND Read p.path into path. RESULT path]
+            [COMMAND If path is falsy, set path to '/'. RESULT path]
+            [COMMAND Append path to url. RESULT url]
+            [COMMAND Read p.query into query. RESULT query]
+            [COMMAND Within the branch where query is truthy, append '?' to url. RESULT url]
+            [COMMAND Within the branch where query is truthy, append query to url. RESULT url]
+            [COMMAND Join url into a single string and assign the result to joined_url. RESULT joined_url]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Encodes parameter data by URL-encoding iterable key-value pairs after filtering None values, while passing strings, file-like objects, and non-iterable values through their respective conversions." _encode_params]
+    [INPUTS]
+        <REF> data </REF>: object "The parameter data to encode. Can be a string, bytes, a file-like object, an iterable of key-value pairs, or any other value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The converted native string, the original file-like or non-iterable object, or the URL-encoded query string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If data is not str/bytes, has no 'read' attribute, and has '__iter__', treat it as an iterable of key-value pairs and initialize result as an empty list. RESULT result]
+            [COMMAND Convert data with to_key_val_list(data) and loop over each key-value pair (k, vs). RESULT current_pair]
+            [COMMAND Within the pair loop, if vs is a basestring or does not have '__iter__', normalize vs to [vs]; otherwise keep vs unchanged. RESULT normalized_vs]
+            [COMMAND Within the pair loop, iterate over each value v in normalized_vs. RESULT current_value]
+            [COMMAND Within the value loop, if v is not None, append the tuple (k.encode('utf-8') if isinstance(k, str) else k, v.encode('utf-8') if isinstance(v, str) else v) to result; if v is None, skip it. RESULT result]
+            [COMMAND After all pairs and values are processed, return urlencode(result, doseq=True). RESULT encoded_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: data is an instance of str or bytes.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return to_native_string(data) immediately. RESULT encoded_params]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: data is not str/bytes and has a 'read' attribute.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return data unchanged as a file-like object. RESULT data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: data is not str/bytes, has no 'read' attribute, and does not have '__iter__'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return data unchanged. RESULT data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a multipart/form-data request body by normalizing form data fields and file entries, converting them to RequestField objects, and returning the encoded body and Content-Type header." _encode_files]
+    [INPUTS]
+        <REF> files </REF>: dict or list of 2-tuples "File entries to encode. Values can be file-like objects, strings/bytes, or tuples/lists of (filename, fileobj), (filename, fileobj, content_type), or (filename, fileobj, content_type, headers)."
+        <REF> data </REF>: dict or list of 2-tuples "Form fields to encode. Order is retained if data is a list of 2-tuples and arbitrary if supplied as a dict. Must not be a string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> body </REF>: bytes or str "Encoded multipart/form-data request body."
+        <REF> content_type </REF>: str "Content-Type header for the multipart request, including the boundary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND At the start, if files is falsy, raise ValueError; otherwise, if data is a basestring, raise ValueError; proceed only when both guards pass. RESULT guard_passed]
+            [COMMAND Initialize new_fields as an empty list. RESULT new_fields]
+            [COMMAND Set fields to to_key_val_list(data or {}). RESULT fields]
+            [COMMAND Set files to to_key_val_list(files or {}), using the original files value before rebinding. RESULT files]
+            [COMMAND For each (field, val) pair in fields, if val is a basestring or does not have __iter__, wrap val in a list; then for each v in val, if v is not None, convert non-bytes v to str, decode field from UTF-8 if it is bytes, encode v to UTF-8 if it is str, and append the resulting (field, v) tuple to new_fields. RESULT new_fields]
+            [COMMAND For each (k, v) pair in files, set ft and fh to None; if v is a tuple or list, unpack it by length: length 2 gives (fn, fp), length 3 gives (fn, fp, ft), and otherwise unpack (fn, fp, ft, fh), which requires exactly four elements; if v is not a tuple or list, set fn to guess_filename(v) or k and set fp to v. RESULT fn_fp_ft_fh]
+            [COMMAND For the normalized file entry, if fp is a str, bytes, or bytearray, set fdata to fp; otherwise set fdata to fp.read(). RESULT fdata]
+            [COMMAND Create RequestField with name=k, data=fdata, filename=fn, and headers=fh, call rf.make_multipart(content_type=ft) on it, and append rf to new_fields. RESULT new_fields]
+            [COMMAND Call encode_multipart_formdata(new_fields) and assign its two returned values to body and content_type. RESULT body_and_content_type]
+            [COMMAND Return body and content_type. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: If files is falsy (for example None, empty list, empty dict, empty string, or False).]
+        [LOG "Files must be provided."]
+        [THROW ValueError "Raised because no files were provided or the files argument is falsy."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: If files is truthy and data is an instance of basestring (a Python 2 str/unicode type or subclass).]
+        [LOG "Data must not be a string."]
+        [THROW ValueError "Raised because data must be a collection of field/value pairs, not a string."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS RequestHooksMixin
+
+[DEFINE_WORKER: "Registers a hook on the specified event by appending the hook directly when it is callable, or by extending the event's hook list with callable elements from the iterable hook, while rejecting unsupported event names with ValueError." register_hook]
+    [INPUTS]
+        <REF> event </REF>: hashable key "Event key used to select the hook list in self.hooks."
+        <REF> hook </REF>: callable or iterable "Single callable to register, or an iterable whose callable elements are registered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether event is a known key in self.hooks; only proceed if event is present. RESULT _event_validated]
+            [COMMAND Evaluate isinstance(hook, collections.Callable); if it is true, append hook to self.hooks[event] and do not iterate hook. RESULT _callable_hook_appended]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: isinstance(hook, collections.Callable) is false and hasattr(hook, '__iter__') is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over hook, select only elements h for which isinstance(h, collections.Callable) is true, and extend self.hooks[event] with those selected callable elements. RESULT _iterable_callable_elements_extended]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: event not in self.hooks]
+        [LOG "Unsupported event specified, with event name '{event}'"]
+        [THROW ValueError "The event name is not registered in self.hooks and is therefore unsupported."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deregisters a previously registered hook from the specified event's hook list and returns True if the hook was present, otherwise returns False." deregister_hook]
+    [INPUTS]
+        <REF> self </REF>: object "The object whose hooks dictionary is accessed."
+        <REF> event </REF>: str "Event name identifying the hook list from which to deregister."
+        <REF> hook </REF>: callable "The hook to remove from the event's hook list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if the hook existed and was removed; False if the hook was not found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the hook list stored at self.hooks[event], allowing a KeyError to propagate if the event has no hook list. RESULT hook_list]
+            [COMMAND In the try block, call hook_list.remove(hook). RESULT removal_result]
+            [COMMAND If removal succeeds, return True. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If hook_list.remove(hook) raises ValueError because hook is not present in the list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the ValueError and return False. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS Request
+
+[DEFINE_WORKER: "Initializes a request object by normalizing optional None parameters to empty defaults, registering hook callbacks, and assigning all constructor arguments to instance attributes." __init__]
+    [INPUTS]
+        <REF> method </REF>: string or None "HTTP method for the request."
+        <REF> url </REF>: string or None "URL for the request."
+        <REF> headers </REF>: dict or None "HTTP headers to include; None becomes an empty dict."
+        <REF> files </REF>: dict, list of tuples, or None "Files to send; None becomes an empty list."
+        <REF> data </REF>: object or None "Request body data; None becomes an empty list."
+        <REF> params </REF>: dict or None "Query string parameters; None becomes an empty dict."
+        <REF> auth </REF>: tuple, callable, or None "Authentication credentials or callable."
+        <REF> cookies </REF>: dict, CookieJar, or None "Cookies to send with the request."
+        <REF> hooks </REF>: dict or None "Event hooks to register; None becomes an empty dict."
+        <REF> json </REF>: JSON-serializable object or None "JSON payload to send with the request."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If data is None, set data to a new empty list; otherwise keep the original data value. RESULT data]
+            [COMMAND If files is None, set files to a new empty list; otherwise keep the original files value. RESULT files]
+            [COMMAND If headers is None, set headers to a new empty dict; otherwise keep the original headers value. RESULT headers]
+            [COMMAND If params is None, set params to a new empty dict; otherwise keep the original params value. RESULT params]
+            [COMMAND If hooks is None, set hooks to a new empty dict; otherwise keep the original hooks value. RESULT hooks]
+            [COMMAND Set self.hooks to the return value of default_hooks(). RESULT self.hooks]
+            [COMMAND For each key-value pair (k, v) in list(hooks.items()), within the loop call self.register_hook(event=k, hook=v). RESULT hook_registration_complete]
+            [COMMAND Assign method to self.method. RESULT self.method]
+            [COMMAND Assign url to self.url. RESULT self.url]
+            [COMMAND Assign normalized headers to self.headers. RESULT self.headers]
+            [COMMAND Assign normalized files to self.files. RESULT self.files]
+            [COMMAND Assign normalized data to self.data. RESULT self.data]
+            [COMMAND Assign json to self.json. RESULT self.json]
+            [COMMAND Assign normalized params to self.params. RESULT self.params]
+            [COMMAND Assign auth to self.auth. RESULT self.auth]
+            [COMMAND Assign cookies to self.cookies. RESULT self.cookies]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a PreparedRequest instance, configures it from the current request attributes, and returns it for transmission." prepare]
+    [INPUTS]
+        <REF> self </REF>: object "The current request object whose method, url, headers, files, data, json, params, auth, cookies, and hooks attributes are used to prepare the new request."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> p </REF>: PreparedRequest "A prepared request instance configured with the current request's attributes."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new PreparedRequest instance and assign it to p. RESULT p]
+            [COMMAND Call p.prepare, passing method=self.method, url=self.url, headers=self.headers, files=self.files, data=self.data, json=self.json, params=self.params, auth=self.auth, cookies=self.cookies, and hooks=self.hooks. RESULT None]
+            [COMMAND Return p. RESULT p]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS PreparedRequest
+
+[DEFINE_WORKER: "Initializes a new request object with default empty values for method, url, headers, cookies, and body, plus a fresh default hooks dictionary." __init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.method to the boundary sentinel value None, indicating that no HTTP verb has been selected. RESULT self.method]
+            [COMMAND Set self.url to the boundary sentinel value None, indicating that no request URL has been provided. RESULT self.url]
+            [COMMAND Set self.headers to the boundary sentinel value None, indicating that no HTTP headers dictionary has been provided. RESULT self.headers]
+            [COMMAND Set self._cookies to the boundary sentinel value None; this private field will later hold a CookieJar after prepare_cookies() is called. RESULT self._cookies]
+            [COMMAND Set self.body to the boundary sentinel value None, indicating that no request body has been provided. RESULT self.body]
+            [COMMAND Call default_hooks() and assign the resulting callback hooks dictionary, with the response key mapped to an empty list, to self.hooks. RESULT self.hooks]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares the complete request by sequentially applying method, URL, headers, cookies, body, authentication, and hooks to the object." prepare]
+    [INPUTS]
+        <REF> method </REF>: Optional[str] "HTTP method to use; defaults to GET when None."
+        <REF> url </REF>: Optional[str] "Request URL to prepare."
+        <REF> headers </REF>: Optional[dict] "Request headers container; an empty header container is used when None."
+        <REF> files </REF>: Optional[dict] "Multipart file parts; takes priority over data and json when provided."
+        <REF> data </REF>: Optional[dict] "Form-encoded request body data; used when files is not provided."
+        <REF> params </REF>: Optional[dict] "Query parameters to append to the URL; ignored when None."
+        <REF> auth </REF>: Optional[object] "Authentication handler or credentials; no authorization header is added when None."
+        <REF> cookies </REF>: Optional[dict] "Cookies to add to the prepared headers; skipped when None."
+        <REF> hooks </REF>: Optional[dict] "Request hooks to merge into the hook storage; default hooks are used when None."
+        <REF> json </REF>: Optional[dict] "JSON-serializable request body payload; used only when files and data are not provided."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: NoneType "No value is returned; the fully prepared request state is stored by mutating self in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set the HTTP method on self by calling prepare_method(method), defaulting to GET when method is None. RESULT self]
+            [COMMAND Set the request URL on self by calling prepare_url(url, params), appending params as query parameters when provided and leaving the URL unchanged when params is None. RESULT self]
+            [COMMAND Prepare request headers on self by calling prepare_headers(headers), initializing an empty header container when headers is None. RESULT self]
+            [COMMAND Process cookies on self by calling prepare_cookies(cookies), adding them to the previously prepared headers when cookies is not None and performing no cookie processing when cookies is None. RESULT self]
+            [COMMAND Prepare the request body on self by calling prepare_body(data, files, json), applying the priority files > data > json and leaving the body unset when all three are None. RESULT self]
+            [COMMAND Apply authentication to the prepared request by calling prepare_auth(auth, url), adding no authorization header when auth is None and otherwise allowing the authenticator to mutate the prepared request state. RESULT self]
+            [COMMAND After authentication, prepare hooks on self by calling prepare_hooks(hooks), using default hooks when hooks is None; this must occur after prepare_auth so authenticators can add hooks. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: files is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Prepare a multipart request body from files and set the Content-Type header with the multipart boundary. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: files is None and data is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Prepare a form-encoded request body from data and set Content-Type to application/x-www-form-urlencoded if not already present. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: files is None and data is None and json is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Prepare a JSON request body from json and set Content-Type to application/json if not already present. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: files, data, and json are all None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave the request body unset. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a new PreparedRequest object containing the same method, URL, headers, cookies, body, and hooks as the current request." copy]
+    [INPUTS]
+        <REF> self </REF>: PreparedRequest "The source PreparedRequest instance whose attributes are copied."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> p </REF>: PreparedRequest "A new PreparedRequest instance populated with copied attribute values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new empty PreparedRequest object and assign it to p. RESULT p]
+            [COMMAND Assign self.method to p.method. RESULT p.method]
+            [COMMAND Assign self.url to p.url. RESULT p.url]
+            [COMMAND If self.headers is not None, assign a shallow copy of self.headers to p.headers; otherwise assign None to p.headers. RESULT p.headers]
+            [COMMAND Call _copy_cookie_jar(self._cookies) and assign the returned cookie jar to p._cookies. RESULT p._cookies]
+            [COMMAND Assign self.body to p.body. RESULT p.body]
+            [COMMAND Assign self.hooks to p.hooks. RESULT p.hooks]
+            [COMMAND Return p. RESULT p]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Assigns the provided HTTP method to self.method and, when not None, normalizes it to an uppercase native string." prepare_method]
+    [INPUTS]
+        <REF> method </REF>: string "The HTTP method name to assign to the instance; can be None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the incoming method parameter to the instance attribute self.method. RESULT self.method]
+            [COMMAND Check whether self.method is not None. RESULT is_not_none]
+            [COMMAND Within the branch where self.method is not None, call to_native_string(self.method.upper()) and assign the result back to self.method. RESULT self.method]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The instance attribute self.method is None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave self.method as None and skip normalization. RESULT self.method]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares an HTTP URL by normalizing its text form, bypassing non-HTTP schemes, parsing and validating URL components, IDNA-encoding the host, reconstructing the network location, appending encoded query parameters, requoting the final URI, and assigning it to self.url." prepare_url]
+    [INPUTS]
+        <REF> url </REF>: str or bytes "Input URL to prepare; may be bytes or a string-like object requiring conversion."
+        <REF> params </REF>: object "Parameters passed to self._encode_params for encoding and appended to the URL query string."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self.url </REF>: str "Prepared URL assigned to the instance attribute; the method itself returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If url is a bytes instance, decode it as UTF-8; otherwise convert url to unicode(url) when is_py2 is true, or str(url) when is_py2 is false. RESULT url]
+            [COMMAND Provided the non-HTTP scheme guard is false, parse url into scheme, auth, host, port, path, query, and fragment using parse_url. RESULT scheme, auth, host, port, path, query, fragment]
+            [COMMAND If scheme is falsy, construct the MissingSchema error using to_native_string(url, 'utf8') and raise MissingSchema. RESULT scheme]
+            [COMMAND If host is falsy, raise InvalidURL with the message 'Invalid URL %r: No host supplied' formatted with url. RESULT host]
+            [COMMAND Encode host with IDNA by calling host.encode('idna').decode('utf-8'); if this raises UnicodeError, raise InvalidURL with the message 'URL has an invalid label.' RESULT host]
+            [COMMAND Reconstruct netloc: start with auth or ''; if netloc is truthy append '@'; append host; if port is truthy append ':' + str(port). RESULT netloc]
+            [COMMAND If path is falsy, set path to '/'. RESULT path]
+            [COMMAND If is_py2 is true, for each of scheme, netloc, path, query, and fragment that is an instance of str, encode it as UTF-8. RESULT scheme, netloc, path, query, fragment]
+            [COMMAND Encode params by calling self._encode_params(params) and assign the result to enc_params. RESULT enc_params]
+            [COMMAND If enc_params is truthy, merge it into query: if query is truthy, set query to '%s&%s' % (query, enc_params); otherwise set query to enc_params. RESULT query]
+            [COMMAND Construct the final URL string with urlunparse([scheme, netloc, path, None, query, fragment]), then apply requote_uri and assign the result to url. RESULT url]
+            [COMMAND Assign the final prepared url to self.url. RESULT self.url]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After URL normalization, the following short-circuit condition is true: url contains ':' AND url.lower().startswith('http') is false, meaning the lowercased URL does not begin with 'http'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.url = url and return immediately from the method. RESULT self.url]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: parse_url(url) raises LocationParseError]
+        [LOG "LocationParseError occurred while parsing the URL; the original exception args are used for InvalidURL."]
+        [THROW InvalidURL "Raised as InvalidURL(*e.args) from the original LocationParseError arguments."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: scheme is empty or falsy after parsing]
+        [LOG "The URL has no scheme/schema; the error message is formatted with to_native_string(url, 'utf8')."]
+        [THROW MissingSchema "Raised with message 'Invalid URL {0!r}: No schema supplied. Perhaps you meant http://{0}?' formatted using to_native_string(url, 'utf8')."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: host is empty or falsy after parsing]
+        [LOG "The URL has no host after parsing; the message includes the original url."]
+        [THROW InvalidURL "Raised with message 'Invalid URL %r: No host supplied' formatted with url."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: host.encode('idna').decode('utf-8') raises UnicodeError]
+        [LOG "IDNA encoding/decoding of the host failed; the message is 'URL has an invalid label.'"]
+        [THROW InvalidURL "Raised with message 'URL has an invalid label.'"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes a case-insensitive header dictionary from the provided HTTP headers, or an empty one when no headers are supplied." prepare_headers]
+    [INPUTS]
+        <REF> headers </REF>: dict-like mapping "The HTTP headers to prepare; may be None or empty."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether headers is truthy by checking that it is not None and is non-empty. RESULT headers_truthy]
+            [COMMAND When headers_truthy is true, iterate over headers.items(), convert each header name with to_native_string(name), keep the corresponding value unchanged, build a CaseInsensitiveDict from the resulting pairs, and assign it to self.headers. RESULT self.headers]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: headers_truthy is false because headers is None, empty, or otherwise falsy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign an empty CaseInsensitiveDict to self.headers. RESULT self.headers]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes and sets the Content-Length header for the HTTP request body, using seek/tell for file-like bodies, super_len for other non-None bodies, and a default '0' for bodiless non-GET/HEAD requests." prepare_content_length]
+    [INPUTS]
+        <REF> body </REF>: object "The request body to measure; may be None, a file-like object with seek and tell, or another object supported by super_len."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the top-level if/elif/elif chain over body and execute the first branch whose condition is true; if none is true, leave Content-Length unchanged. RESULT content_length_prepared]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: body has both 'seek' and 'tell' attributes]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Move the file-like body to the end with body.seek(0, 2), read the byte length with body.tell(), set self.headers['Content-Length'] to builtin_str(body.tell()), then restore the position to the beginning with body.seek(0, 0). RESULT file_like_content_length_set]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: body is not None and does not have both 'seek' and 'tell' attributes]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute l = super_len(body); if l is truthy, set self.headers['Content-Length'] to builtin_str(l). RESULT non_file_content_length_set]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: body is None and self.method is not in ('GET', 'HEAD') and self.headers.get('Content-Length') is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.headers['Content-Length'] to '0'. RESULT default_content_length_set]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares the HTTP auth data for the request by falling back to URL-derived credentials when auth is None, converting two-element tuples to HTTPBasicAuth, applying the auth handler to the request, and recomputing Content-Length." prepare_auth]
+    [INPUTS]
+        <REF> auth </REF>: object/tuple/callable or None "Authentication credentials or callable auth handler. If None, credentials are extracted from self.url. A two-element tuple is converted to HTTPBasicAuth."
+        <REF> url </REF>: str "URL parameter accepted for compatibility; not used by the method because self.url is used for URL auth extraction."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If auth is None, call get_auth_from_url(self.url) and store the returned credentials in url_auth. RESULT url_auth]
+            [COMMAND Within the 'if auth is None' branch, set auth to url_auth if any(url_auth) is truthy; otherwise set auth to None. RESULT auth]
+            [COMMAND If auth is truthy, then if isinstance(auth, tuple) and len(auth) == 2, replace auth with HTTPBasicAuth(*auth). RESULT auth]
+            [COMMAND Within the outer 'if auth is truthy' block, call auth(self) and store the returned auth object in r. RESULT r]
+            [COMMAND Within the outer 'if auth is truthy' block, update self.__dict__ with r.__dict__. RESULT None]
+            [COMMAND Within the outer 'if auth is truthy' block, call self.prepare_content_length(self.body) to recompute the Content-Length. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes the provided cookie data into a CookieJar, generates the Cookie header for the prepared request, and stores it in the request headers if a header value is produced." prepare_cookies]
+    [INPUTS]
+        <REF> cookies </REF>: cookielib.CookieJar or dict "The HTTP cookie data to prepare; either an existing CookieJar instance or a dictionary-like mapping of cookies."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the input cookies into a CookieJar: if cookies is an instance of cookielib.CookieJar, set self._cookies to cookies; otherwise, convert cookies via cookiejar_from_dict(cookies) and set self._cookies to the converted CookieJar. RESULT self._cookies]
+            [COMMAND Generate the cookie header by calling get_cookie_header(self._cookies, self) and assign the returned value to cookie_header. RESULT cookie_header]
+            [COMMAND If cookie_header is not None, set self.headers['Cookie'] to cookie_header. RESULT self.headers['Cookie']]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepares the given hooks by defaulting a falsy hooks value to an empty collection and registering each hook event with its associated callback." prepare_hooks]
+    [INPUTS]
+        <REF> hooks </REF>: dict or None "Mapping of event names to hook callbacks; may be None or False, in which case it is treated as an empty collection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If hooks is falsy (None or False), assign an empty list to hooks; otherwise retain the existing hooks value. RESULT hooks]
+            [COMMAND Within the for loop over event in hooks, call self.register_hook(event, hooks[event]) for each event to register the hook callback. RESULT hook_registration]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Response
+
+[DEFINE_WORKER: "Initializes a Response object by calling the base class initializer and assigning each attribute to its default empty or sentinel value." Response.__init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super(Response, self).__init__() to initialize the base class. RESULT self]
+            [COMMAND Set _content to False. RESULT _content]
+            [COMMAND Set _content_consumed to False. RESULT _content_consumed]
+            [COMMAND Set status_code to None. RESULT status_code]
+            [COMMAND Set headers to CaseInsensitiveDict(). RESULT headers]
+            [COMMAND Set raw to None. RESULT raw]
+            [COMMAND Set url to None. RESULT url]
+            [COMMAND Set encoding to None. RESULT encoding]
+            [COMMAND Set history to []. RESULT history]
+            [COMMAND Set reason to None. RESULT reason]
+            [COMMAND Set cookies to cookiejar_from_dict({}). RESULT cookies]
+            [COMMAND Set elapsed to datetime.timedelta(0). RESULT elapsed]
+            [COMMAND Set request to None. RESULT request]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks the HTTP response status by calling self.raise_for_status() and returns True unless an HTTPError is raised, in which case it returns False." ok]
+    [INPUTS]
+        <REF> self </REF>: object "HTTP response object that provides a raise_for_status() method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if the status check succeeds; False if HTTPError is caught."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.raise_for_status() inside the try block to validate the HTTP response status. RESULT status_check]
+            [COMMAND If the try block completes without an HTTPError, return True. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.raise_for_status() raises HTTPError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch HTTPError and return False to indicate the response is not OK. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether the HTTP response is a redirect by checking that the Location header is present and the status code belongs to REDIRECT_STATI." is_redirect]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if the Location header is present and the status code is a redirect status; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the header name 'location' is present in self.headers. RESULT location_present]
+            [COMMAND Check whether self.status_code is contained in REDIRECT_STATI only when location_present is True. RESULT status_is_redirect]
+            [COMMAND Return the logical conjunction of location_present and status_is_redirect. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: location_present is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately, preserving the short-circuit behavior of the 'and' expression and skipping the REDIRECT_STATI membership check. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True only when the response has a Location header and its status code is a permanent redirect (301 or 308)." is_permanent_redirect]
+    [INPUTS]
+        <REF> self </REF>: Response "Response object exposing a case-insensitive headers mapping and an integer status_code."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if the 'location' header is present and status_code is 301 or 308; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the 'location' header is present in self.headers. RESULT has_location]
+            [COMMAND Return the result of has_location and the membership test comparing self.status_code to the permanent redirect status codes 301 and 308, represented by codes.moved_permanently and codes.permanent_redirect; preserve the short-circuit behavior of the and operator so the status-code comparison is only evaluated when has_location is True. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Detects the apparent character encoding of the response content using the chardet library and returns the detected encoding name." apparent_encoding]
+    [INPUTS]
+        <REF> self.content </REF>: bytes "The raw content whose encoding is to be detected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> encoding </REF>: Optional[str] "The detected encoding name, or None if chardet cannot determine the encoding."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.content as the data to analyze. RESULT content]
+            [COMMAND Call chardet.detect with content and store the returned dictionary. RESULT detection_result]
+            [COMMAND Retrieve the value associated with the 'encoding' key from detection_result. RESULT encoding]
+            [COMMAND Return encoding as the method result. RESULT encoding]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over response content in chunks, either reusing already consumed content or streaming from the raw response, with optional Unicode decoding." iter_content]
+    [INPUTS]
+        <REF> chunk_size </REF>: int "Number of bytes to read per chunk; defaults to 1."
+        <REF> decode_unicode </REF>: bool "If True, decodes the yielded chunks using the best available encoding based on the response."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> chunks </REF>: iterator of bytes or str "Iterator yielding response content chunks, decoded to text if decode_unicode is True."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether content is already consumed and self._content is a boolean sentinel. If self._content_consumed is truthy and isinstance(self._content, bool), raise StreamConsumedError. RESULT none]
+            [COMMAND Define an internal generator function generate() that lazily yields response chunks and, after normal completion, sets self._content_consumed = True. RESULT generate]
+            [COMMAND Within generate(), if self.raw has a 'stream' attribute, enter a try block and iterate over self.raw.stream(chunk_size, decode_content=True), yielding each chunk. RESULT none]
+            [COMMAND Within that try block, catch ProtocolError, DecodeError, and ReadTimeoutError, and re-raise them as ChunkedEncodingError, ContentDecodingError, and ConnectionError respectively. RESULT none]
+            [COMMAND Within generate(), if self.raw does not have a 'stream' attribute, repeatedly read chunk = self.raw.read(chunk_size); if chunk is falsy, break; otherwise yield chunk. RESULT none]
+            [COMMAND Create reused_chunks by calling iter_slices(self._content, chunk_size); this call is always evaluated. RESULT reused_chunks]
+            [COMMAND Create stream_chunks by calling generate(); this returns a generator without executing its body yet. RESULT stream_chunks]
+            [COMMAND Select chunks as reused_chunks if self._content_consumed is truthy, otherwise select stream_chunks; both iterables have already been created before this selection. RESULT chunks]
+            [COMMAND If decode_unicode is truthy, wrap chunks with stream_decode_response_unicode(chunks, self). RESULT chunks]
+            [COMMAND Return chunks. RESULT chunks]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self._content_consumed is truthy and isinstance(self._content, bool)]
+        [LOG "Attempting to iterate response content after the stream has already been consumed."]
+        [THROW StreamConsumedError "Raised when the response content is already consumed and marked with a boolean sentinel."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During self.raw.stream(chunk_size, decode_content=True), a ProtocolError is caught in generate()]
+        [LOG "ProtocolError raised while streaming response chunks."]
+        [THROW ChunkedEncodingError "Raised to indicate a chunked encoding error in the response stream."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During self.raw.stream(chunk_size, decode_content=True), a DecodeError is caught in generate()]
+        [LOG "DecodeError raised while decoding response stream chunks."]
+        [THROW ContentDecodingError "Raised to indicate a content decoding error in the response body."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During self.raw.stream(chunk_size, decode_content=True), a ReadTimeoutError is caught in generate()]
+        [LOG "ReadTimeoutError raised while reading response stream chunks."]
+        [THROW ConnectionError "Raised to indicate a connection-level timeout while reading the response."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Streams response data chunk by chunk and yields complete text lines while preserving a partial trailing line across chunk boundaries." iter_lines]
+    [INPUTS]
+        <REF> chunk_size </REF>: int "Number of bytes to read per chunk from the response content. Defaults to ITER_CHUNK_SIZE."
+        <REF> decode_unicode </REF>: bool or None "Whether to decode chunks as Unicode. If None, the default decoding behavior is used."
+        <REF> delimiter </REF>: str or None "Custom delimiter used to split chunks into lines. If falsy, universal newline splitting is used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> line </REF>: generator of str "Yields each complete line from the response data, including a final pending line if one remains."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize pending to None to hold a partial trailing line between chunks. RESULT pending]
+            [COMMAND Iterate over each chunk generated by self.iter_content(chunk_size=chunk_size, decode_unicode=decode_unicode). RESULT chunk]
+            [COMMAND Inside the chunk loop, if pending is not None, prepend pending to chunk by assigning chunk = pending + chunk. RESULT chunk]
+            [COMMAND Inside the chunk loop, if delimiter is truthy split chunk into lines using chunk.split(delimiter); otherwise split chunk into lines using chunk.splitlines(). RESULT lines]
+            [COMMAND Inside the chunk loop, if lines and lines[-1] and chunk and lines[-1][-1] == chunk[-1], pop the last element of lines into pending; otherwise set pending to None. RESULT pending]
+            [COMMAND Inside the chunk loop, iterate over each line in lines and yield the line to the caller. RESULT line]
+            [COMMAND After the chunk loop finishes, if pending is not None, yield pending as the final line. RESULT pending]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Lazily loads, caches, and returns the response body as bytes on first access; guards against already-consumed content and falls back to None for zero-status or missing-attribute cases before marking the content as consumed." content]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bytes or None "The response content as bytes when it can be read, or None when the content was not loaded due to a zero status code or an AttributeError."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether self._content is exactly the boolean value False. If it is not exactly False, skip the entire lazy-loading block and proceed to the step that sets self._content_consumed to True. RESULT lazy_loading_decision]
+            [COMMAND Within the if self._content is False block, enter a try block and check whether self._content_consumed is truthy; if it is truthy, raise RuntimeError with the message 'The content for this response was already consumed'. This RuntimeError is not caught by the except AttributeError handler and propagates out of the method. RESULT consumption_check]
+            [COMMAND Within the try block, after confirming self._content_consumed is falsy, check whether self.status_code == 0. If it is 0, assign None to self._content. RESULT self._content]
+            [COMMAND Within the try block, when self.status_code is not 0 (the else branch of the status check), assign self._content to bytes().join(self.iter_content(CONTENT_CHUNK_SIZE)) or bytes(), using empty bytes if the joined result is falsy. RESULT self._content]
+            [COMMAND If an AttributeError is raised anywhere inside the try block, catch it and assign None to self._content instead of propagating it. RESULT self._content]
+            [COMMAND After the conditional lazy-loading block completes without an unhandled exception, assign True to self._content_consumed. RESULT self._content_consumed]
+            [COMMAND Return self._content. RESULT self._content]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self._content is exactly False and self._content_consumed is truthy]
+        [LOG "The content for this response was already consumed"]
+        [THROW RuntimeError "Indicates that the response content has already been consumed and cannot be loaded again."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Decodes the response content into text using the response encoding or its apparent encoding, with a blind fallback decode if the chosen encoding is invalid." text]
+    [INPUTS]
+        <REF> self </REF>: object "Response instance providing content bytes, an encoding string or None, and apparent_encoding."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "Decoded response text, or an empty string when the response content is empty."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize the local variable content to None. RESULT content]
+            [COMMAND Set the local variable encoding to the value of self.encoding. RESULT encoding]
+            [COMMAND If self.content is falsy (empty), return the empty string str('') immediately as the method's return_value; otherwise continue to the encoding fallback check. RESULT return_value]
+            [COMMAND If self.encoding is None, set encoding to self.apparent_encoding. RESULT encoding]
+            [COMMAND In the try block, decode self.content to a string using str(self.content, encoding, errors='replace') and assign the result to content. RESULT content]
+            [COMMAND Return the final content value as the method's return_value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: In the try block, str(self.content, encoding, errors='replace') raises LookupError (unknown encoding) or TypeError (encoding is None or otherwise invalid).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the except block, decode self.content using str(self.content, errors='replace') with no explicit encoding and assign the result to content. RESULT content]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Parses the HTTP response's Link header and returns a dictionary mapping each link's rel or URL to its parsed link object, or an empty dictionary when the header is absent." links]
+    [INPUTS]
+        <REF> self </REF>: object "The response object containing the headers mapping; its headers attribute is expected to provide get('link')."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> l </REF>: dict "Dictionary of parsed link objects keyed by rel or URL; empty when the Link header is missing or falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the 'link' header from self.headers.get('link') and store it in header. RESULT header]
+            [COMMAND Initialize an empty dictionary l. RESULT l]
+            [COMMAND If header is truthy, parse header using parse_header_links(header) and store the resulting list in links. RESULT links]
+            [COMMAND If header is truthy, within the if block iterate for link in links; for each link compute key = link.get('rel') or link.get('url'), using url when rel is falsy and None when both are falsy; then set l[key] = link, overwriting any existing entry for duplicate keys. RESULT l]
+            [COMMAND Return l. RESULT l]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: header is falsy (for example None or an empty string)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip parsing and the loop, leaving l as the empty dictionary. RESULT l]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises an HTTPError with a descriptive client or server error message when the stored HTTP status code is in the 4xx or 5xx range, and does nothing otherwise." raise_for_status]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize http_error_msg to an empty string. RESULT http_error_msg]
+            [COMMAND If self.status_code is in the inclusive range 400 through 499, set http_error_msg to a formatted client error message containing self.status_code, self.reason, and self.url; otherwise, if self.status_code is in the inclusive range 500 through 599, set http_error_msg to a formatted server error message containing self.status_code, self.reason, and self.url. RESULT http_error_msg]
+            [COMMAND If http_error_msg is truthy, raise HTTPError(http_error_msg, response=self). RESULT exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: http_error_msg is truthy after the status-code range checks]
+        [LOG "An HTTPError is raised because the response status code indicates a client or server error."]
+        [THROW HTTPError "Exception constructed with the formatted error message and response=self."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Closes the underlying raw connection if the response content has not been consumed yet, otherwise releases the connection back to the pool." close]
+    [INPUTS]
+        <REF> self </REF>: object "The instance containing the _content_consumed flag and the raw connection object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object or None "The return value of self.raw.close() if the content was not consumed, otherwise the return value of self.raw.release_conn()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the flag self._content_consumed is False. RESULT content_unconsumed_flag]
+            [COMMAND If content_unconsumed_flag is true, follow the alternative close-raw path; otherwise continue with the normal release-connection step. RESULT branch_selected]
+            [COMMAND Call self.raw.release_conn() and return the result, but only after the content-consuming check has been passed. RESULT release_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self._content_consumed is False, meaning the response content has not been consumed yet.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.raw.close() and return its result immediately, exiting the method. RESULT close_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

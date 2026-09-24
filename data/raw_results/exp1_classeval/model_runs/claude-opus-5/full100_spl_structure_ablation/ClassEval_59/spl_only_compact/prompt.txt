@@ -1,0 +1,92 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: MovieBookingSystem
+# Fields: movies
+
+## __init__()
+Summary: Initializes a new instance by setting up an empty movies list as a mutable instance attribute.
+1. Assign a new empty list literal to the instance attribute self.movies, establishing it as an independent mutable collection with zero elements on this specific instance → self.movies
+
+## add_movie(self: object, name: any, price: any, start_time: str, end_time: str, n: int)
+Summary: Constructs a movie record dictionary from the given parameters—parsing time strings into datetime objects and initializing an n×n zero-filled seat grid—then appends it to the instance's movie list.
+#   self: object — The containing object instance whose movies list will be mutated
+#   name: any — Movie title; passed through without transformation
+#   price: any — Ticket price; passed through without type enforcement
+#   start_time: str — Start time as a '%H:%M'-formatted string (e.g. '14:30')
+#   end_time: str — End time as a '%H:%M'-formatted string (e.g. '16:00')
+#   n: int — Dimension of the square seat grid; must be a non-negative integer
+1. Parse start_time string using the fixed format '%H:%M' via datetime.strptime and bind the resulting datetime object to the key 'start_time' in the new record → parsed_start_time
+2. Parse end_time string using the fixed format '%H:%M' via datetime.strptime and bind the resulting datetime object to the key 'end_time' in the new record → parsed_end_time
+3. Allocate an n×n NumPy array of float64 zeros via np.zeros((n, n)) and bind it to the key 'seats' in the new record → seat_grid
+4. Assemble the movie dictionary with keys 'name' (bound to name), 'price' (bound to price), 'start_time' (bound to parsed_start_time), 'end_time' (bound to parsed_end_time), and 'seats' (bound to seat_grid); the dictionary is atomic—if any field fails, no partial dict is produced → movie
+5. Append movie to self.movies in place → none
+   ! log: "datetime.strptime raises TypeError (non-string input) or ValueError (format mismatch); the movie dictionary is never created and self.movies is unchanged"
+   ! raise: ValueError/TypeError "Raised by datetime.strptime when the time string is missing, malformed, or of the wrong type; no guard logic is present—callers are responsible for input validation"
+   ! log: "np.zeros raises TypeError or ValueError; the movie dictionary is never created and self.movies is unchanged"
+   ! raise: TypeError/ValueError "Raised by np.zeros when n cannot be used as a valid non-negative integer dimension"
+
+## available_movies(start_time: string, end_time: string) → list[string]
+Summary: Parses two time strings into datetime objects and returns the names of all movies whose full showtime is inclusively contained within the requested [start_time, end_time] window.
+#   start_time: string — Window start time as a string in 'HH:MM' 24-hour format
+#   end_time: string — Window end time as a string in 'HH:MM' 24-hour format
+#   → available_movies: list[string] — List of movie names whose entire showtime falls within the inclusive [start_time, end_time] window; empty list if no movies qualify
+1. Parse the string parameter start_time using datetime.strptime with format '%H:%M' and reassign the resulting datetime object back to start_time, discarding the original string → start_time
+2. Parse the string parameter end_time using datetime.strptime with format '%H:%M' and reassign the resulting datetime object back to end_time, discarding the original string → end_time
+3. Initialize available_movies as an empty list to serve as the accumulator for qualifying movie names → available_movies
+4. Iterate over every movie dict in self.movies; for each movie, evaluate whether start_time <= movie['start_time'] AND movie['end_time'] <= end_time using inclusive boundaries on both sides, short-circuiting on the first condition; if both conditions hold, append movie['name'] to available_movies; continue until all movies are exhausted without early exit → available_movies
+5. Return available_movies containing the names of all movies whose full showtime was contained within the requested window → available_movies
+   ! log: "datetime.strptime raises ValueError because start_time cannot be parsed with format '%H:%M'; no default or fallback exists"
+   ! raise: ValueError "Raised by datetime.strptime when the start_time string does not conform to '%H:%M'; propagates uncaught to the caller"
+   ! log: "datetime.strptime raises ValueError because end_time cannot be parsed with format '%H:%M'; no default or fallback exists"
+   ! raise: ValueError "Raised by datetime.strptime when the end_time string does not conform to '%H:%M'; propagates uncaught to the caller"
+
+## book_ticket(name: string, seats_to_book: list) → string
+Summary: Searches for a movie by name and attempts to book a list of seats by marking each as taken, returning success if all seats are available or failure if any seat is already occupied, with no rollback on partial mutations.
+#   name: string — The name of the movie to search for in the movies list
+#   seats_to_book: list — A list of seats to book, where each seat is a two-element indexer [row, col] into the movie's 2D seat map
+#   → result: string — Returns 'Booking success.' if all seats were available and marked, 'Booking failed.' if any seat was already occupied (value != 0), or 'Movie not found.' if no movie matched the given name
+1. Iterate over each movie object in self.movies → current_movie
+2. Within the outer for loop over self.movies, check whether the current movie's 'name' field equals the input parameter name using an equality comparison → name_match
+3. Within the outer for loop, when name_match is true, iterate over each seat in seats_to_book; each seat is a two-element indexer where seat[0] is the row and seat[1] is the column → current_seat
+4. Within the seat loop, check whether movie['seats'][seat[0]][seat[1]] equals exactly 0, treating 0 as available and any other value as occupied → seat_available
+5. Within the seat loop, when seat_available is true, set movie['seats'][seat[0]][seat[1]] to 1, marking that seat as taken; no rollback is performed if a later seat in the same pass fails → seat_marked
+6. After the seat loop completes with all seats marked successfully, return the string 'Booking success.' and exit the method immediately → booking_success_return
+   ? Immediately return the string 'Booking failed.' and exit the method; any seats already marked as 1 in the current loop pass remain mutated with no rollback
+   ? Return the string 'Movie not found.' and exit the method
+

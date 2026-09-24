@@ -1,0 +1,92 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: CurrencyConverter
+# Fields: rates
+# Calls: convert→rates, update_currency_rate→rates
+
+## __init__()
+Summary: Initializes the instance by setting a hardcoded dictionary of seven static USD-relative exchange rates covering USD, EUR, GBP, JPY, CAD, AUD, and CNY.
+1. Assign self.rates to a dictionary literal mapping seven currency code strings to their corresponding float exchange rates relative to USD 1.0: USD→1.0, EUR→0.85, GBP→0.72, JPY→110.15, CAD→1.23, AUD→1.34, CNY→6.40 → self.rates
+
+## add_currency_rate(currency: str, rate: float) → bool
+Summary: Adds a new currency-to-rate mapping into the instance's rates dictionary, rejecting the operation if the currency key already exists.
+#   currency: str — The currency identifier used as the dictionary key; must be a hashable type and must not already exist in self.rates
+#   rate: float — The exchange rate value to associate with the given currency; stored without transformation or validation
+#   → result: bool — Returns False if the currency already exists in self.rates; returns None (implicitly) on successful insertion
+1. Check whether currency is already a key in self.rates → duplicate_check
+2. Write rate into self.rates at key currency, persisting the value on the instance for the object's lifetime → self.rates[currency]
+   ? Return False immediately, leaving self.rates unmodified and skipping the dictionary write
+
+## convert(amount: number, from_currency: string, to_currency: string)
+Summary: Converts a monetary amount from one currency to another using stored exchange rates, returning the converted float value or short-circuiting early for same-currency conversions and unknown currencies.
+#   amount: number — The numeric amount to convert; may be zero or negative, both of which propagate without error
+#   from_currency: string — The ISO currency code of the source currency
+#   to_currency: string — The ISO currency code of the target currency
+1. Check whether from_currency equals to_currency; if they are equal, return amount immediately without any conversion → early_return_same_currency
+2. Check whether from_currency is present in self.rates AND to_currency is present in self.rates using a short-circuit OR; if either is absent, return False immediately → early_return_unknown_currency
+3. Read self.rates[from_currency] and assign it to from_rate → from_rate
+4. Read self.rates[to_currency] and assign it to to_rate → to_rate
+5. Compute converted_amount as (amount / from_rate) * to_rate, normalizing amount to a common base by dividing by from_rate then scaling to the target currency by multiplying by to_rate → converted_amount
+6. Return converted_amount → output
+   ? Return amount unchanged without accessing self.rates or performing any arithmetic
+   ? Return boolean False to signal an unresolvable currency code
+   ! log: "ZeroDivisionError raised during (amount / from_rate) because from_rate is 0; execution halts before converted_amount is assigned"
+   ! raise: ZeroDivisionError "Raised by Python when dividing amount by a from_rate of zero; no guard exists in this method so it propagates to the caller"
+
+## get_supported_currencies() → list
+Summary: Returns a snapshot list of all currency codes currently held in the instance's rates dictionary.
+#   → currencies: list — A new list containing the keys of self.rates at the moment of the call; independent of the internal dictionary after creation.
+1. Access the instance attribute self.rates to obtain the internal rates dictionary. → rates_dict
+2. Call .keys() on rates_dict to produce a dict_keys view reflecting the current key set. → keys_view
+3. Pass keys_view to list() to materialize a new, independent list snapshot of the currency codes at this instant. → currencies
+4. Return currencies to the caller. → currencies
+   ! log: "AttributeError raised because self.rates has not been initialized before this method is called."
+   ! raise: AttributeError "Raised when self.rates is absent from the instance, typically because __init__ did not set it."
+   ! log: "AttributeError raised because .keys() is not available on the actual type bound to self.rates."
+   ! raise: AttributeError "Raised when the object bound to self.rates does not expose a .keys() method."
+
+## update_currency_rate(currency: string, new_rate: numeric) → boolean
+Summary: Updates the exchange rate for a given currency in the instance-level rates dictionary, returning False if the currency does not exist and True implicitly after a successful direct write.
+#   currency: string — The key identifying the currency whose rate is to be updated; must already exist in self.rates for the update to proceed
+#   new_rate: numeric — The new exchange rate value to assign to the specified currency; taken as-is with no transformation or validation
+#   → result: boolean — Returns False explicitly when the currency key is not found in self.rates; returns None (implicit) after a successful update
+1. Check whether currency is NOT a key in self.rates → currency_exists_check
+2. Assign new_rate directly to self.rates[currency], overwriting the existing value for that key; the write is unconditional, applies no transformation to new_rate, resolves the key by the current value of currency, and immediately makes the new rate visible to all callers holding a reference to self → updated_rate
+   ? Return False immediately, short-circuiting all remaining logic; no write to self.rates occurs
+

@@ -1,0 +1,432 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include <stdio.h>
+2   int len(char s[1001])
+3   { 
+4       int i;
+5       for(i=0;s[i]!='\0';i++);
+6       return i;
+7   }
+8   int main(void) {
+9   	int t=0,n=0,i,j,k; char s[10001],str[101];
+10  	scanf("%d",&t);
+11  	for(i=1;i<=t;i++)
+12  	{
+13  	    scanf("%d",&n);
+14  	    char a[n][10001],dd;
+15  	    for(j=0;j<n;j++)
+16  	    for(k=0;k<10001;k++)
+17  	    a[j][k]='#'; 
+18  		int flag=0;
+19  	    for(j=0;j<n;j++)
+20  	    {
+21  	        scanf("%c",&dd);
+22  	        scanf("%s",str);
+23  	        if(str[0]=='*')
+24  	        {
+25  	            int x=10000;
+26  	            for(k=len(str);k>=0;k--) { 
+27  					a[j][x--]=str[k]; 
+28  				}
+29  	        }
+30  	        else if(str[len(str)-1]=='*')
+31  	        {
+32  	            for(k=0;str[k]!='\0';k++)
+33  	            	a[j][k]=str[k];
+34  	        }
+35  	    }
+36  	    int x=0;
+37  	    for(j=0;j<10000;j++)
+38  	    {
+39  	        int f=0;
+40  	        for(k=0;k<n;k++)
+41  	        {
+42  	            if(f==1&&a[k][j]!=s[x-1]&&a[k][j]!='*'&&a[k][j]!='#'){
+43  					flag=1; 
+44  					break; 
+45  				}
+46  	            else if(a[k][j]!='*'&&a[k][j]!='#') { 
+47  					if(f==0) {
+48  						s[x++]=a[k][j]; 
+49  						f=1;
+50  					} 
+51  				}
+52  	        }
+53  	        if(flag==1) 
+54  				break;
+55  	    }
+56  	    s[x]='\0';
+57  	    if(flag==1) 
+58  			printf("Case #%d: *\n",i);
+59  	    else 
+60  			printf("Case #%d: %s\n",i,s);
+61  	}
+62  	return 0;
+63  }
+```
+
+
+**Question**: Does line `16` have control dependence over line `43` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: main
+Target source anchor: variable=<none>, line=16
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Source-derived output obligations (machine-audited; verify them against source):
+- the target is a loop header whose condition controls its next execution: {'kind': 'line', 'line': 16, 'reason': 'the target is a loop header whose condition controls its next execution'}
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Declare integers t, n, i, j, k; declare character array s of size 10001 and character array str of size 101. Initialize t and n to 0. If scanf reads a valid integer from standard input, store it in t; otherwise t remains 0. RESULT t]
+- [COMMAND Within the outer loop, declare a variable-length array a of n rows and 10001 columns plus a character dd; for every row j from 0 to n-1 and every column k from 0 to 10000 inclusive, set a[j][k] to '#'. RESULT a]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 11: for(i=1;i<=t;i++)
+- line 15: for(j=0;j<n;j++)
+- line 16: for(k=0;k<10001;k++)
+- line 19: for(j=0;j<n;j++)
+- line 23: if(str[0]=='*')
+- line 26: for(k=len(str);k>=0;k--) {
+- line 30: else if(str[len(str)-1]=='*')
+- line 32: for(k=0;str[k]!='\0';k++)
+- line 37: for(j=0;j<10000;j++)
+- line 40: for(k=0;k<n;k++)
+- line 42: if(f==1&&a[k][j]!=s[x-1]&&a[k][j]!='*'&&a[k][j]!='#'){
+- line 44: break;
+- line 46: else if(a[k][j]!='*'&&a[k][j]!='#') {
+- line 47: if(f==0) {
+- line 53: if(flag==1)
+- line 54: break;
+- line 57: if(flag==1)
+- line 62: return 0;
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 11, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "t"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 15, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "j", "n"]}
+- {"definitions": ["k"], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["k"], "roles": ["definition", "control"], "source_identifiers": ["for", "k"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "j", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "str"]}
+- {"definitions": ["k"], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["k"], "roles": ["definition", "control"], "source_identifiers": ["for", "k", "len", "str"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else", "if", "len", "str"]}
+- {"definitions": ["k"], "disposition": "inspect_against_official_dependence_definition", "line": 32, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["k"], "roles": ["definition", "control"], "source_identifiers": ["for", "k", "str"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 37, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "j"]}
+- {"definitions": ["k"], "disposition": "inspect_against_official_dependence_definition", "line": 40, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["k"], "roles": ["definition", "control"], "source_identifiers": ["for", "k", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 42, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["k"], "roles": ["use", "control"], "source_identifiers": ["a", "f", "if", "j", "k", "s", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 44, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["break"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 46, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": ["k"], "roles": ["use", "control"], "source_identifiers": ["a", "else", "if", "j", "k"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["f", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 53, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["flag", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["break"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 57, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["flag", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 62, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["exit"], "source_identifiers": ["return"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 8-63
+- source signature: `int main(void) {`
+- source content hash: `46c5047ba5d52ad697017bdc32ce2fa384eac93b744d1cde0a6600bf4d7dec2e`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```cpp
+   8  int main(void) {
+   9   int t=0,n=0,i,j,k; char s[10001],str[101];
+  10   scanf("%d",&t);
+  11   for(i=1;i<=t;i++)
+  12   {
+  13       scanf("%d",&n);
+  14       char a[n][10001],dd;
+  15       for(j=0;j<n;j++)
+  16       for(k=0;k<10001;k++)
+  17       a[j][k]='#'; 
+  18    int flag=0;
+  19       for(j=0;j<n;j++)
+  20       {
+  21           scanf("%c",&dd);
+  22           scanf("%s",str);
+  23           if(str[0]=='*')
+  24           {
+  25               int x=10000;
+  26               for(k=len(str);k>=0;k--) { 
+  27       a[j][x--]=str[k]; 
+  28      }
+  29           }
+  30           else if(str[len(str)-1]=='*')
+  31           {
+  32               for(k=0;str[k]!='\0';k++)
+  33                a[j][k]=str[k];
+  34           }
+  35       }
+  36       int x=0;
+  37       for(j=0;j<10000;j++)
+  38       {
+  39           int f=0;
+  40           for(k=0;k<n;k++)
+  41           {
+  42               if(f==1&&a[k][j]!=s[x-1]&&a[k][j]!='*'&&a[k][j]!='#'){
+  43       flag=1; 
+  44       break; 
+  45      }
+  46               else if(a[k][j]!='*'&&a[k][j]!='#') { 
+  47       if(f==0) {
+  48        s[x++]=a[k][j]; 
+  49        f=1;
+  50       } 
+  51      }
+  52           }
+  53           if(flag==1) 
+  54      break;
+  55       }
+  56       s[x]='\0';
+  57       if(flag==1) 
+  58     printf("Case #%d: *\n",i);
+  59       else 
+  60     printf("Case #%d: %s\n",i,s);
+  61   }
+  62   return 0;
+  63  }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads test cases of wildcard patterns, aligns each pattern by its leading or trailing asterisk, merges non-wildcard characters column by column, and prints either the reconstructed matching string or an asterisk on conflict." main]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: int "Always returns 0 after all test cases have been processed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Declare integers t, n, i, j, k; declare character array s of size 10001 and character array str of size 101. Initialize t and n to 0. If scanf reads a valid integer from standard input, store it in t; otherwise t remains 0. RESULT t]
+            [COMMAND Start the outer loop with i = 1; while i <= t, process one test case and then increment i. RESULT i]
+            [COMMAND Within the outer loop, read an integer from standard input into n. RESULT n]
+            [COMMAND Within the outer loop, declare a variable-length array a of n rows and 10001 columns plus a character dd; for every row j from 0 to n-1 and every column k from 0 to 10000 inclusive, set a[j][k] to '#'. RESULT a]
+            [COMMAND Within the outer loop, initialize flag to 0. RESULT flag]
+            [COMMAND Within the outer loop, for each row j from 0 to n-1, read one character into dd to consume the delimiter left from previous input, then read a whitespace-delimited string into str. RESULT str]
+            [COMMAND Within the row loop, if the first character of str is '*', right-align the entire string into row a[j]: set x to 10000 and for k from the string length of str down to 0 inclusive assign a[j][x--] = str[k]. RESULT a[j]]
+            [COMMAND Within the row loop, otherwise if the last character of str is '*', left-align the string into row a[j]: copy str[k] into a[j][k] while str[k] != '\0'. RESULT a[j]]
+            [COMMAND Within the row loop, if str has neither a leading nor a trailing '*', leave row a[j] as all '#' placeholders. RESULT a[j]]
+            [COMMAND After all rows have been read, initialize the output index x to 0. RESULT x]
+            [COMMAND Within the outer loop, scan columns j from 0 to 9999 inclusive; for each column, initialize f to 0, then scan rows k from 0 to n-1. RESULT s]
+            [COMMAND Within the column and row scan, if f == 1 and a[k][j] is not '*', is not '#', and is not equal to s[x-1], set flag to 1 and break out of the row loop. RESULT flag]
+            [COMMAND Within the column and row scan, if a[k][j] is neither '*' nor '#': when f == 0, append the character to s as s[x++] = a[k][j] and set f to 1. RESULT s]
+            [COMMAND After the row loop for the current column, if flag == 1, break out of the column loop. RESULT flag]
+            [COMMAND After the column loop, terminate s by storing '\0' at index x. RESULT s]
+            [COMMAND Within the outer loop, if flag == 1, print the line 'Case #%d: *\n' using i; otherwise print the line 'Case #%d: %s\n' using i and s. RESULT stdout]
+            [COMMAND After all test cases have been processed, return 0 from main. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

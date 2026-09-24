@@ -1,0 +1,178 @@
+# FILE: sympy/physics/hep/gamma_matrices.py
+[DEFINE_WORKER: "Partitions the factors of a tensor expression into those that are Tensor objects with the given component and all remaining factors, returning both as multiplicative expressions." extract_type_tens]
+    [INPUTS]
+        <REF> expression </REF>: TensExpr "The tensor expression to inspect. Must be a Tensor or TensMul."
+        <REF> component </REF>: object "The component value to match against each Tensor's component attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (new_expr, residual_expr) where new_expr is the product of Tensor factors whose component matches component, and residual_expr is the product of all remaining factors."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize expression into sp: if expression is a Tensor, set sp to [expression]; else if expression is a TensMul, set sp to expression.args; otherwise raise ValueError('wrong type'). RESULT sp]
+            [COMMAND Initialize new_expr to S.One. RESULT new_expr]
+            [COMMAND Initialize residual_expr to S.One. RESULT residual_expr]
+            [COMMAND For each element i in sp, evaluate with short-circuit logic whether i is a Tensor and i.component equals component. If true, multiply new_expr by i; otherwise, multiply residual_expr by i. RESULT new_expr, residual_expr]
+            [COMMAND Return the tuple (new_expr, residual_expr). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: expression is not a Tensor and is not a TensMul]
+        [LOG "wrong type"]
+        [THROW ValueError "Raised when the input expression type is unsupported."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Extracts gamma-matrix type tensors from an expression, simplifies the extracted part, and returns its product with the residual part." simplify_gamma_expression]
+    [INPUTS]
+        <REF> expression </REF>: expression "Input expression containing gamma-matrix structures to be simplified."
+        <REF> GammaMatrix </REF>: object "External gamma matrix object used as the extraction key by extract_type_tens."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: expression "Product of the simplified extracted gamma expression and the residual expression."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extract the gamma-matrix type tensors from the given expression, assigning the extracted expression to extracted_expr and the remaining residual to residual_expr. RESULT extracted_expr, residual_expr]
+            [COMMAND Simplify extracted_expr into a single-line representation and store it as res_expr. RESULT res_expr]
+            [COMMAND Return the product of res_expr and residual_expr as the simplified result. RESULT res_expr * residual_expr]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Simplifies products of contracted Dirac gamma matrices with common commuting vector factors by replacing adjacent (gamma·p)(gamma·p) pairs with scalar p·p contractions, iterating until the expression stabilizes." simplify_gpgp]
+    [INPUTS]
+        <REF> ex </REF>: tensor expression "A SymPy tensor product expression whose factors may include GammaMatrix components and commuting vector components connected by dummy Lorentz indices."
+        <REF> sort </REF>: bool "Whether to sort the components of ex before simplification; defaults to True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tensor expression "The simplified tensor expression after applying the gamma-vector reduction to a fixed point, or the unchanged original/sorted expression if no reduction applies."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested helper function _simplify_gpgp(ex) that performs one reduction pass as follows: set components = ex.components; build comp_map by extending it with i repeated comp.rank times for each component i; build dum as the list of (dummy_index_1, dummy_index_2, comp_map[dummy_index_1], comp_map[dummy_index_2]) for each dummy pair in ex.dum; for each component index i whose component is GammaMatrix, inspect the dum pairs and, when the gamma component is one side of a dummy pair, let p_pos1 be the other component index; if the component at p_pos1 has comm == 0 and rank == 1, append (i, p_pos1) to a; if a is empty, return ex; initialize elim as an empty set, tv as an empty list, hit as True, coeff as S.One, and ta as None; while hit is True, set hit to False and scan a up to the second-to-last pair for the first pair ai such that ai[0] is not in elim, ai[0] equals a[next_pair_index][0] - 1, and components[ai[1]] equals components[a[next_pair_index][1]]; when such a pair is found, add ai[0], ai[1], the next pair's gamma index, and the next pair's vector index to elim; if ta is falsy, set ta = ex.split() and mu = TensorIndex('mu', LorentzIndex); set hit to True; if the found pair is at index 0 of a, set coeff = ex.coeff; build tx = components[ai[1]](mu) * components[ai[1]](-mu); if len(a) == 2, multiply tx by 4; append tx to tv and break out of the scan; after the while loop, if tv is nonempty, rebuild the tensor by taking the factors of ta whose positions are not in elim, appending tv, multiplying by coeff, and returning tensor_mul of the combined factors; otherwise return ex unchanged. RESULT helper]
+            [COMMAND If sort is True, assign ex = ex.sorted_components(). RESULT ex]
+            [COMMAND Enter an infinite fixed-point loop that repeatedly applies the nested helper to ex until the expression stops changing. RESULT loop_context]
+            [COMMAND Inside the infinite fixed-point loop, call _simplify_gpgp(ex) and assign the result to t. RESULT t]
+            [COMMAND Inside the infinite fixed-point loop, if t != ex, assign ex = t and continue the loop; otherwise return t. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Traces a single line of gamma matrices by mapping the trace operation over TensAdd operands and simplifying non-sum expressions before tracing." gamma_trace]
+    [INPUTS]
+        <REF> t </REF>: object "Tensor expression representing a gamma-matrix line, possibly a TensAdd sum of such expressions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "Traced result: a TensAdd whose operands have been traced for sum inputs, or the traced result of the simplified single-line expression for non-sum inputs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept the input expression t for gamma_trace. RESULT t]
+            [COMMAND Check whether t is an instance of TensAdd; if so, follow the TensAdd alternative flow; otherwise continue with the non-sum path. RESULT is_tens_add]
+            [COMMAND Simplify the non-sum single-line expression by calling _simplify_single_line(t) and assigning the result back to t. RESULT t]
+            [COMMAND Trace the simplified expression by calling _trace_single_line(t) and assigning the result to res. RESULT res]
+            [COMMAND Return res as the final result of gamma_trace. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: t is an instance of TensAdd]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each operand x in t.args, call _trace_single_line(x) and collect all traced operands. RESULT traced_operands]
+            [COMMAND Construct a new TensAdd node by unpacking traced_operands into TensAdd(...). RESULT res]
+            [COMMAND Return res immediately, exiting gamma_trace with the reconstructed traced sum. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Simplifies a single-line product of gamma matrices by extracting gamma-matrix components, applying Kahane simplification when the extracted factor is not 1, and returning the resulting product." _simplify_single_line]
+    [INPUTS]
+        <REF> expression </REF>: sympy expression "The symbolic expression containing a single-line product of gamma matrices to simplify."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> res </REF>: sympy expression "The simplified product of the gamma-matrix component and the remaining tensor expression."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extract type tensors from expression using GammaMatrix and assign them to t1 and t2. RESULT t1, t2]
+            [COMMAND If t1 is not equal to 1, simplify t1 by calling kahane_simplify(t1) and assign the result back to t1. RESULT t1]
+            [COMMAND Multiply t1 and t2 and assign the product to res. RESULT res]
+            [COMMAND Return res. RESULT res]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Expands a tensor expression and recursively evaluates the trace of a single contiguous gamma-matrix line by dispatching on tensor expression type and gamma-matrix count." _trace_single_line]
+    [INPUTS]
+        <REF> t </REF>: TensExpr "Tensor expression, usually a TensAdd, Tensor, or TensMul, whose gamma-matrix line trace should be evaluated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: TensExpr "Simplified tensor expression after gamma-matrix trace evaluation; odd-length gamma blocks produce an explicit zero tensor."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested helper function _trace_single_line1(t) to simplify the trace of a sorted tensor product containing consecutive GammaMatrix factors. RESULT _trace_single_line1]
+            [COMMAND Within the helper _trace_single_line1, sort t by calling t.sorted_components() and assign the result back to t. RESULT t]
+            [COMMAND Within the helper _trace_single_line1, set components = t.components, ncomps = len(components), and g = LorentzIndex.metric. RESULT components, ncomps, g]
+            [COMMAND Within the helper _trace_single_line1, initialize hit = 0 and scan i from 0 through ncomps - 1; when components[i] == GammaMatrix, set hit = 1 and stop the scan. If no GammaMatrix is found, hit remains 0. RESULT i, hit]
+            [COMMAND Within the helper _trace_single_line1, scan j over range(i + hit, ncomps) and break if components[j] != GammaMatrix; if the loop completes without a break, set j = ncomps. RESULT j]
+            [COMMAND Within the helper _trace_single_line1, set numG = j - i. RESULT numG]
+            [COMMAND Within the helper _trace_single_line1, if numG == 0, return t.nocoeff when t.coeff is truthy, otherwise return t. RESULT no_gamma_result]
+            [COMMAND Within the helper _trace_single_line1, if numG % 2 == 1, return TensMul.from_data(S.Zero, [], [], []). RESULT zero_trace]
+            [COMMAND Within the helper _trace_single_line1, in the numG > 4 branch, split t into a = t.split(), set ind1 = a[i].get_indices()[0], and set ind2 = a[i + 1].get_indices()[0]. RESULT a, ind1, ind2]
+            [COMMAND Within the helper _trace_single_line1 numG > 4 branch, set aa = a[:i] + a[i + 2:], compute t1 = tensor_mul(*aa) * g(ind1, ind2), and assign t1 = t1.contract_metric(g). RESULT aa, t1]
+            [COMMAND Within the helper _trace_single_line1 numG > 4 branch, initialize args = [t1] and sign = 1. RESULT args, sign]
+            [COMMAND Within the helper _trace_single_line1 numG > 4 branch, loop k from i + 2 to j - 1; in each iteration set sign = -sign, set ind2 = a[k].get_indices()[0], set aa = a[:i] + a[i + 1:k] + a[k + 1:], compute t2 = sign * tensor_mul(*aa) * g(ind1, ind2), assign t2 = t2.contract_metric(g), assign t2 = simplify_gpgp(t2, False), and append t2 to args. RESULT args]
+            [COMMAND Within the helper _trace_single_line1 numG > 4 branch, after the loop set t3 = TensAdd(*args), assign t3 = _trace_single_line(t3), and return t3. RESULT t3]
+            [COMMAND Within the helper _trace_single_line1, in the remaining branch where numG is a positive even number not greater than 4, split t into a = t.split() and compute t1 = _gamma_trace1(*a[i:j]). RESULT a, t1]
+            [COMMAND Within the helper _trace_single_line1 remaining branch, set a2 = a[:i] + a[j:], compute t2 = tensor_mul(*a2), compute t3 = t1 * t2, and if t3 is falsey, return t3. RESULT a2, t2, t3]
+            [COMMAND Within the helper _trace_single_line1 remaining branch, if t3 is truthy, assign t3 = t3.contract_metric(g) and return t3. RESULT t3]
+            [COMMAND After defining the helper, expand the outer argument t by assigning t = t.expand(). RESULT t]
+            [COMMAND If t is a TensAdd, compute a = [_trace_single_line1(x) * x.coeff for x in t.args] and return TensAdd(*a). RESULT sum_result]
+            [COMMAND If t is not a TensAdd but is a Tensor or TensMul, compute r = t.coeff * _trace_single_line1(t) and return r. RESULT product_result]
+            [COMMAND If t is not a TensAdd, Tensor, or TensMul, return trace(t). RESULT fallback_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the gamma trace for Lorentz indices in dimension 4, returning the dimension constant for no indices, zero for an odd number of indices, and dimension-scaled metric combinations for exactly two or four indices." _gamma_trace1]
+    [INPUTS]
+        <REF> a </REF>: tuple of Lorentz-index objects exposing get_indices() "Variable-length positional arguments representing the Lorentz indices to trace."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: symbolic value or None "Returns gctr when no indices are given, S.Zero when the index count is odd, a metric-product expression for two or four indices, or None when the index count is even and not 2 or 4."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize gctr to the constant integer 4, noting that it is hardcoded for spacetime dimension d=4. RESULT gctr]
+            [COMMAND Set g to the Lorentz metric tensor obtained from LorentzIndex.metric. RESULT g]
+            [COMMAND If a is empty, return gctr immediately. RESULT gctr]
+            [COMMAND Set n to the number of elements in a. RESULT n]
+            [COMMAND If n is odd, return S.Zero immediately. RESULT S.Zero]
+            [COMMAND If n equals 2, extract ind0 from a[0].get_indices()[0] and ind1 from a[1].get_indices()[0], then return gctr * g(ind0, ind1). RESULT trace_2_expression]
+            [COMMAND If n equals 4, extract ind0, ind1, ind2, ind3 from the first four elements of a, then return gctr * (g(ind0, ind1) * g(ind2, ind3) - g(ind0, ind2) * g(ind1, ind3) + g(ind0, ind3) * g(ind1, ind2)). RESULT trace_4_expression]
+            [COMMAND If n is even and is neither 2 nor 4, reach the end of the function and implicitly return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

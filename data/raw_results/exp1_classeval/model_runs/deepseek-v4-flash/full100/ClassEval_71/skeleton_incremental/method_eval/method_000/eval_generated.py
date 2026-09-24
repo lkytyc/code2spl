@@ -1,0 +1,113 @@
+class PushBoxGame:
+    def __init__(self, map):
+        self.map = map
+        self.player_row = 0
+        self.player_col = 0
+        self.targets = []
+        self.boxes = []
+        self.target_count = 0
+        self.is_game_over = False
+        self.init_game()
+
+    def init_game(self):
+        for row in range(len(self.map)):
+            for col in range(len(self.map[row])):
+                cell = self.map[row][col]
+                if cell == 'O':
+                    self.player_row = row
+                    self.player_col = col
+                elif cell == 'G':
+                    self.targets.append((row, col))
+                    self.target_count += 1
+                elif cell == 'X':
+                    self.boxes.append((row, col))
+
+    def check_win(self):
+        self.is_game_over = all(box in self.targets for box in self.boxes) and len(self.boxes) == self.target_count
+        return self.is_game_over
+
+    def move(self, direction):
+        dr = 0
+        dc = 0
+        if direction == 'w':
+            dr = -1
+        elif direction == 's':
+            dr = 1
+        elif direction == 'a':
+            dc = -1
+        elif direction == 'd':
+            dc = 1
+
+        new_pr = self.player_row + dr
+        new_pc = self.player_col + dc
+
+        if not (0 <= new_pr < len(self.map) and 0 <= new_pc < len(self.map[new_pr])):
+            return self.check_win()
+
+        if self.map[new_pr][new_pc] == '#':
+            return self.check_win()
+
+        if (new_pr, new_pc) in self.boxes:
+            new_br = new_pr + dr
+            new_bc = new_pc + dc
+
+            if not (0 <= new_br < len(self.map) and 0 <= new_bc < len(self.map[new_br])):
+                return self.check_win()
+
+            if self.map[new_br][new_bc] == '#':
+                return self.check_win()
+
+            if (new_br, new_bc) in self.boxes:
+                return self.check_win()
+
+            self.boxes.remove((new_pr, new_pc))
+            self.boxes.append((new_br, new_bc))
+            self.player_row = new_pr
+            self.player_col = new_pc
+        else:
+            self.player_row = new_pr
+            self.player_col = new_pc
+
+        return self.check_win()
+
+    def print_map(self):
+        for row in self.map:
+            print(' '.join(row))
+
+import unittest
+
+class PushBoxGameTestInitGame(unittest.TestCase):
+    def setUp(self) -> None:
+        self.game_map = [
+            "#####",
+            "#O  #",
+            "# X #",
+            "#  G#",
+            "#####"
+        ]
+        self.game = PushBoxGame(self.game_map)
+
+    def test_init_game_1(self):
+        self.assertEqual(self.game.map, self.game_map)
+
+    def test_init_game_2(self):
+        self.assertEqual(self.game.is_game_over, False)
+
+    def test_init_game_3(self):
+        self.assertEqual(self.game.player_col, 1)
+
+    def test_init_game_4(self):
+        self.assertEqual(self.game.player_row, 1)
+
+    def test_init_game_5(self):
+        self.assertEqual(self.game.targets, [(3, 3)])
+
+    def test_init_game_6(self):
+        self.assertEqual(self.game.boxes, [(2, 2)])
+
+    def test_init_game_7(self):
+        self.assertEqual(self.game.target_count, 1)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

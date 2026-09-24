@@ -1,0 +1,166 @@
+from datetime import datetime, timedelta
+
+class CalendarUtil:
+    """
+    This is a class as CalendarUtil that provides functionalities to manage calendar events, schedule appointments, and perform conflict checks.
+    """
+
+    def __init__(self):
+        """
+        Initialize the calendar with an empty list of events.
+        """
+        self.events = []
+
+    def add_event(self, event):
+        """
+        Add an event to the calendar.
+        :param event: The event to be added to the calendar,dict.
+        >>> calendar = CalendarUtil()
+        >>> calendar.add_event({'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 0, 0), 'end_time': datetime(2023, 1, 1, 1, 0), 'description': 'New Year'})
+        >>> calendar.events
+        [{'date': datetime.datetime(2023, 1, 1, 0, 0), 'start_time': datetime.datetime(2023, 1, 1, 0, 0), 'end_time': datetime.datetime(2023, 1, 1, 1, 0), 'description': 'New Year'}]
+
+        """
+        self.events.append(event)
+
+    def remove_event(self, event):
+        """
+        Remove an event from the calendar.
+        :param event: The event to be removed from the calendar,dict.
+        >>> calendar = CalendarUtil()
+        >>> calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 0, 0), 'end_time': datetime(2023, 1, 1, 1, 0), 'description': 'New Year'}]
+        >>> calendar.remove_event({'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 0, 0), 'end_time': datetime(2023, 1, 1, 1, 0), 'description': 'New Year'})
+        >>> calendar.events
+        []
+
+        """
+        if event in self.events:
+            self.events.remove(event)
+
+    def get_events(self, date):
+        """
+        Get all events on a given date.
+        :param date: The date to get events for,datetime.
+        :return: A list of events on the given date,list.
+        >>> calendar = CalendarUtil()
+        >>> calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 0, 0), 'end_time': datetime(2023, 1, 1, 1, 0), 'description': 'New Year'}]
+        >>> calendar.get_events(datetime(2023, 1, 1, 0, 0))
+        [{'date': datetime.datetime(2023, 1, 1, 0, 0), 'start_time': datetime.datetime(2023, 1, 1, 0, 0), 'end_time': datetime.datetime(2023, 1, 1, 1, 0), 'description': 'New Year'}]
+
+        """
+        return [event for event in self.events if event.get('date') == date]
+
+    def is_available(self, start_time, end_time):
+        """
+        Check if the calendar is available for a given time slot.
+        :param start_time: The start time of the time slot,datetime.
+        :param end_time: The end time of the time slot,datetime.
+        :return: True if the calendar is available for the given time slot, False otherwise,bool.
+        >>> calendar = CalendarUtil()
+        >>> calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 0, 0), 'end_time': datetime(2023, 1, 1, 1, 0), 'description': 'New Year'}]
+        >>> calendar.is_available(datetime(2023, 1, 1, 0, 0), datetime(2023, 1, 1, 1, 0))
+        False
+
+        """
+        for event in self.events:
+            existing_start = event.get('start_time')
+            existing_end = event.get('end_time')
+            if existing_start is None or existing_end is None:
+                continue
+            if start_time < existing_end and end_time > existing_start:
+                return False
+        return True
+
+    def get_available_slots(self, date):
+        """
+        Get all available time slots on a given date.
+        :param date: The date to get available time slots for,datetime.
+        :return: A list of available time slots on the given date,list.
+        >>> calendar = CalendarUtil()
+        >>> calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 0, 0), 'end_time': datetime(2023, 1, 1, 23, 0), 'description': 'New Year'}]
+        >>> calendar.get_available_slots(datetime(2023, 1, 1))
+        [(datetime.datetime(2023, 1, 1, 23, 0), datetime.datetime(2023, 1, 2, 0, 0))]
+
+        """
+        day_start = datetime(date.year, date.month, date.day)
+        day_end = day_start + timedelta(days=1)
+        events = [e for e in self.events if e.get('date') == date or e.get('date') == day_start]
+        intervals = []
+        for event in events:
+            s = event.get('start_time')
+            e = event.get('end_time')
+            if s is not None and e is not None:
+                intervals.append((max(s, day_start), min(e, day_end)))
+        intervals.sort(key=lambda x: x[0])
+
+        available = []
+        current = day_start
+        for s, e in intervals:
+            if current < s:
+                available.append((current, s))
+            if e > current:
+                current = e
+        if current < day_end:
+            available.append((current, day_end))
+        return available
+
+    def get_upcoming_events(self, num_events):
+        """
+        Get the next n upcoming events from a given date.
+        :param date: The date to get upcoming events from,datetime.
+        :param n: The number of upcoming events to get,int.
+        :return: A list of the next n upcoming events from the given date,list.
+        >>> calendar = CalendarUtil()
+        >>> calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 0, 0), 'end_time': datetime(2023, 1, 1, 23, 0), 'description': 'New Year'},{'date': datetime(2023, 1, 2, 0, 0),'end_time': datetime(2023, 1, 2, 1, 0), 'description': 'New Year 2'}]
+        >>> calendar.get_upcoming_events(1)
+        [{'date': datetime.datetime(2023, 1, 1, 0, 0), 'start_time': datetime.datetime(2023, 1, 1, 0, 0), 'end_time': datetime.datetime(2023, 1, 1, 23, 0), 'description': 'New Year'}, {'date': datetime.datetime(2023, 1, 2, 0, 0), 'end_time': datetime.datetime(2023, 1, 2, 1, 0), 'description': 'New Year 2'}]
+
+        """
+        sorted_events = sorted(
+            self.events,
+            key=lambda e: (
+                e.get('date', datetime.max),
+                e.get('start_time', e.get('date', datetime.max)),
+                e.get('end_time', datetime.max),
+            )
+        )
+        return sorted_events[:num_events + 1]
+
+import unittest
+from datetime import datetime
+
+class CalendarTestGetAvailableSlots(unittest.TestCase):
+    def test_get_available_slots(self):
+        calendar = CalendarUtil()
+        calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 0, 0),
+                            'end_time': datetime(2023, 1, 1, 23, 0), 'description': 'New Year'}]
+        self.assertEqual(calendar.get_available_slots(datetime(2023, 1, 1)),
+                         [(datetime(2023, 1, 1, 23, 0), datetime(2023, 1, 2, 0, 0))])
+
+    def test_get_available_slots_2(self):
+        calendar = CalendarUtil()
+        calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 1, 1, 0),
+                            'end_time': datetime(2023, 1, 1, 2, 0), 'description': 'New Year'}]
+        self.assertEqual(len(calendar.get_available_slots(datetime(2023, 1, 1))), 23)
+
+    def test_get_available_slots_3(self):
+        calendar = CalendarUtil()
+        calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 2, 1, 0),
+                            'end_time': datetime(2023, 1, 2, 2, 0), 'description': 'New Year'}]
+        self.assertEqual(len(calendar.get_available_slots(datetime(2023, 1, 1))), 24)
+
+    def test_get_available_slots_4(self):
+        calendar = CalendarUtil()
+        calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 2, 1, 0),
+                            'end_time': datetime(2023, 1, 2, 2, 0), 'description': 'New Year'}]
+        self.assertEqual(len(calendar.get_available_slots(datetime(2023, 1, 1))), 24)
+
+    def test_get_available_slots_5(self):
+        calendar = CalendarUtil()
+        calendar.events = [{'date': datetime(2023, 1, 1, 0, 0), 'start_time': datetime(2023, 1, 2, 1, 0),
+                            'end_time': datetime(2023, 1, 2, 2, 0), 'description': 'New Year'}]
+        self.assertEqual(len(calendar.get_available_slots(datetime(2023, 1, 1))), 24)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

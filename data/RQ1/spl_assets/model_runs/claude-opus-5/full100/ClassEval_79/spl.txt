@@ -1,0 +1,172 @@
+# CLASS SQLGenerator
+
+[DEFINE_WORKER: "Initializes a new instance by storing the provided table name as an instance attribute." __init__]
+    [INPUTS]
+        <REF> table_name </REF>: string "The name of the database table to associate with this instance"
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the input parameter table_name to the instance attribute self.table_name RESULT self.table_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a SQL SELECT statement for the instance's table, optionally restricting to specified columns and filtering rows with a WHERE condition." select]
+    [INPUTS]
+        <REF> fields </REF>: list or None "List of column name strings to select; if None, selects all columns with '*'"
+        <REF> condition </REF>: string or None "Optional WHERE clause condition string; if None, no filtering is applied"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: string "Complete SQL SELECT statement ending with a semicolon"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether fields is None; if so, set fields to the string '*' to select all columns RESULT fields]
+            [COMMAND If fields is not None, join the elements of the fields list into a single comma-separated string and assign the result to fields RESULT fields]
+            [COMMAND Construct the base SQL string by interpolating fields and self.table_name into the template 'SELECT {fields} FROM {self.table_name}' and assign to sql RESULT sql]
+            [COMMAND Check whether condition is not None; if so, append the string ' WHERE {condition}' to sql RESULT sql]
+            [COMMAND Return the value of sql concatenated with the literal string ';' RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: fields is None at method entry]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the string '*' to fields, bypassing the join step RESULT fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: condition is None at method entry]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the WHERE clause append step; sql remains as 'SELECT {fields} FROM {self.table_name}' RESULT sql]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a raw SQL INSERT statement string by interpolating the table name and all key-value pairs from the provided data dictionary directly into the query." insert]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing the target table name via the attribute self.table_name"
+        <REF> data </REF>: dict "Dictionary whose keys are column names and whose values are the corresponding values to insert; must be non-empty to produce valid SQL; relies on Python 3.7+ insertion-order guarantee for key-value alignment"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: string "Complete SQL INSERT statement terminated with a semicolon, e.g. INSERT INTO table_name (col1, col2) VALUES ('val1', 'val2');"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Join all keys of data with ', ' to produce the comma-separated column list and assign it to fields RESULT fields]
+            [COMMAND For each value in data.values(), wrap it in single quotes using an f-string, collect the results into a list, join them with ', ', and assign to values RESULT values]
+            [COMMAND Interpolate self.table_name, fields, and values into the f-string template 'INSERT INTO {self.table_name} ({fields}) VALUES ({values})' and assign the result to sql RESULT sql]
+            [COMMAND Append a semicolon to sql and return the resulting string RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: data is an empty dict, causing both fields and values to be empty strings]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND fields resolves to an empty string and values resolves to an empty string, producing syntactically invalid SQL: INSERT INTO <table_name> () VALUES (); the method still returns this string without raising an error RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: A value in data is a non-string type such as int, bool, or None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Python's f-string coerces the value to its str() representation and wraps it in single quotes unconditionally, so integers become '42', booleans become 'True' or 'False', and None becomes 'None' rather than the SQL NULL literal RESULT values]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a SQL UPDATE statement string by interpolating the table name, a comma-separated set of column-value assignments derived from the data dict, and a caller-supplied WHERE condition." update]
+    [INPUTS]
+        <REF> data </REF>: dict "Mapping of column names to new values; each key-value pair becomes one assignment in the SET clause, with the value always single-quote-wrapped as a string"
+        <REF> condition </REF>: str "Raw WHERE clause expression interpolated verbatim into the SQL string; no parameterization or escaping is applied"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: str "Complete SQL UPDATE statement terminated with a semicolon, e.g. UPDATE table SET col = 'val' WHERE condition;"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over every (field, value) pair in data.items() and format each pair as the string "{field} = '{value}'", producing a list of assignment strings where every value is wrapped in single quotes regardless of its Python type RESULT assignment_list]
+            [COMMAND Join assignment_list with the separator ", " to produce a single comma-separated SET clause string RESULT set_clause]
+            [COMMAND Compose the SQL string by substituting self.table_name, set_clause, and condition directly into the f-string template "UPDATE {self.table_name} SET {set_clause} WHERE {condition}" RESULT sql]
+            [COMMAND Append a literal semicolon to sql and return the result RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: data is an empty dict, causing assignment_list to be empty and set_clause to be an empty string]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND set_clause resolves to an empty string, producing the syntactically invalid SQL fragment "UPDATE {table_name} SET  WHERE {condition}"; no guard prevents this path and the invalid string is still returned RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns a SQL DELETE statement for the instance's table filtered by the given condition string." delete]
+    [INPUTS]
+        <REF> self </REF>: object "The instance providing table_name, an attribute containing the target table name string."
+        <REF> condition </REF>: str "A raw SQL condition fragment to place after the WHERE clause; not validated or sanitized before use."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> sql </REF>: str "A complete SQL DELETE statement of the form 'DELETE FROM <table_name> WHERE <condition>;'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Interpolate self.table_name and condition into the f-string template 'DELETE FROM {self.table_name} WHERE {condition}' to produce the base SQL string; assign the result to sql. RESULT sql]
+            [COMMAND Concatenate the semicolon literal ';' to sql and return the resulting string as the method's output. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a SQL-style filter string requiring age strictly less than the given threshold and gender equal to 'female', then delegates to the base select method with that condition." select_female_under_age]
+    [INPUTS]
+        <REF> age </REF>: numeric "Exclusive upper bound for the age filter; must be a numeric type to produce a valid predicate string — passing None or an unsanitized string may cause incorrect output or SQL injection"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "Return value of the underlying select call filtered by the composed condition string"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compose condition string by interpolating age into the template 'age < {age} AND gender = \'female\'', using an eager f-string so the value of age is captured at this moment and frozen into the string RESULT condition]
+            [COMMAND Call self.select passing condition as the keyword argument 'condition' and return its result directly RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: age is None or a non-string-representable type at interpolation time]
+        [LOG "Python raises TypeError during f-string interpolation because age cannot be converted to a string representation suitable for the predicate; the condition variable is never assigned"]
+        [THROW TypeError "Raised implicitly by the f-string when age is of a type that cannot be coerced to a string"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a SQL BETWEEN condition string from the provided age bounds and delegates the actual record selection to the parent select method." select_by_age_range]
+    [INPUTS]
+        <REF> min_age </REF>: any "Lower bound of the age range (inclusive); interpolated directly into the SQL fragment without type enforcement or sanitization"
+        <REF> max_age </REF>: any "Upper bound of the age range (inclusive); interpolated directly into the SQL fragment without type enforcement or sanitization"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "Return value of self.select called with the constructed condition string; type depends on the select implementation"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct the SQL condition string by interpolating min_age and max_age directly into the template 'age BETWEEN {min_age} AND {max_age}' using an f-string; assign the resulting string to the local variable condition RESULT condition]
+            [COMMAND Call self.select passing condition as the keyword argument condition, and return its result immediately to the caller RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

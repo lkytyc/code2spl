@@ -1,0 +1,152 @@
+from bs4 import BeautifulSoup
+from gensim.utils import decode_htmlentities
+import re
+
+
+class HtmlUtil:
+    def __init__(self):
+        self.CODE_MARK = '-CODE-'
+        self.URL_MARK = '-URL-'
+        self.NUMBER_MARK = '-NUMBER-'
+        self.PUNCTUATION = {'.', '?', '!', ':', ';', '…', '。', '？', '！', '：', '；'}
+
+    def _ends_with_punctuation(self, text):
+        text = text.strip()
+        if not text:
+            return False
+        return text[-1] in self.PUNCTUATION
+
+    def format_line_html_text(self, html_text):
+        soup = BeautifulSoup(html_text, 'html.parser')
+
+        # Step 1: Replace <pre> and <blockquote> content with CODE_MARK
+        for tag in soup.find_all(['pre', 'blockquote']):
+            tag.clear()
+            tag.string = self.CODE_MARK
+
+        # Step 2: Reformat <li> items
+        for tag in soup.find_all('li'):
+            text = tag.get_text().strip()
+            if not self._ends_with_punctuation(text):
+                text = text + '.'
+            tag.string = '[-] ' + text
+
+        # Step 3: Normalize <p> text
+        for tag in soup.find_all('p'):
+            text = tag.get_text().strip()
+            if not text:
+                continue
+            next_sibling = tag.find_next_sibling()
+            if next_sibling and self.CODE_MARK in next_sibling.get_text():
+                if not self._ends_with_punctuation(text):
+                    tag.string = text + ':'
+                else:
+                    # Replace trailing punctuation with colon
+                    tag.string = text.rstrip(''.join(self.PUNCTUATION)) + ':'
+            else:
+                if not self._ends_with_punctuation(text):
+                    tag.string = text + '.'
+                else:
+                    tag.string = text
+
+        # Step 4: Extract all text, decode HTML entities, collapse multiple newlines
+        raw_text = soup.get_text()
+        decoded_text = decode_htmlentities(raw_text)
+        normalized_text = re.sub(r'\n{2,}', '\n', decoded_text)
+        return normalized_text
+
+    def extract_code_from_html_text(self, html_text):
+        formatted_text = self.format_line_html_text(html_text)
+        code_count = formatted_text.count(self.CODE_MARK)
+
+        if code_count == 0:
+            return []
+
+        soup = BeautifulSoup(html_text, 'html.parser')
+        code_blocks = soup.find_all(['pre', 'blockquote'])
+
+        result = []
+        for i, tag in enumerate(code_blocks):
+            if i >= code_count:
+                break
+            result.append(tag.get_text())
+
+        return result
+
+import unittest
+import sys
+
+class HtmlUtilTestExtractCodeFromHtmlText(unittest.TestCase):
+    def test_extract_code_from_html_text_1(self):
+        htmlutil = HtmlUtil()
+        res = htmlutil.extract_code_from_html_text('''
+                <html>
+                <body>
+                <h1>Title</h1>
+                <p>This is a paragraph.</p>
+                <pre>print('Hello, world!')</pre>
+                <p>Another paragraph.</p>
+                <pre><code>for i in range(5):
+                print(i)</code></pre>
+                </body>
+                </html>
+                ''')
+        self.assertEqual(res, ["print('Hello, world!')", 'for i in range(5):\n                print(i)'])
+
+    def test_extract_code_from_html_text_2(self):
+        htmlutil = HtmlUtil()
+        res = htmlutil.extract_code_from_html_text('''
+                <html>
+                <body>
+                <h1>Title</h1>
+                <p>This is a paragraph.</p>
+                <pre>print('Hello, world!')</pre>
+                <p>Another paragraph.</p>
+                <pre><code>for i in range(4):
+                print(i)</code></pre>
+                </body>
+                </html>
+                ''')
+        self.assertEqual(res, ["print('Hello, world!')", 'for i in range(4):\n                print(i)'])
+
+    def test_extract_code_from_html_text_3(self):
+        htmlutil = HtmlUtil()
+        res = htmlutil.extract_code_from_html_text('''
+                <html>
+                <body>
+                <h1>Title</h1>
+                <p>This is a paragraph.</p>
+                <pre>print('Hello, world!')</pre>
+                <p>Another paragraph.</p>
+                <pre><code>for i in range(3):
+                print(i)</code></pre>
+                </body>
+                </html>
+                ''')
+        self.assertEqual(res, ["print('Hello, world!')", 'for i in range(3):\n                print(i)'])
+
+    def test_extract_code_from_html_text_4(self):
+        htmlutil = HtmlUtil()
+        res = htmlutil.extract_code_from_html_text('''
+                <html>
+                <body>
+                <h1>Title</h1>
+                <p>This is a paragraph.</p>
+                <pre>print('Hello, world!')</pre>
+                <p>Another paragraph.</p>
+                <pre><code>for i in range(2):
+                print(i)</code></pre>
+                </body>
+                </html>
+                ''')
+        self.assertEqual(res, ["print('Hello, world!')", 'for i in range(2):\n                print(i)'])
+
+    def test_extract_code_from_html_text_5(self):
+        htmlutil = HtmlUtil()
+        htmlutil.CODE_MARK = 'abcdefg'
+        res = htmlutil.extract_code_from_html_text("")
+        self.assertEqual(res, [])
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

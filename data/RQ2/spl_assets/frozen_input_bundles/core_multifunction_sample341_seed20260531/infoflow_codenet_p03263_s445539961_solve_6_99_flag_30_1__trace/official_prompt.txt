@@ -1,0 +1,636 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Is there information flow from `(varA,lineA)` to `(varB,lineB)`? If so, provide one feasible trace.", respond with a JSON object:
+
+- If information flow exists:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["varOrExpr", lineNumber            /*, "use" optional */],
+      "to":   ["varOrExpr", lineNumber            /*, "use" optional */],
+      "type": "data" | "control"
+    },
+    // … additional edges
+  ]
+}
+```
+- If no information flow exists, omit the Trace field:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+- Every trace edge must specify "from", "to" (each may include a third "use" element when the line is a conditional statement that only reads without redefining/updating the value), and "type".
+- **We do not consider loop in the trace**.
+
+
+A **trace** represents a **transitive chain of direct flows** arise from compositions of **direct** implicit or explicit flows, where each edge represents a **direct implicit flow** (through control dependence) or a **direct explicit flow** edge (through data dependence).
+
+
+You only need to provide **one** valid trace if you conclude a information flow exists, even if multiple possible chains exist. 
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Is there information flow from `(balance,4)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. Here we focus on `(status,7)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+Hence, A transitive of flow of direct implicit or explicit flows forms a information flow trace.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["balance", 4],
+      "to":   ["balance", 5],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 5],
+      "to":   ["balance", 6, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["balance", 6, "use"],
+      "to":   ["status", 7],
+      "type": "control"
+    },
+    {
+      "from": ["status", 7],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+ 
+- The edge from line 6 to `(status,7)` is through control dependence and therefore with a type of "control". 
+- Line 6 only reads the value of `balance` without defining/updating it. So it is marked with `"use"`. 
+- You only need to provide **one** valid chain if you conclude a the information flow exists. 
+
+
+#### Example Question 1.2
+
+Is there information flow from  `(flag,3)` to `(limit,9)`? If so, provide a trace.
+
+**Analysis**
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from either `(status,7)` (if line 6’s condiation evaluates to `true`) or on the original `(status,2)` (if not) to `(limit,9)`. 
+- Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 6 is treated as being evaluated to both possibly true and possibly false.
+  - If line 6 is true, `(limit,9)` depends on `(status,7)`. 
+    - Line 7: `(status,7)` doesn't have any data dependence as it is assigned with a constant number. The execution of line 7 is control-dependent on the condition in line 6.
+    - Line 6: the condition at line 6 directly reads from `(balance,5)`. 
+    - Line 5: `(balance,5)` is updated based on the previous value of `balance` in line 4.
+    - Line 4: `(balance,4)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+  - If line 6 is not true, `(limit,9)` depends on `(status,2)`. 
+    - Line 2: `(status,2)` is initialized with a constant number. Therefore it has no more data dependence. Nor is it guarded by any conditions.
+- Therefore, among all the possible paths, there is no transitive (indirect) chain of implicit or explicit flow from `(flag,3)` to `(limit,9)`. The information flow doesn't exist.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": false
+}
+```
+
+#### Example Question 1.3
+
+Is there information flow from  `(status,2)` to `(transaction,10)`? If so, provide a trace.
+
+**Analysis**
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`.
+- Line 9: `(limit,9)` reads `status`, o there is a direct explicit flow from either `(status,7)`, or the original `(status,2)`, to `(limit,9)`.
+- Similar to the above example, line 6 is possibly evaluated to true or false.
+- If line 6 evaluates to `true`, there is a direct explicit flow from `(status,7)` to `(limit,9)`, which directly data-dependent on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (status,7) -> (limit,9) -> (transaction,10)`.
+- If line 6 evaluates to `false`, `(limit,9)` has a direct data dependence on `(status,2)`, forming a transitive explicit flow trace :`(status,2) -> (limit,9) -> (transaction,10)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["status", 2],
+      "to":   ["limit", 9],
+      "type": "data"
+    },
+    {
+      "from": ["limit", 9],
+      "to":   ["transaction", 10],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Is there information flow from  `(size,2)` to `(summary,17)`? If so, provide a trace.
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. We focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`.
+- Line 2: `size` is initialized with a constant number. It is not guarded with any conditions. 
+- Therefore, there is an transitive trace of direct implicit/excplit flows from `(size,2)` to `(summary,17)`.
+
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["size", 2],
+      "to":   ["size", 9, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["size", 9, "use"],
+      "to":   ["j", 14],
+      "type": "control"
+    },
+    {
+      "from": ["j", 14],
+      "to":   ["summary", 17],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Is there information flow from  `(j,5)` to `(score,11)`? If so, provide a trace. 
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`.
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop).
+- If line 11 reads `j` from line 5, it forms a tansitive explicit flow trace: `(j,5) -> (score,11)`.
+- If line 11 reads `j` from line 14, it forms a tansitive explicit flow trace: `(j,5) -> (j,14) -> (score,11)`.
+- A transitive of explicit flow forms a information flow trace. Only one valid trace is required for the output even if multiple exists.
+
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["j", 5],
+      "to":   ["score", 11],
+      "type": "data"
+    }
+  ]
+}
+```
+
+
+
+#### Example Question 2.3:
+Is there information flow from  `(j,1)` to `(i,15)`? If so, provide a trace.
+
+**Analysis**: 
+- Line 15: `(i,15)` updates `i` based on its previous value. So there is a direct explicit flow from either `(i,4)` (initialization) or itself (loop-carried) to `(i,15)`. But we do not consider loop-carried dependencies across iterations in this analysis. So we focus on `(i,4)`.
+- The execution of line 15 is conditional on the while loop at line 9.
+- Line 9: `while i < size` depends on `i` and `size`. It directly reads from `(i,4)` (or possibly `(i,15)`) and `(size,2)`.
+- Both `(i,4)` and `(size,2)` are initialized with constants and are not themselves control-dependent on any earlier values or branches.
+- There is no use of `(j,1)` in the computation of `(i,15)`, nor does `(j,1)` influence whether line 15 executes.
+- Therefore, there is no transitive flow, explicit or implicit, from `(j,1)` to `(i,15)`.
+
+
+**Output**: 
+```json
+{
+  "InformationFlow": false
+}
+```
+
+
+#### Example Question 2.4:
+Is there information flow from  `(val,1)` to `(last,16)`? If so, provide a trace.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8 (or by the loop updates in line 10). Under static analysis, multiple update sites may contribute. We conservatively pick one valid trace (line 8).
+- Line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7.
+- Therefore, there exists a trace from `(val,1)` to `(last,16)`, and the edge from line 7 to `(arr,8)` is through implicit and explicit flows. 
+
+**Output**:
+```json
+{
+  "InformationFlow": true,
+  "Trace": [
+    {
+      "from": ["val", 1],
+      "to":   ["val", 7, "use"],
+      "type": "data"
+    },
+    {
+      "from": ["val", 7, "use"],
+      "to":   ["arr", 8],
+      "type": "control"
+    },
+    {
+      "from": ["arr", 8],
+      "to":   ["last", 16],
+      "type": "data"
+    }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.*;
+2   import java.util.*;
+3   public class Main {
+4   	private static Scanner sc;
+5   	private static Printer pr;
+6   	private static void solve() {
+7   		int h = sc.nextInt();
+8   		int w = sc.nextInt();
+9   		int[][] a = new int[h][w];
+10  		for (int i = 0; i < h; i++) {
+11  			for (int j = 0; j < w; j++) {
+12  				a[i][j] = sc.nextInt();
+13  			}
+14  		}
+15  		List<Integer> x = new ArrayList<>();
+16  		List<Integer> y = new ArrayList<>();
+17  		boolean flag = false;
+18  		int prex = 0;
+19  		int prey = 0;
+20  		boolean odd;
+21  		for (int i = 0; i < h; i++) {
+22  			if (i % 2 == 1) {
+23  				for (int j = w - 1; j >= 0; j--) {
+24  					if (a[i][j] % 2 == 1) {
+25  						odd = true;
+26  					} else {
+27  						odd = false;
+28  					}
+29  					if (odd && flag) {
+30  						flag = !flag;
+31  						x.add(prex);
+32  						y.add(prey);
+33  						x.add(j);
+34  						y.add(i);
+35  						prex = j;
+36  						prey = i;
+37  					} else if (odd && !flag) {
+38  						flag = !flag;
+39  						prex = j;
+40  						prey = i;
+41  					} else if (!odd && flag) {
+42  						x.add(prex);
+43  						y.add(prey);
+44  						x.add(j);
+45  						y.add(i);
+46  						prex = j;
+47  						prey = i;
+48  					} else if (!odd && !flag) {
+49  					}
+50  				}
+51  			} else {
+52  				for (int j = 0; j < w; j++) {
+53  					if (a[i][j] % 2 == 1) {
+54  						odd = true;
+55  					} else {
+56  						odd = false;
+57  					}
+58  					if (odd && flag) {
+59  						flag = !flag;
+60  						x.add(prex);
+61  						y.add(prey);
+62  						x.add(j);
+63  						y.add(i);
+64  						prex = j;
+65  						prey = i;
+66  					} else if (odd && !flag) {
+67  						flag = !flag;
+68  						prex = j;
+69  						prey = i;
+70  					} else if (!odd && flag) {
+71  						x.add(prex);
+72  						y.add(prey);
+73  						x.add(j);
+74  						y.add(i);
+75  						prex = j;
+76  						prey = i;
+77  					} else if (!odd && !flag) {
+78  					}
+79  				}
+80  			}
+81  		}
+82  		pr.println(x.size() / 2);
+83  		for (int i = 0, size = x.size(); i < size / 2 * 2; i++) {
+84  			if (i % 2 == 0) {
+85  				StringBuilder sb = new StringBuilder();
+86  				sb.append(y.get(i) + 1);
+87  				sb.append(' ');
+88  				sb.append(x.get(i) + 1);
+89  				sb.append(' ');
+90  				pr.print(sb.toString());
+91  			} else {
+92  				StringBuilder sb = new StringBuilder();
+93  				sb.append(y.get(i) + 1);
+94  				sb.append(' ');
+95  				sb.append(x.get(i) + 1);
+96  				pr.println(sb.toString());
+97  			}
+98  		}
+99  	}
+100  	public static void main(String[] args) {
+101  		sc = new Scanner(System.in);
+102  		pr = new Printer(System.out);
+103  		solve();
+104  		pr.close();
+105  		sc.close();
+106  	}
+107  	static class Scanner {
+108  		BufferedReader br;
+109  		Scanner (InputStream in) {
+110  			br = new BufferedReader(new InputStreamReader(in));
+111  		}
+112  		private boolean isPrintable(int ch) {
+113  			return ch >= '!' && ch <= '~';
+114  		}
+115  		private boolean isCRLF(int ch) {
+116  			return ch == '\n' || ch == '\r' || ch == -1;
+117  		}
+118  		private int nextPrintable() {
+119  			try {
+120  				int ch;
+121  				while (!isPrintable(ch = br.read())) {
+122  					if (ch == -1) {
+123  						throw new NoSuchElementException();
+124  					}
+125  				}
+126  				return ch;
+127  			} catch (IOException e) {
+128  				throw new NoSuchElementException();
+129  			}
+130  		}
+131  		String next() {
+132  			try {
+133  				int ch = nextPrintable();
+134  				StringBuilder sb = new StringBuilder();
+135  				do {
+136  					sb.appendCodePoint(ch);
+137  				} while (isPrintable(ch = br.read()));
+138  				return sb.toString();
+139  			} catch (IOException e) {
+140  				throw new NoSuchElementException();
+141  			}
+142  		}
+143  		int nextInt() {
+144  			try {
+145  				boolean negative = false;
+146  				int res = 0;
+147  				int limit = -Integer.MAX_VALUE;
+148  				int radix = 10;
+149  				int fc = nextPrintable();
+150  				if (fc < '0') {
+151  					if (fc == '-') {
+152  						negative = true;
+153  						limit = Integer.MIN_VALUE;
+154  					} else if (fc != '+') {
+155  						throw new NumberFormatException();
+156  					}
+157  					fc = br.read();
+158  				}
+159  				int multmin = limit / radix;
+160  				int ch = fc;
+161  				do {
+162  					int digit = ch - '0';
+163  					if (digit < 0 || digit >= radix) {
+164  						throw new NumberFormatException();
+165  					}
+166  					if (res < multmin) {
+167  						throw new NumberFormatException();
+168  					}
+169  					res *= radix;
+170  					if (res < limit + digit) {
+171  						throw new NumberFormatException();
+172  					}
+173  					res -= digit;
+174  				} while (isPrintable(ch = br.read()));
+175  				return negative ? res : -res;
+176  			} catch (IOException e) {
+177  				throw new NoSuchElementException();
+178  			}
+179  		}
+180  		long nextLong() {
+181  			try {
+182  				boolean negative = false;
+183  				long res = 0;
+184  				long limit = -Long.MAX_VALUE;
+185  				int radix = 10;
+186  				int fc = nextPrintable();
+187  				if (fc < '0') {
+188  					if (fc == '-') {
+189  						negative = true;
+190  						limit = Long.MIN_VALUE;
+191  					} else if (fc != '+') {
+192  						throw new NumberFormatException();
+193  					}
+194  					fc = br.read();
+195  				}
+196  				long multmin = limit / radix;
+197  				int ch = fc;
+198  				do {
+199  					int digit = ch - '0';
+200  					if (digit < 0 || digit >= radix) {
+201  						throw new NumberFormatException();
+202  					}
+203  					if (res < multmin) {
+204  						throw new NumberFormatException();
+205  					}
+206  					res *= radix;
+207  					if (res < limit + digit) {
+208  						throw new NumberFormatException();
+209  					}
+210  					res -= digit;
+211  				} while (isPrintable(ch = br.read()));
+212  				return negative ? res : -res;
+213  			} catch (IOException e) {
+214  				throw new NoSuchElementException();
+215  			}
+216  		}
+217  		float nextFloat() {
+218  			return Float.parseFloat(next());
+219  		}
+220  		double nextDouble() {
+221  			return Double.parseDouble(next());
+222  		}
+223  		String nextLine() {
+224  			try {
+225  				int ch;
+226  				while (isCRLF(ch = br.read())) {
+227  					if (ch == -1) {
+228  						throw new NoSuchElementException();
+229  					}
+230  				}
+231  				StringBuilder sb = new StringBuilder();
+232  				do {
+233  					sb.appendCodePoint(ch);
+234  				} while (!isCRLF(ch = br.read()));
+235  				return sb.toString();
+236  			} catch (IOException e) {
+237  				throw new NoSuchElementException();
+238  			}
+239  		}
+240  		void close() {
+241  			try {
+242  				br.close();
+243  			} catch (IOException e) {
+244  			}
+245  		}
+246  	}
+247  	static class Printer extends PrintWriter {
+248  		Printer(OutputStream out) {
+249  			super(out);
+250  		}
+251  	}
+252  }
+```
+
+
+**Question**: Is there information flow from `(odd,25)` to `(flag,30)` in function `solve`? If so, provide a trace.
+
+**Output**:

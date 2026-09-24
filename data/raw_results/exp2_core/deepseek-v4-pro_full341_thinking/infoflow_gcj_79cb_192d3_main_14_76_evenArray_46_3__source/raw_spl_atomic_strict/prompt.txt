@@ -1,0 +1,629 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.DataInputStream;
+2   import java.io.FileInputStream;
+3   import java.io.IOException;
+4   import java.io.InputStreamReader;
+5   import java.util.Arrays;
+6   import java.util.LinkedList;
+7   import java.util.List;
+8   import java.util.Scanner;
+9   import java.util.StringTokenizer;
+10  public class Solution {
+11  	int[] array;
+12      int[] tempMergArr;
+13      int length;
+14  	public static void main(String[] args) {
+15  		Scanner reader = new Scanner(System.in);  
+16  		int numberOfTests= reader.nextInt();
+17  		int a=0;
+18  		int b=0;
+19  		for(int m=0; m< numberOfTests;m++) { 
+20  			int n  = reader.nextInt();
+21  			if(n%2==1) {
+22  				a=n/2 +1;
+23  				b=n/2;
+24  			}
+25  			else {
+26  				a=n/2;
+27  				b=n/2;
+28  			}
+29  			int[] oddArray = new int[a];
+30  			int[] evenArray = new int[a];
+31  			int c=0;
+32  			int d=0;
+33  			for(int i=0;i<n;i++) {
+34  				if(i%2==0) {
+35  					oddArray[c]=reader.nextInt();
+36  					c++;
+37  				}
+38  				else {
+39  					evenArray[d]=reader.nextInt();
+40  					d++;
+41  				}
+42  			}
+43  			evenArray[evenArray.length-1]=Integer.MAX_VALUE;
+44  			Solution mms = new Solution();
+45  	        mms.sort(oddArray);
+46  	        mms.sort(evenArray);
+47  	        int x=0;
+48  	        for(int h=0;h<oddArray.length;h++) { 
+49  	        	try {
+50  	        		if(oddArray[h]<=evenArray[h]) {
+51  	        			if(h==oddArray.length-1) {
+52  	        				break;
+53  	        			}
+54  	        			if(evenArray[h]<=oddArray[h+1]) {
+55  	        			}
+56  	        			else {
+57  	        				System.out.println("Case #"+(m+1)+": "+(2*h+1));
+58  	        				x++;
+59  	        				break;
+60  	        			}
+61  	        		}
+62  	        		else {
+63  	        			System.out.println("Case #"+(m+1)+": "+2*h);
+64  	        			x++;
+65  	        			break;
+66  	        		}
+67  	        	}
+68  	        	finally {
+69  	        	}
+70  	        }
+71  	        if(x==0) {
+72  	        	System.out.println("Case #"+(m+1)+": OK");
+73  	        }
+74  		}
+75  		reader.close();
+76  	}
+77  	public void sort(int inputArr[]) {
+78          this.array = inputArr;
+79          this.length = inputArr.length;
+80          this.tempMergArr = new int[length];
+81          doMergeSort(0, length - 1);
+82      }
+83      private void doMergeSort(int lowerIndex, int higherIndex) {
+84          if (lowerIndex < higherIndex) {
+85              int middle = lowerIndex + (higherIndex - lowerIndex) / 2;
+86              doMergeSort(lowerIndex, middle);
+87              doMergeSort(middle + 1, higherIndex);
+88              mergeParts(lowerIndex, middle, higherIndex);
+89          }
+90      }
+91      private void mergeParts(int lowerIndex, int middle, int higherIndex) {
+92  		for (int i = lowerIndex; i <= higherIndex; i++) {
+93              tempMergArr[i] = array[i];
+94          }
+95          int i = lowerIndex;
+96          int j = middle + 1;
+97          int k = lowerIndex;
+98          while (i <= middle && j <= higherIndex) {
+99              if (tempMergArr[i] <= tempMergArr[j]) {
+100                  array[k] = tempMergArr[i];
+101                  i++;
+102              } else {
+103                  array[k] = tempMergArr[j];
+104                  j++;
+105              }
+106              k++;
+107          }
+108          while (i <= middle) {
+109              array[k] = tempMergArr[i];
+110              k++;
+111              i++;
+112          }
+113      }
+114  }
+```
+
+
+**Question**: Which variable instances have information flow over `(evenArray,46)` in function `main`? List all such variables.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: information flow
+Primary source owner: main
+Target source anchor: variable=evenArray, line=46
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: main
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for input, output, state update, call, and reference chains.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Information-flow precision rules:
+- Build the bidirectional flow component around the queried instance: close both predecessors that reach it and successors reached from it until neither direction adds a node.
+- Do not include the queried instance merely because it is the query anchor. Include it only when that line defines or updates the variable, such as a read-modify-write operation.
+- A library or input-handle variable used only as a method-call receiver is not itself a data source for the returned value. Include the receiver only when program data stored in that variable is explicitly read by the analyzed operation.
+- After a queried update, inspect every later use and loop-carried update reachable from it; do not stop after predecessor closure.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within the outer for loop over m, allocate a new int array evenArray of length a. RESULT evenArray]
+- [COMMAND Within the outer for loop over m and the inner for loop over i, if i % 2 == 1, read the next integer from reader and store it in evenArray[d]. RESULT evenArray]
+- [COMMAND Within the outer for loop over m, create a new Solution object and assign it to mms. RESULT mms]
+- [COMMAND Within the outer for loop over m, call mms.sort(oddArray) to sort oddArray in place. RESULT oddArray]
+- [COMMAND Within the outer for loop over m, call mms.sort(evenArray) to sort evenArray in place. RESULT evenArray]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 15: Scanner reader = new Scanner(System.in);
+- line 16: int numberOfTests= reader.nextInt();
+- line 17: int a=0;
+- line 18: int b=0;
+- line 19: for(int m=0; m< numberOfTests;m++) {
+- line 20: int n  = reader.nextInt();
+- line 21: if(n%2==1) {
+- line 22: a=n/2 +1;
+- line 23: b=n/2;
+- line 25: else {
+- line 26: a=n/2;
+- line 27: b=n/2;
+- line 29: int[] oddArray = new int[a];
+- line 30: int[] evenArray = new int[a];
+- line 31: int c=0;
+- line 32: int d=0;
+- line 33: for(int i=0;i<n;i++) {
+- line 34: if(i%2==0) {
+- line 35: oddArray[c]=reader.nextInt();
+- line 36: c++;
+- line 38: else {
+- line 39: evenArray[d]=reader.nextInt();
+- line 40: d++;
+- line 43: evenArray[evenArray.length-1]=Integer.MAX_VALUE;
+- line 44: Solution mms = new Solution();
+- line 47: int x=0;
+- line 48: for(int h=0;h<oddArray.length;h++) {
+- line 50: if(oddArray[h]<=evenArray[h]) {
+- line 51: if(h==oddArray.length-1) {
+- line 54: if(evenArray[h]<=oddArray[h+1]) {
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 15, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["Scanner", "System", "in", "new", "reader"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 16, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "nextInt", "numberOfTests", "reader"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 17, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["b", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 19, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "int", "m", "numberOfTests"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "n", "nextInt", "reader"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 21, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["b", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 25, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 26, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 27, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["b", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["a", "int", "new", "oddArray"]}
+- {"definitions": ["evenArray"], "disposition": "inspect_against_official_dependence_definition", "line": 30, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["evenArray"], "roles": ["definition"], "source_identifiers": ["a", "evenArray", "int", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["c", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 32, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["d", "int"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 33, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "int", "n"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["i", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 35, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["c", "nextInt", "oddArray", "reader"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["c"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 38, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": ["evenArray"], "disposition": "inspect_against_official_dependence_definition", "line": 39, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["evenArray"], "roles": ["definition"], "source_identifiers": ["d", "evenArray", "nextInt", "reader"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 40, "position": "before_target", "reason": "definition/control candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["d"]}
+- {"definitions": ["evenArray"], "disposition": "inspect_against_official_dependence_definition", "line": 43, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["evenArray"], "roles": ["definition"], "source_identifiers": ["Integer", "MAX_VALUE", "evenArray", "length"]}
+- {"definitions": ["mms"], "disposition": "inspect_against_official_dependence_definition", "line": 44, "position": "before_target", "reason": "target-chain seed", "relevant_identifiers": ["mms"], "roles": ["definition"], "source_identifiers": ["Solution", "mms", "new"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 47, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["int", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 48, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "h", "int", "length", "oddArray"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["evenArray"], "roles": ["use", "control"], "source_identifiers": ["evenArray", "h", "if", "oddArray"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 51, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["h", "if", "length", "oddArray"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "after_target", "reason": "post-target loop-carried candidate", "relevant_identifiers": ["evenArray"], "roles": ["use", "control"], "source_identifiers": ["evenArray", "h", "if", "oddArray"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `main`
+- source lines: 14-76
+- source signature: `public static void main(String[] args) {`
+- source content hash: `c6bb6dbc3c17fba1536522c2922606d83bb4578122aef0bc41b8a30de86ad9bf`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+  14   public static void main(String[] args) {
+  15    Scanner reader = new Scanner(System.in);  
+  16    int numberOfTests= reader.nextInt();
+  17    int a=0;
+  18    int b=0;
+  19    for(int m=0; m< numberOfTests;m++) { 
+  20     int n  = reader.nextInt();
+  21     if(n%2==1) {
+  22      a=n/2 +1;
+  23      b=n/2;
+  24     }
+  25     else {
+  26      a=n/2;
+  27      b=n/2;
+  28     }
+  29     int[] oddArray = new int[a];
+  30     int[] evenArray = new int[a];
+  31     int c=0;
+  32     int d=0;
+  33     for(int i=0;i<n;i++) {
+  34      if(i%2==0) {
+  35       oddArray[c]=reader.nextInt();
+  36       c++;
+  37      }
+  38      else {
+  39       evenArray[d]=reader.nextInt();
+  40       d++;
+  41      }
+  42     }
+  43     evenArray[evenArray.length-1]=Integer.MAX_VALUE;
+  44     Solution mms = new Solution();
+  45           mms.sort(oddArray);
+  46           mms.sort(evenArray);
+  47           int x=0;
+  48           for(int h=0;h<oddArray.length;h++) { 
+  49            try {
+  50             if(oddArray[h]<=evenArray[h]) {
+  51              if(h==oddArray.length-1) {
+  52               break;
+  53              }
+  54              if(evenArray[h]<=oddArray[h+1]) {
+  55              }
+  56              else {
+  57               System.out.println("Case #"+(m+1)+": "+(2*h+1));
+  58               x++;
+  59               break;
+  60              }
+  61             }
+  62             else {
+  63              System.out.println("Case #"+(m+1)+": "+2*h);
+  64              x++;
+  65              break;
+  66             }
+  67            }
+  68            finally {
+  69            }
+  70           }
+  71           if(x==0) {
+  72            System.out.println("Case #"+(m+1)+": OK");
+  73           }
+  74    }
+  75    reader.close();
+  76   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads a series of test cases; for each, reads n integers, separates the values at zero-based even positions into oddArray and the values at zero-based odd positions into evenArray, overwrites the last element of evenArray with Integer.MAX_VALUE, sorts both arrays using Solution.sort, and scans for the first adjacent ordering violation, printing the violation position or OK." main]
+    [INPUTS]
+        <REF> args </REF>: String[] "Command-line arguments to the main method; not used by the program."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Start executing the public static main method with String[] args. RESULT args]
+            [COMMAND Create a Scanner named reader that reads from System.in. RESULT reader]
+            [COMMAND Read the next integer from reader and assign it to numberOfTests. RESULT numberOfTests]
+            [COMMAND Initialize int variable a to 0. RESULT a]
+            [COMMAND Initialize int variable b to 0. RESULT b]
+            [COMMAND Start the outer for loop by initializing m to 0; continue while m < numberOfTests; increment m by 1 after each iteration. RESULT m]
+            [COMMAND Within the outer for loop over m, read the next integer from reader and assign it to n. RESULT n]
+            [COMMAND Within the outer for loop over m, if n % 2 == 1, set a = n / 2 + 1; otherwise set a = n / 2. RESULT a]
+            [COMMAND Within the outer for loop over m, set b = n / 2; this value is never read afterward. RESULT b]
+            [COMMAND Within the outer for loop over m, allocate a new int array oddArray of length a. RESULT oddArray]
+            [COMMAND Within the outer for loop over m, allocate a new int array evenArray of length a. RESULT evenArray]
+            [COMMAND Within the outer for loop over m, initialize int index c to 0. RESULT c]
+            [COMMAND Within the outer for loop over m, initialize int index d to 0. RESULT d]
+            [COMMAND Within the outer for loop over m, start the input-reading for loop by initializing i to 0; continue while i < n; increment i by 1 after each iteration. RESULT i]
+            [COMMAND Within the outer for loop over m and the inner for loop over i, if i % 2 == 0, read the next integer from reader and store it in oddArray[c]. RESULT oddArray]
+            [COMMAND Within the outer for loop over m and the inner for loop over i, if i % 2 == 0, increment c by 1. RESULT c]
+            [COMMAND Within the outer for loop over m and the inner for loop over i, if i % 2 == 1, read the next integer from reader and store it in evenArray[d]. RESULT evenArray]
+            [COMMAND Within the outer for loop over m and the inner for loop over i, if i % 2 == 1, increment d by 1. RESULT d]
+            [COMMAND Within the outer for loop over m, after the input-reading loop ends, assign Integer.MAX_VALUE to evenArray[evenArray.length - 1]; for even n this overwrites the last real odd-position value, and for odd n it fills the extra trailing slot. RESULT evenArray]
+            [COMMAND Within the outer for loop over m, create a new Solution object and assign it to mms. RESULT mms]
+            [COMMAND Within the outer for loop over m, call mms.sort(oddArray) to sort oddArray in place. RESULT oddArray]
+            [COMMAND Within the outer for loop over m, call mms.sort(evenArray) to sort evenArray in place. RESULT evenArray]
+            [COMMAND Within the outer for loop over m, initialize int failure counter x to 0. RESULT x]
+            [COMMAND Within the outer for loop over m, start the comparison for loop by initializing h to 0; continue while h < oddArray.length; increment h by 1 after each iteration. RESULT h]
+            [COMMAND Within the outer for loop over m and the comparison for loop over h, execute the comparison logic inside a try block; the finally block is empty and does not alter control flow. RESULT none]
+            [COMMAND Within the comparison loop over h, if oddArray[h] <= evenArray[h] and h == oddArray.length - 1, break out of the comparison loop. RESULT h]
+            [COMMAND Within the comparison loop over h, if oddArray[h] <= evenArray[h], h != oddArray.length - 1, and evenArray[h] <= oddArray[h + 1], do nothing and continue to the next iteration. RESULT h]
+            [COMMAND Within the comparison loop over h, if oddArray[h] <= evenArray[h], h != oddArray.length - 1, and evenArray[h] > oddArray[h + 1], print "Case #" + (m + 1) + ": " + (2 * h + 1), increment x by 1, and break out of the comparison loop. RESULT x]
+            [COMMAND Within the comparison loop over h, if oddArray[h] > evenArray[h], print "Case #" + (m + 1) + ": " + (2 * h), increment x by 1, and break out of the comparison loop. RESULT x]
+            [COMMAND Within the outer for loop over m, after the comparison loop ends, if x == 0, print "Case #" + (m + 1) + ": OK". RESULT x]
+            [COMMAND After the outer for loop over m finishes, close the Scanner reader. RESULT reader]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

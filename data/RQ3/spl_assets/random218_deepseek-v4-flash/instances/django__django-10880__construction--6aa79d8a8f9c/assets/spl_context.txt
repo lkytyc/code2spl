@@ -1,0 +1,400 @@
+# FILE: django/db/models/aggregates.py
+# CLASS Aggregate
+
+[DEFINE_WORKER: "Initializes the object by validating the distinct flag against self.allow_distinct, storing distinct and filter on the instance, and forwarding the remaining expressions and extra keyword arguments to the superclass initializer." __init__]
+    [INPUTS]
+        <REF> expressions </REF>: tuple "Positional expressions collected by *expressions and forwarded unchanged to the superclass initializer."
+        <REF> distinct </REF>: bool "Keyword-only flag requesting distinct behavior; defaults to False and may be rejected when the instance does not allow distinct."
+        <REF> filter </REF>: object "Keyword-only filter value stored on self.filter; defaults to None and is not forwarded to the superclass initializer."
+        <REF> extra </REF>: dict "Additional keyword arguments collected by **extra and forwarded unchanged to the superclass initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the short-circuit condition: if distinct is truthy and self.allow_distinct is false, enter the TypeError exception flow; otherwise continue with the normal initialization steps. RESULT validation_result]
+            [COMMAND Assign the distinct argument to the instance attribute self.distinct. RESULT self.distinct]
+            [COMMAND Assign the filter argument to the instance attribute self.filter. RESULT self.filter]
+            [COMMAND Call super().__init__(*expressions, **extra) to continue initialization with the collected positional expressions and extra keyword arguments. RESULT super_init_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: distinct is truthy and self.allow_distinct is false]
+        [LOG "Raises TypeError with message '<ClassName> does not allow distinct.', where <ClassName> is self.__class__.__name__."]
+        [THROW TypeError "The current subclass does not permit distinct queries, so initialization aborts before assigning self.distinct or self.filter."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the output fields for the source expressions by reading _output_field_or_none from each expression obtained from the parent implementation, so the filter expression is not returned as a source field." get_source_fields]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance used to resolve the parent class via super() and call the parent get_source_expressions() implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of _output_field_or_none values from each source expression returned by super().get_source_expressions(). Empty when there are no source expressions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the parent class of the current instance via super(). RESULT parent_type]
+            [COMMAND Call get_source_expressions() on the resolved parent to obtain an iterable of source-expression objects. RESULT source_expressions]
+            [COMMAND Within a list comprehension over source_expressions, bind each element to e and read its _output_field_or_none attribute. RESULT output_field_value]
+            [COMMAND Build a list of the output_field_value entries, preserving their iteration order and preserving any None values. RESULT source_fields]
+            [COMMAND Return the constructed source_fields list as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves the list of source expressions from the parent implementation and, when a filter is set, returns that list with the filter appended." get_source_expressions]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of source expressions, either the parent list alone or the parent list with self.filter appended."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().get_source_expressions() and assign the returned list to source_expressions. RESULT source_expressions]
+            [COMMAND Evaluate whether self.filter is truthy; if it is, use the alternative flow to return the extended list; otherwise continue to the final return. RESULT filter_is_truthy]
+            [COMMAND Return source_expressions unchanged because self.filter is falsy. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.filter is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a new list created by appending self.filter to the end of source_expressions. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Conditionally assigns the last element of exprs to self.filter when the current self.filter is truthy, otherwise preserves the falsey filter without consuming exprs, then delegates to super().set_source_expressions(exprs) and returns its result." set_source_expressions]
+    [INPUTS]
+        <REF> exprs </REF>: list "List of expressions whose last element is conditionally popped and assigned to self.filter; the possibly modified list is then passed to the superclass method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "Return value of super().set_source_expressions(exprs)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current value of self.filter into current_filter and evaluate its truthiness. RESULT current_filter]
+            [COMMAND If current_filter is truthy, pop the last element from exprs and assign the popped value to self.filter. RESULT self.filter]
+            [COMMAND Call super().set_source_expressions(exprs) with the resulting exprs and return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: current_filter is falsey, so the short-circuit prevents exprs.pop() from being evaluated]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the old falsey current_filter value back to self.filter, leaving exprs unmodified. RESULT self.filter]
+            [COMMAND Call super().set_source_expressions(exprs) with the unmodified exprs and return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: current_filter is truthy and exprs is empty, causing exprs.pop() to raise IndexError]
+        [LOG "Attempted to pop the last element from an empty exprs while setting self.filter."]
+        [THROW IndexError "exprs.pop() raises IndexError when called on an empty list."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the aggregate expression against a query, resolves the existing filter using short-circuit semantics, and, unless summarize mode is active, validates that no source expression contains a nested aggregate before returning the resolved expression." resolve_expression]
+    [INPUTS]
+        <REF> query </REF>: optional query object "The query context used for expression resolution."
+        <REF> allow_joins </REF>: bool "Whether joins are allowed during expression resolution."
+        <REF> reuse </REF>: optional reusable query object "A reusable query/join state that may be shared during resolution, or None."
+        <REF> summarize </REF>: bool "When false, skip the aggregate-source validation block; when true, perform that validation."
+        <REF> for_save </REF>: bool "Ignored by this override because aggregates are not allowed in UPDATE queries."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> c </REF>: Expression object "The resolved aggregate expression, with its filter resolved when the old filter was truthy and with aggregate-source validation completed unless summarize was true."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().resolve_expression(query, allow_joins, reuse, summarize) and assign the returned expression to c. RESULT c]
+            [COMMAND Resolve c.filter using the short-circuit expression c.filter and c.filter.resolve_expression(query, allow_joins, reuse, summarize); if c.filter is falsy, keep the original value and do not call resolve_expression, otherwise assign the resolved filter back to c.filter. RESULT c.filter]
+            [COMMAND If summarize is falsey, call super(Aggregate, c).get_source_expressions() instead of self.get_source_expressions() to avoid including self.filter in the source-expression loop, and assign the result to expressions. RESULT expressions]
+            [COMMAND For each index, expr in enumerate(expressions), check whether expr.contains_aggregate is true. RESULT aggregate_detected]
+            [COMMAND When expr.contains_aggregate is true, retrieve before_resolved = self.get_source_expressions()[index], set name to before_resolved.name if before_resolved has a name attribute else repr(before_resolved), and trigger the FieldError exception path with the formatted aggregate message. RESULT exception]
+            [COMMAND After the conditional validation block completes normally, return c as the result of resolve_expression. RESULT c]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: summarize is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the aggregate-source validation block entirely and return c. RESULT c]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: During the aggregate-source validation block, when summarize is falsey and an expression in expressions has expr.contains_aggregate true.]
+        [LOG "Cannot compute <c.name>('<name>'): '<name>' is an aggregate"]
+        [THROW FieldError "Raised to indicate that an aggregate expression cannot be computed because one of its source expressions is itself an aggregate."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates an alias by joining the name of a single named source expression with the lowercased object name, or raises TypeError for complex expressions." default_alias]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> alias </REF>: string "The generated alias in the format '<source_expression_name>__<object_name_lowercased>'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_source_expressions() and assign the returned value to expressions. RESULT expressions]
+            [COMMAND Evaluate whether expressions has exactly one element and, using short-circuit evaluation, whether that element has an attribute named name. RESULT has_single_named_expression]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: expressions has exactly one element and that element has a name attribute.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string formed by expressions[0].name, two underscore characters, and self.name.lower(). RESULT alias]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: The if condition is false: it is not the case that expressions has exactly one element and that element has a name attribute.]
+        [LOG "Complex expressions require an alias"]
+        [THROW TypeError "Raised because an alias cannot be generated when there is not exactly one named source expression."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an empty list of group-by columns, indicating that no grouping is applied." get_group_by_cols]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list of group-by columns."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT []]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders the SQL for an aggregate, injecting the DISTINCT keyword when self.distinct is truthy, and either uses a native FILTER clause or rewrites the aggregate with a CASE WHEN expression when a filter is present." as_sql]
+    [INPUTS]
+        <REF> self </REF>: Aggregate "The aggregate instance whose SQL representation is being generated."
+        <REF> compiler </REF>: SQLCompiler "The Django SQL compiler used to render SQL expressions."
+        <REF> connection </REF>: DatabaseConnection "The database connection whose backend features determine filter support."
+        <REF> extra_context </REF>: dict "Extra keyword context passed into the SQL template, including an optional 'template' override."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple (sql, params) where sql is the rendered SQL string and params is the list of SQL query parameters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set extra_context['distinct'] to 'DISTINCT' if self.distinct is truthy, otherwise set it to an empty string. RESULT extra_context]
+            [COMMAND If self.filter is falsy, call super().as_sql(compiler, connection, **extra_context) and return its (sql, params) result directly. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.filter is truthy and connection.features.supports_aggregate_filter_clause is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.filter.as_sql(compiler, connection) and assign the resulting SQL text and parameters to filter_sql and filter_params. RESULT filter_sql, filter_params]
+            [COMMAND Set template to self.filter_template % extra_context.get('template', self.template), using the explicit template from extra_context if present, otherwise self.template. RESULT template]
+            [COMMAND Call super().as_sql(compiler, connection, template=template, filter=filter_sql, **extra_context) and assign the result to sql and params. RESULT sql, params]
+            [COMMAND Return the tuple (sql, params + filter_params). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.filter is truthy and connection.features.supports_aggregate_filter_clause is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a copy of self using self.copy() and assign it to copy. RESULT copy]
+            [COMMAND Set copy.filter to None. RESULT copy]
+            [COMMAND Get the copied aggregate's source expressions using copy.get_source_expressions() and assign them to source_expressions. RESULT source_expressions]
+            [COMMAND Build condition = When(self.filter, then=source_expressions[0]). RESULT condition]
+            [COMMAND Replace the copied aggregate's source expressions with [Case(condition)] + source_expressions[1:] using copy.set_source_expressions(...). RESULT copy]
+            [COMMAND Call super(Aggregate, copy).as_sql(compiler, connection, **extra_context) and return its (sql, params) result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the representation options by starting with the superclass options and conditionally adding the distinct and filter values from the current instance." _get_repr_options]
+    [INPUTS]
+        <REF> self </REF>: object "Instance whose distinct and filter attributes are used to augment the representation options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> options </REF>: object "The options object returned by the superclass method, with the distinct and filter keys conditionally added."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super()._get_repr_options() and assign the returned object to the local variable options. RESULT options]
+            [COMMAND If self.distinct is truthy, assign self.distinct to options['distinct']. RESULT options]
+            [COMMAND If self.filter is truthy, assign self.filter to options['filter']. RESULT options]
+            [COMMAND Return the local variable options. RESULT options]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Avg
+
+# CLASS Count
+
+[DEFINE_WORKER: "Initializes the expression object by converting the literal '*' into a Star, rejecting a Star when a filter is supplied, and forwarding all arguments to the parent initializer." __init__]
+    [INPUTS]
+        <REF> self </REF>: object instance "The object instance being initialized."
+        <REF> expression </REF>: object or string "The expression to initialize; if it is exactly the string '*', it is replaced with a new Star instance."
+        <REF> filter </REF>: object or None "Optional filter value forwarded to the parent initializer; must be None when expression is a Star."
+        <REF> extra </REF>: mapping "Additional keyword arguments unpacked and forwarded to the parent initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Begin initialization with the provided expression, filter, and extra keyword arguments. RESULT self]
+            [COMMAND If expression is equal to the string literal '*', replace expression with a new Star() instance; otherwise keep expression unchanged. RESULT expression]
+            [COMMAND If expression is an instance of Star and filter is not None, raise ValueError; otherwise continue. RESULT validation_result]
+            [COMMAND Call super().__init__(expression, filter=filter, **extra) to forward the normalized expression, filter, and extra keyword arguments to the parent initializer. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: expression is an instance of Star and filter is not None]
+        [LOG "Star cannot be used with filter. Please specify a field."]
+        [THROW ValueError "Raised to reject the invalid combination of a Star expression and a non-None filter."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns 0 if the value parameter is None, otherwise returns the value parameter unchanged." convert_value]
+    [INPUTS]
+        <REF> value </REF>: any "The input value to convert; may be None."
+        <REF> expression </REF>: any "Unused expression parameter required by the method signature."
+        <REF> connection </REF>: any "Unused connection parameter required by the method signature."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: any "The value returned by the method: 0 if value is None, otherwise the original value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept the method parameters value, expression, and connection. RESULT parameters]
+            [COMMAND Read the value parameter from the accepted parameters. RESULT value]
+            [COMMAND Determine whether value is None using the identity comparison. RESULT is_none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_none is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set the converted result to the integer constant 0. RESULT converted_result]
+            [COMMAND Return the converted result from the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: is_none is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set the converted result to the original value. RESULT converted_result]
+            [COMMAND Return the converted result from the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS Max
+
+# CLASS Min
+
+# CLASS StdDev
+
+[DEFINE_WORKER: "Initializes the SQL function expression by selecting STDDEV_SAMP when sample is true, otherwise STDDEV_POP, and forwards the expression and extra keyword arguments to the parent initializer." __init__]
+    [INPUTS]
+        <REF> expression </REF>: Any "The expression to be passed to the parent initializer."
+        <REF> sample </REF>: bool "If truthy, selects STDDEV_SAMP; if falsy, selects STDDEV_POP. Defaults to false."
+        <REF> extra </REF>: dict "Additional keyword arguments forwarded to the parent initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If sample is truthy, set self.function to 'STDDEV_SAMP'; otherwise set self.function to 'STDDEV_POP'. RESULT self.function]
+            [COMMAND Call the parent initializer with expression as the positional argument and the collected extra keyword arguments. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a copy of the superclass representation options augmented with a boolean 'sample' key that is True when self.function is 'STDDEV_SAMP'." _get_repr_options]
+    [INPUTS]
+        <REF> self </REF>: object "Current instance providing the function attribute and access to the superclass implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> repr_options </REF>: dict "Dictionary containing the superclass representation options plus the computed 'sample' boolean flag."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super()._get_repr_options() and store the returned base dictionary as base_options. RESULT base_options]
+            [COMMAND Evaluate whether self.function equals the string 'STDDEV_SAMP' and store the resulting boolean as is_sample. RESULT is_sample]
+            [COMMAND Construct repr_options as a new dictionary merging base_options and setting the key 'sample' to is_sample, overriding any existing 'sample' key from base_options. RESULT repr_options]
+            [COMMAND Return repr_options. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Sum
+
+# CLASS Variance
+
+[DEFINE_WORKER: "Initializes a variance aggregate object by choosing the sample or population variance function name based on the sample flag, then forwards initialization to the parent class." __init__]
+    [INPUTS]
+        <REF> expression </REF>: any "The expression to be passed to the parent initializer."
+        <REF> sample </REF>: bool "If truthy, selects 'VAR_SAMP'; if falsy, selects 'VAR_POP'. Defaults to False."
+        <REF> extra </REF>: dict "Additional keyword arguments forwarded to the parent initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign to self.function the string 'VAR_SAMP' if sample is truthy, otherwise assign the string 'VAR_POP'. RESULT self.function]
+            [COMMAND Call super().__init__ with expression as the first argument and extra as keyword arguments. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds representation options by merging the superclass options with a 'sample' flag that is True only when self.function equals 'VAR_SAMP'." _get_repr_options]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance; provides self.function and access to super()._get_repr_options()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "A dictionary containing the superclass representation options plus a boolean 'sample' entry indicating whether self.function equals 'VAR_SAMP'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super()._get_repr_options() to retrieve the superclass representation options mapping. RESULT super_options]
+            [COMMAND Evaluate self.function == 'VAR_SAMP' to compute the boolean sample flag; it is True only when self.function equals 'VAR_SAMP'. RESULT is_sample]
+            [COMMAND Create the final dictionary by unpacking super_options and adding 'sample': is_sample, overriding any existing 'sample' key, then return it. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

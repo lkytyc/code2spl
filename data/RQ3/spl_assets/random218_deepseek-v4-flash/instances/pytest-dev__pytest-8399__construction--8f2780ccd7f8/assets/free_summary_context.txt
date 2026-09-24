@@ -1,0 +1,27 @@
+# FILE: src/_pytest/python.py
+This code implements pytest's Python test discovery and execution support. It defines how pytest finds Python test modules, classes, functions, and parametrized tests; how those tests are represented and executed; and how fixtures and xunit-style setup/teardown methods are integrated.
+
+At the entrypoint, it registers command-line options and ini-file settings controlling test discovery (`python_files`, `python_classes`, `python_functions`), as well as options to display available fixtures or per-test fixtures. It also registers the `parametrize` and `usefixtures` marker documentation.
+
+The module provides several pytest hooks. `pytest_collect_file` decides whether a `.py` file should be collected as a test module, matching configured file patterns or treating explicit paths and `__init__.py` as collectable. `pytest_pycollect_makemodule` creates a `Module` or `Package` collector. `pytest_pycollect_makeitem` turns Python attributes (classes, functions) found during collection into `Class`, `Function`, or warning-bearing items. `pytest_generate_tests` applies all `@parametrize` markers to the `Metafunc` object. `pytest_pyfunc_call` executes each test function with the resolved fixture arguments, skipping async functions with a warning when no async plugin is installed.
+
+The central collection hierarchy is implemented with classes: `Module`, `Package`, `Class`, `Instance`, and `Function`, all built on a mixin that provides access to the underlying Python object and node metadata. `PyCollector` handles general collection logic: it walks an object’s dictionary and MRO, filters candidate names by configured prefixes or glob patterns, detects test classes/functions, and sorts collected items by source location. For each test function it builds a `FunctionDefinition` and a `Metafunc`, calls any `pytest_generate_tests` hooks defined in the module/class, and produces either a normal `Function` item or parametrized `Function` items with generated IDs.
+
+`Metafunc.parametrize` is the core parametrization API. It validates argument names, resolves indirect versus direct arguments, determines parameter scope, generates IDs, and builds a Cartesian product of `CallSpec2` objects that store per-invocation function arguments, parameter values, marks, and IDs. Helper functions generate safe, unique test IDs, optionally customizing them via a user-supplied id function or a `pytest_make_parametrize_id` hook, and handle escaping of non-ASCII characters.
+
+The module also integrates classic xunit conventions by injecting hidden autouse fixtures for module-level, class-level, function-level, and method-level setup/teardown functions (e.g., `setup_module`, `teardown_class`, `setup_method`), so those functions are called at the appropriate scope and cooperate with pytest’s fixture system.
+
+Finally, the `Function` item is responsible for running a test: it resolves the fixture request, fills fixture values, executes the test callable through the `pytest_pyfunc_call` hook, and prunes tracebacks for more readable failure reports. Command-line helpers for showing fixture information collect all items and print fixture locations and docs.
+
+Overall, this code defines pytest’s Python-language plugin model: from file selection and object inspection through parameterization to test execution and fixture integration.
+
+# FILE: src/_pytest/unittest.py
+This code is a pytest plugin that discovers and runs standard-library `unittest` test cases as pytest tests.
+
+During collection, it intercepts class definitions: if a class is a subclass of `unittest.TestCase`, it creates a special `UnitTestCase` collector instead of treating it as a normal pytest class. That collector uses `unittest.TestLoader` to find test method names, and yields one `TestCaseFunction` item per test method. It skips classes marked with `@unittest.skip` or with `__test__ = False`, and it supports classes without named test methods by falling back to `runTest` if present.
+
+The plugin injects hidden automatic fixtures that bridge `unittest` setup/teardown lifecycle methods into pytest fixtures. These fixtures wrap `setUpClass`/`tearDownClass`/`doClassCleanups` at class scope, and `setup_method`/`teardown_method` at function scope. They handle cleanup calls, respect unittest skip markers, and ensure teardown/cleanup happens appropriately.
+
+Each `TestCaseFunction` represents one unittest test method. During setup, it instantiates the test case class and binds the actual test method. During run, it invokes the test case as a unittest test, with the pytest item acting as the `TestResult` object. It implements the unittest result callback interface: success, failure, error, skip, expected failure, and unexpected success are translated into pytest outcomes. Async test methods are left for unittest’s own handling. When `--pdb` is active, teardown is postponed so instance state remains available for debugging.
+
+Additional pytest hooks reconcile results with unittest expectations: collected exception details are moved into the pytest report, and `unittest.SkipTest` exceptions are converted to pytest skips. There is also special handling for Twisted Trial: the plugin makes `TestCaseFunction` implement Twisted’s trial reporter interface and monkeypatches Twisted failure objects so their exception information can be processed correctly by pytest.

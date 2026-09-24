@@ -1,0 +1,23 @@
+
+
+import unittest
+
+class CombinationCalculatorTestCountAll(unittest.TestCase):
+    def test_count_all(self):
+        self.assertEqual(CombinationCalculator.count_all(4), 15)
+
+    def test_count_all_2(self):
+        self.assertEqual(CombinationCalculator.count_all(-1), False)
+
+    def test_count_all_3(self):
+        self.assertEqual(CombinationCalculator.count_all(65), False)
+
+    def test_count_all_4(self):
+        self.assertEqual(CombinationCalculator.count_all(0), 0)
+
+    def test_count_all_5(self):
+        self.assertEqual(CombinationCalculator.count_all(63), float("inf"))
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

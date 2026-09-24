@@ -1,0 +1,320 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.*;
+2   import java.util.*;
+3   public class Solution{
+4       StringBuilder sb = new StringBuilder();
+5       int off = -1000000000;
+6       public static void main(String[] args) {
+7           MyScanner sc = new MyScanner();
+8           out = new PrintWriter(new BufferedOutputStream(System.out));
+9           long MOD = 1000000007;
+10          int t = sc.nextInt();
+11          int tt = 0;
+12          Solution sol = new Solution();
+13          while(tt++ < t)
+14          {
+15              out.print("Case #" + tt + ": ");
+16              int C = sc.nextInt(), D = sc.nextInt();
+17              HashMap <Integer, ArrayList<Integer>> map = new HashMap<>();
+18              int order[] = new int[C + 1];
+19              int time[] = new int[C + 1];
+20              int [][] edges = new int[D][2];
+21              int [] res = new int[D];
+22              for(int i = 2; i <= C; i++) {
+23                  order[i] = -sc.nextInt();
+24                  if(map.get(order[i]) == null)
+25                      map.put(order[i], new ArrayList());
+26                  map.get(order[i]).add(i);
+27              }
+28              for(int i = 0; i < D; i++)
+29              {
+30                  int u = sc.nextInt();
+31                  int v = sc.nextInt();
+32                  res[i] = Math.max(1, Math.abs(order[u] - order[v]));
+33                  out.print(res[i] + " ");
+34              }
+35              out.println();
+36          }
+37          out.close();
+38      }
+39      public int solve(MyScanner sc){
+40          int res = 0;
+41          return res;
+42      }
+43      public static PrintWriter out;
+44      public static class MyScanner {
+45          BufferedReader br;
+46          StringTokenizer st;
+47          public MyScanner() {
+48              br = new BufferedReader(new InputStreamReader(System.in));
+49          }
+50          String next() {
+51              while (st == null || !st.hasMoreElements()) {
+52                  try {
+53                      st = new StringTokenizer(br.readLine());
+54                  } catch (IOException e) {
+55                      e.printStackTrace();
+56                  }
+57              }
+58              return st.nextToken();
+59          }
+60          int nextInt() {
+61              return Integer.parseInt(next());
+62          }
+63          long nextLong() {
+64              return Long.parseLong(next());
+65          }
+66          double nextDouble() {
+67              return Double.parseDouble(next());
+68          }
+69          String nextLine(){
+70              String str = "";
+71              try {
+72                  str = br.readLine();
+73              } catch (IOException e) {
+74                  e.printStackTrace();
+75              }
+76              return str;
+77          }
+78      }
+79  }
+```
+
+
+**Question**: Does `(order,18)` have data dependence over `(tt,13)` in function `main`? If so, provide a trace.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function main: Reads a number of test cases; for each case, reads C and D and the order values to build a negated order array and a map, then reads D edges and prints 'Case #x:' followed by max(1, abs(order[u] - order[v])) for each edge.
+It takes args (String[]) — Command-line arguments; not used by this method.
+The behaviour proceeds in this order:
+1. Initialize the top-level state: create a MyScanner instance sc, create a PrintWriter out wrapping a BufferedOutputStream around System.out, set long MOD = 1000000007, read t = sc.nextInt(), set tt = 0, and create a Solution instance sol. This produces top_level_state.
+2. Enter the outer while loop with post-increment condition tt++ < t: the condition compares the old value of tt with t and always increments tt as a side effect; because tt starts at 0, the body runs once for each integer case number 1 through t when t > 0, and after the last body evaluation tt becomes t + 1; for each body iteration print "Case #" + tt + ": ", read C = sc.nextInt() and D = sc.nextInt(), create a HashMap map, and allocate int arrays order of size C+1, time of size C+1, edges of size D by 2, and res of size D. This produces test_case_context.
+3. Within the test-case loop, for each i from 2 to C inclusive (so zero iterations when C < 2), read an int from sc, assign order[i] = -nextInt(), and if map.get(order[i]) is null put a new ArrayList under that key; then unconditionally add i to map.get(order[i]). This produces order_and_map.
+4. Within the test-case loop after order and map are built, for each i from 0 to D-1 inclusive (so zero iterations when D = 0), read u = sc.nextInt() and v = sc.nextInt(), compute res[i] = max(1, abs(order[u] - order[v])), and print res[i] followed by a space. This produces res_printed.
+5. Within the test-case loop after all D edges are processed, print a newline using out.println(). This produces newline_printed.
+6. After the while loop exits, close the PrintWriter out by calling out.close(). This produces out_closed.

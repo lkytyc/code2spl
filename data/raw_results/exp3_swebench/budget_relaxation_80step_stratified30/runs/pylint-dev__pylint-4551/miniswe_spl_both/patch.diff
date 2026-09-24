@@ -1,0 +1,75 @@
+diff --git a/pylint/pyreverse/inspector.py b/pylint/pyreverse/inspector.py
+index 8fa12202..c8fdb318 100644
+--- a/pylint/pyreverse/inspector.py
++++ b/pylint/pyreverse/inspector.py
+@@ -60,6 +60,47 @@ def interfaces(node, herited=True, handler_func=_iface_hdlr):
+         raise astroid.exceptions.InferenceError()
+ 
+ 
++
++
++def _get_annotation(node):
++    """Return the annotation node associated with an AssignName or AssignAttr.
++
++    Handles AnnAssign targets as well as function arguments (including
++    vararg/kwarg and Python 3-only positional-only arguments).
++    """
++    parent = node.parent
++    if isinstance(parent, astroid.AnnAssign) and parent.target is node:
++        return parent.annotation
++    if isinstance(parent, astroid.Arguments):
++        if parent.vararg is node:
++            return parent.varargannotation
++        if parent.kwarg is node:
++            return parent.kwargannotation
++        if node in parent.args:
++            index = parent.args.index(node)
++            if index < len(parent.annotations):
++                return parent.annotations[index]
++        elif node in parent.posonlyargs:
++            index = parent.posonlyargs.index(node)
++            if index < len(parent.posonlyargs_annotations):
++                return parent.posonlyargs_annotations[index]
++        elif node in parent.kwonlyargs:
++            index = parent.kwonlyargs.index(node)
++            if index < len(parent.kwonlyargs_annotations):
++                return parent.kwonlyargs_annotations[index]
++    return None
++
++
++def _get_inferred_annotations(node):
++    """Return values inferred from a node's type annotation, if any."""
++    annotation = _get_annotation(node)
++    if annotation is None:
++        return set()
++    try:
++        return set(annotation.infer())
++    except astroid.InferenceError:
++        return set()
++
+ class IdGeneratorMixIn:
+     """Mixin adding the ability to generate integer uid."""
+ 
+@@ -219,6 +260,7 @@ class Linker(IdGeneratorMixIn, utils.LocalsVisitor):
+ 
+             current = frame.locals_type[node.name]
+             values = set(node.infer())
++            values.update(_get_inferred_annotations(node))
+             frame.locals_type[node.name] = list(set(current) | values)
+         except astroid.InferenceError:
+             pass
+@@ -231,6 +273,14 @@ class Linker(IdGeneratorMixIn, utils.LocalsVisitor):
+         """
+         try:
+             values = set(node.infer())
++            values.update(_get_inferred_annotations(node))
++            if (
++                isinstance(node.parent, astroid.Assign)
++                and isinstance(node.parent.value, astroid.Name)
++            ):
++                _, stmts = node.parent.value.lookup(node.parent.value.name)
++                if stmts:
++                    values.update(_get_inferred_annotations(stmts[0]))
+             current = set(parent.instance_attrs_type[node.attrname])
+             parent.instance_attrs_type[node.attrname] = list(current | values)
+         except astroid.InferenceError:

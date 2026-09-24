@@ -1,0 +1,90 @@
+class StockPortfolioTracker:
+    def __init__(self, cash_balance):
+        self.portfolio = []
+        self.cash_balance = cash_balance
+
+    def add_stock(self, stock):
+        for existing_stock in self.portfolio:
+            if existing_stock.get("name") == stock.get("name"):
+                existing_stock["quantity"] += stock.get("quantity", 0)
+                return
+        self.portfolio.append(stock.copy())
+
+    def remove_stock(self, stock):
+        for existing_stock in self.portfolio:
+            if existing_stock.get("name") == stock.get("name"):
+                quantity_to_remove = stock.get("quantity", 0)
+                if existing_stock.get("quantity", 0) < quantity_to_remove:
+                    return False
+                existing_stock["quantity"] -= quantity_to_remove
+                if existing_stock["quantity"] == 0:
+                    self.portfolio.remove(existing_stock)
+                return True
+        return False
+
+    def buy_stock(self, stock):
+        cost = stock.get("price", 0) * stock.get("quantity", 0)
+        if self.cash_balance < cost:
+            return False
+        self.add_stock(stock)
+        self.cash_balance -= cost
+        return True
+
+    def sell_stock(self, stock):
+        if not self.remove_stock(stock):
+            return False
+        proceeds = stock.get("price", 0) * stock.get("quantity", 0)
+        self.cash_balance += proceeds
+        return True
+
+    def get_stock_value(self, stock):
+        return stock.get("price", 0) * stock.get("quantity", 0)
+
+    def calculate_portfolio_value(self):
+        return self.cash_balance + sum(self.get_stock_value(stock) for stock in self.portfolio)
+
+    def get_portfolio_summary(self):
+        summary = [{"name": stock.get("name"), "value": self.get_stock_value(stock)} for stock in self.portfolio]
+        return self.calculate_portfolio_value(), summary
+
+import unittest
+
+class StockPortfolioTrackerTestAddStock(unittest.TestCase):
+    def test_add_stock(self):
+        tracker = StockPortfolioTracker(10000.0)
+        tracker.add_stock({"name": "AAPL", "price": 150.0, "quantity": 10})
+        self.assertEqual(tracker.portfolio, [{'name': 'AAPL', 'price': 150.0, 'quantity': 10}])
+
+    def test_add_stock_2(self):
+        tracker = StockPortfolioTracker(10000.0)
+        tracker.portfolio = [{'name': 'AAPL', 'price': 150.0, 'quantity': 10}]
+        tracker.add_stock({"name": "AAPL", "price": 150.0, "quantity": 10})
+        self.assertEqual(tracker.portfolio, [{'name': 'AAPL', 'price': 150.0, 'quantity': 20}])
+
+    def test_add_stock_3(self):
+        tracker = StockPortfolioTracker(10000.0)
+        tracker.portfolio = [{'name': 'AAPL', 'price': 150.0, 'quantity': 10}]
+        tracker.add_stock({"name": "MSFT", "price": 150.0, "quantity": 10})
+        self.assertEqual(tracker.portfolio, [{'name': 'AAPL', 'price': 150.0, 'quantity': 10},
+                                             {'name': 'MSFT', 'price': 150.0, 'quantity': 10}])
+
+    def test_add_stock_4(self):
+        tracker = StockPortfolioTracker(10000.0)
+        tracker.portfolio = [{'name': 'AAPL', 'price': 150.0, 'quantity': 10}]
+        tracker.add_stock({"name": "AAPL", "price": 150.0, "quantity": 10})
+        tracker.add_stock({"name": "MSFT", "price": 150.0, "quantity": 10})
+        self.assertEqual(tracker.portfolio, [{'name': 'AAPL', 'price': 150.0, 'quantity': 20},
+                                             {'name': 'MSFT', 'price': 150.0, 'quantity': 10}])
+
+    def test_add_stock_5(self):
+        tracker = StockPortfolioTracker(10000.0)
+        tracker.portfolio = [{'name': 'AAPL', 'price': 150.0, 'quantity': 10}]
+        tracker.add_stock({"name": "AAPL", "price": 150.0, "quantity": 10})
+        tracker.add_stock({"name": "MSFT", "price": 150.0, "quantity": 10})
+        tracker.add_stock({"name": "MSFT", "price": 150.0, "quantity": 10})
+        self.assertEqual(tracker.portfolio, [{'name': 'AAPL', 'price': 150.0, 'quantity': 20},
+                                             {'name': 'MSFT', 'price': 150.0, 'quantity': 20}])
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

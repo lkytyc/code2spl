@@ -1,0 +1,133 @@
+from datetime import datetime
+
+class Classroom:
+    """
+    This is a class representing a classroom, capable of adding and removing courses, checking availability at a given time, and detecting conflicts when scheduling new courses.
+    """
+
+    def __init__(self, id):
+        """
+        Initialize the classroom management system.
+        :param id: int, the id of classroom
+        """
+        self.id = id
+        self.courses = []
+
+    def add_course(self, course):
+        """
+        Add course to self.courses list if the course wasn't in it.
+        :param course: dict, information of the course, including 'start_time', 'end_time' and 'name'
+        >>> classroom = Classroom(1)
+        >>> classroom.add_course({'name': 'math', 'start_time': '8:00', 'end_time': '9:40'})
+        """
+        if course not in self.courses:
+            self.courses.append(course)
+
+    def remove_course(self, course):
+        """
+        Remove course from self.courses list if the course was in it.
+        :param course: dict, information of the course, including 'start_time', 'end_time' and 'name'
+        >>> classroom = Classroom(1)
+        >>> classroom.add_course({'name': 'math', 'start_time': '8:00', 'end_time': '9:40'})
+        >>> classroom.add_course({'name': 'math', 'start_time': '8:00', 'end_time': '9:40'})
+        """
+        if course in self.courses:
+            self.courses.remove(course)
+
+    def is_free_at(self, check_time):
+        """
+        change the time format as '%H:%M' and check the time is free or not in the classroom.
+        :param check_time: str, the time need to be checked
+        :return: True if the check_time does not conflict with every course time, or False otherwise.
+        >>> classroom = Classroom(1)
+        >>> classroom.add_course({'name': 'math', 'start_time': '8:00', 'end_time': '9:40'})
+        >>> classroom.is_free_at('10:00')
+        True
+        >>> classroom.is_free_at('9:00')
+        False
+        """
+        check_dt = datetime.strptime(check_time, '%H:%M')
+        for course in self.courses:
+            start_dt = datetime.strptime(course['start_time'], '%H:%M')
+            end_dt = datetime.strptime(course['end_time'], '%H:%M')
+            if start_dt <= check_dt < end_dt:
+                return False
+        return True
+
+    def check_course_conflict(self, new_course):
+        """
+        Before adding a new course, check if the new course time conflicts with any other course.
+        :param new_course: dict, information of the course, including 'start_time', 'end_time' and 'name'
+        :return: False if the new course time conflicts(including two courses have the same boundary time) with other courses, or True otherwise.
+        >>> classroom = Classroom(1)
+        >>> classroom.add_course({'name': 'math', 'start_time': '8:00', 'end_time': '9:40'})
+        >>> classroom.check_course_conflict({'name': 'SE', 'start_time': '9:40', 'end_time': '10:40'})
+        False
+        """
+        new_start = datetime.strptime(new_course['start_time'], '%H:%M')
+        new_end = datetime.strptime(new_course['end_time'], '%H:%M')
+
+        for course in self.courses:
+            start = datetime.strptime(course['start_time'], '%H:%M')
+            end = datetime.strptime(course['end_time'], '%H:%M')
+            if not (new_end < start or new_start > end):
+                return False
+        return True
+
+import unittest
+from datetime import datetime
+
+class ClassroomTestCheckCourseConflict(unittest.TestCase):
+    def test_check_course_conflict_1(self):
+        classroom = Classroom(1)
+        existing_course = {'name': 'math', 'start_time': '09:00', 'end_time': '10:00'}
+        classroom.add_course(existing_course)
+        new_course = {'name': 'SE', 'start_time': '10:30', 'end_time': '11:30'}
+        result = classroom.check_course_conflict(new_course)
+        self.assertTrue(result)
+
+    def test_check_course_conflict_2(self):
+        classroom = Classroom(1)
+        existing_course = {'name': 'math', 'start_time': '09:00', 'end_time': '10:00'}
+        classroom.add_course(existing_course)
+        new_course = {'name': 'SE', 'start_time': '09:30', 'end_time': '10:30'}
+        result = classroom.check_course_conflict(new_course)
+        self.assertFalse(result)
+
+    # have the same boundary time
+    # existing_course['end_time'] == new_course['start_time']
+    def test_check_course_conflict_3(self):
+        classroom = Classroom(1)
+        existing_course = {'name': 'math', 'start_time': '09:00', 'end_time': '10:00'}
+        classroom.add_course(existing_course)
+        new_course = {'name': 'SE', 'start_time': '10:00', 'end_time': '11:30'}
+        result = classroom.check_course_conflict(new_course)
+        self.assertFalse(result)
+
+    def test_check_course_conflict_4(self):
+        classroom = Classroom(1)
+        existing_course = {'name': 'math', 'start_time': '09:00', 'end_time': '10:00'}
+        classroom.add_course(existing_course)
+        new_course = {'name': 'SE', 'start_time': '09:40', 'end_time': '10:40'}
+        result = classroom.check_course_conflict(new_course)
+        self.assertFalse(result)
+
+    def test_check_course_conflict_5(self):
+        classroom = Classroom(1)
+        existing_course = {'name': 'math', 'start_time': '09:00', 'end_time': '10:00'}
+        classroom.add_course(existing_course)
+        new_course = {'name': 'SE', 'start_time': '14:30', 'end_time': '15:30'}
+        result = classroom.check_course_conflict(new_course)
+        self.assertTrue(result)
+
+    def test_check_course_conflict_6(self):
+        classroom = Classroom(1)
+        existing_course = {'name': 'math', 'start_time': '09:00', 'end_time': '10:00'}
+        classroom.add_course(existing_course)
+        new_course = {'name': 'SE', 'start_time': '8:30', 'end_time': '9:30'}
+        result = classroom.check_course_conflict(new_course)
+        self.assertFalse(result)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

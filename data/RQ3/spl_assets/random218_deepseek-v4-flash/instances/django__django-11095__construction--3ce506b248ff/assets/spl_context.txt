@@ -1,0 +1,2645 @@
+# FILE: django/contrib/admin/options.py
+# CLASS IncorrectLookupParameters
+
+# CLASS BaseModelAdmin
+
+[DEFINE_WORKER: "Delegates the check operation to the check method of the object returned by checks_class(), forwarding self and all keyword arguments, and returns the resulting value." check]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance on which the check method is invoked."
+        <REF> kwargs </REF>: dict "Arbitrary keyword arguments to forward to the underlying check method; defaults to an empty dictionary when no keyword arguments are supplied."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "The return value of the underlying check method; its type depends on the implementation."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call checks_class() on self to obtain the checker object. RESULT checker]
+            [COMMAND Invoke checker.check(self, **kwargs), passing self as the first positional argument and expanding kwargs as keyword arguments. RESULT result]
+            [COMMAND Return the result from the enclosing check method. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes self.formfield_overrides by deep-copying the global FORMFIELD_FOR_DBFIELD_DEFAULTS and merging the existing formfield_overrides mappings into that copy so instance overrides are layered on top of the defaults." __init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Deep-copy FORMFIELD_FOR_DBFIELD_DEFAULTS with copy.deepcopy and assign the fresh recursive copy to overrides. RESULT overrides]
+            [COMMAND For each key k and value v in self.formfield_overrides.items(), within overrides use setdefault(k, {}) to ensure a nested dictionary exists, then update that nested dictionary with v. RESULT overrides]
+            [COMMAND Assign the fully merged overrides dictionary to self.formfield_overrides. RESULT self.formfield_overrides]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns the appropriate Django form field for a given database field, with special handling for choice fields, foreign keys and many-to-many fields, related-object widget wrapping, formfield_overrides, and a fallback to the field's own formfield method." formfield_for_dbfield]
+    [INPUTS]
+        <REF> db_field </REF>: models.Field "The database field instance for which a form field is being constructed."
+        <REF> request </REF>: HttpRequest "The current HTTP request, used for admin permission checks."
+        <REF> kwargs </REF>: dict "Keyword arguments passed through to the form field constructor."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: forms.Field or None "A configured form field instance, or None when a relational field factory returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate db_field.choices; if it is truthy, take the choices branch. RESULT _choices_guard]
+            [COMMAND Evaluate whether db_field is an instance of models.ForeignKey or models.ManyToManyField; if so, take the relational-field branch. RESULT _relational_guard]
+            [COMMAND Iterate through db_field.__class__.mro() and check each klass for membership in self.formfield_overrides; if a match is found, take the override branch. RESULT _mro_loop]
+            [COMMAND Return db_field.formfield(**kwargs) when no override matched in the MRO loop. RESULT default_formfield]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: db_field.choices is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.formfield_for_choice_field(db_field, request, **kwargs). RESULT choice_formfield]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: db_field is an instance of models.ForeignKey or models.ManyToManyField]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the relational-field branch, if db_field.__class__ is in self.formfield_overrides, merge overrides into kwargs as {**self.formfield_overrides[db_field.__class__], **kwargs}, with existing kwargs taking precedence. RESULT kwargs]
+            [COMMAND Within the relational-field branch, if isinstance(db_field, models.ForeignKey), set formfield = self.formfield_for_foreignkey(db_field, request, **kwargs). RESULT formfield]
+            [COMMAND Within the relational-field branch, elif isinstance(db_field, models.ManyToManyField), set formfield = self.formfield_for_manytomany(db_field, request, **kwargs). RESULT formfield]
+            [COMMAND Within the relational-field branch, evaluate formfield truthiness and whether db_field.name is not in self.raw_id_fields; if both hold, wrap the widget. RESULT _wrap_guard]
+            [COMMAND Within the widget-wrapping step, set related_modeladmin = self.admin_site._registry.get(db_field.remote_field.model). RESULT related_modeladmin]
+            [COMMAND Within the widget-wrapping step, initialize wrapper_kwargs as an empty dict. RESULT wrapper_kwargs]
+            [COMMAND Within the widget-wrapping step, if related_modeladmin is truthy, update wrapper_kwargs with can_add_related, can_change_related, can_delete_related, and can_view_related booleans from related_modeladmin's permission checks for request. RESULT wrapper_kwargs]
+            [COMMAND Within the widget-wrapping step, set formfield.widget = widgets.RelatedFieldWidgetWrapper(formfield.widget, db_field.remote_field, self.admin_site, **wrapper_kwargs). RESULT formfield.widget]
+            [COMMAND Return formfield from the relational-field branch. RESULT relational_formfield]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the MRO loop, the current klass is found in self.formfield_overrides]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Rebuild kwargs as {**copy.deepcopy(self.formfield_overrides[klass]), **kwargs}, so existing kwargs take precedence, then call db_field.formfield(**kwargs) and return the result immediately; the first matching class in MRO wins. RESULT override_formfield]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the relational-field branch, formfield is falsy or db_field.name is in self.raw_id_fields]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return formfield without applying the related-field widget wrapper; this allows None results from OneToOneField with parent_link=True or M2M intermediary fields to pass through. RESULT unwrapped_formfield]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns a form field for a database field with declared choices, applying an admin radio widget and default blank choices only for fields configured as radio fields and only when the caller has not already supplied those kwargs." formfield_for_choice_field]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The admin class instance providing radio_fields and helper methods such as get_ul_class."
+        <REF> db_field </REF>: Field "The database field for which the form field is constructed."
+        <REF> request </REF>: HttpRequest "The current HTTP request; accepted as part of the Django admin method signature but not used in the method body."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to db_field.formfield(), possibly augmented with widget and choices defaults."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> form_field </REF>: FormField "The form field instance returned by db_field.formfield(**kwargs)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether db_field.name is present in self.radio_fields. RESULT is_radio_field]
+            [COMMAND If db_field.name is in self.radio_fields and 'widget' is not in kwargs, set kwargs['widget'] to widgets.AdminRadioSelect(attrs={'class': get_ul_class(self.radio_fields[db_field.name])}). RESULT kwargs]
+            [COMMAND If db_field.name is in self.radio_fields and 'choices' is not in kwargs, set kwargs['choices'] to db_field.get_choices(include_blank=db_field.blank, blank_choice=[('', _('None'))]). RESULT kwargs]
+            [COMMAND Return db_field.formfield(**kwargs). RESULT form_field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the related model queryset with the related ModelAdmin's configured ordering when a non-empty ordering is available, otherwise returns None." get_field_queryset]
+    [INPUTS]
+        <REF> self </REF>: object "The current admin object exposing admin_site."
+        <REF> db </REF>: str "Database alias used for the queryset."
+        <REF> db_field </REF>: Field "Relational field whose remote model queryset is being resolved."
+        <REF> request </REF>: HttpRequest "Request object passed to the related admin's get_ordering method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: QuerySet or None "Ordered queryset from the remote model's default manager, or None when no ordering is configured."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Look up the registered ModelAdmin for db_field.remote_field.model from self.admin_site._registry using .get(), and assign it to related_admin. RESULT related_admin]
+            [COMMAND If related_admin is None, skip the ordering branch and go to the final return None step. RESULT skip_ordering]
+            [COMMAND Within the related_admin is not None branch, call related_admin.get_ordering(request) and assign the result to ordering. RESULT ordering]
+            [COMMAND Within the related_admin is not None branch, check whether ordering is not None and ordering != (). RESULT has_ordering_configuration]
+            [COMMAND If ordering is not None and ordering != (), immediately return db_field.remote_field.model._default_manager.using(db).order_by(*ordering). RESULT ordered_queryset]
+            [COMMAND After the conditional branches, if no early return occurred (related_admin is None, or ordering is None, or ordering == ()), return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a form field for a ForeignKey model field by applying admin-configured widget and queryset defaults only when the caller has not already provided them." formfield_for_foreignkey]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The admin class instance providing get_autocomplete_fields(), raw_id_fields, radio_fields, admin_site, and get_field_queryset()."
+        <REF> db_field </REF>: ForeignKey "The ForeignKey model field for which a form Field is being built."
+        <REF> request </REF>: HttpRequest "The current HTTP request used to determine autocomplete fields and field querysets."
+        <REF> kwargs </REF>: dict "Keyword arguments forwarded to db_field.formfield(); may contain 'using', 'widget', 'queryset', and other form field options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> form_field </REF>: Field "The form Field instance returned by db_field.formfield(**kwargs)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate db = kwargs.get('using'); if the 'using' key is absent from kwargs, db becomes None. RESULT db]
+            [COMMAND Within the outer guard if 'widget' not in kwargs, evaluate the if/elif/elif chain in order: if db_field.name is in self.get_autocomplete_fields(request), set kwargs['widget'] = AutocompleteSelect(db_field.remote_field, self.admin_site, using=db) and skip the remaining widget branches; else if db_field.name is in self.raw_id_fields, set kwargs['widget'] = widgets.ForeignKeyRawIdWidget(db_field.remote_field, self.admin_site, using=db); else if db_field.name is in self.radio_fields, set kwargs['widget'] = widgets.AdminRadioSelect(attrs={'class': get_ul_class(self.radio_fields[db_field.name])}) and also set kwargs['empty_label'] to _('None') if db_field.blank is True, otherwise set it to None; if none of the inner conditions match, make no widget assignment. If 'widget' is already present in kwargs, skip the entire block and preserve the caller-supplied widget. RESULT kwargs]
+            [COMMAND Within the outer guard if 'queryset' not in kwargs, call self.get_field_queryset(db, db_field, request) and check the returned value by identity; if it is not None, set kwargs['queryset'] to that returned value, otherwise do not set kwargs['queryset']. This identity check means even an empty queryset is stored; only None is excluded. If 'queryset' is already present in kwargs, skip the block entirely and preserve the caller-supplied queryset. RESULT kwargs]
+            [COMMAND Return db_field.formfield(**kwargs). RESULT form_field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds an admin form field for a ManyToManyField by applying admin widget overrides, default queryset lookup, and a multi-select help-text hint, returning None for non-auto-created intermediary models." formfield_for_manytomany]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The admin class instance providing get_autocomplete_fields, raw_id_fields, filter_vertical, filter_horizontal, admin_site, and get_field_queryset."
+        <REF> db_field </REF>: ManyToManyField "The many-to-many model field being converted into a form field."
+        <REF> request </REF>: HttpRequest "The current admin request used to determine autocomplete fields and field queryset."
+        <REF> kwargs </REF>: dict "Keyword arguments passed through to db_field.formfield(); may contain 'using', 'queryset', and widget overrides."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> form_field </REF>: FormField | None "The configured form field for the many-to-many field, or None if the intermediary model is not auto-created."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If db_field.remote_field.through._meta.auto_created is False, return None immediately and skip all form field construction. RESULT None]
+            [COMMAND Get db = kwargs.get('using'); if 'using' is absent, db is None. RESULT db]
+            [COMMAND Get autocomplete_fields = self.get_autocomplete_fields(request). RESULT autocomplete_fields]
+            [COMMAND If db_field.name is in autocomplete_fields, set kwargs['widget'] to AutocompleteSelectMultiple(db_field.remote_field, self.admin_site, using=db). Otherwise, if db_field.name is in self.raw_id_fields, set kwargs['widget'] to widgets.ManyToManyRawIdWidget(db_field.remote_field, self.admin_site, using=db). Otherwise, if db_field.name is in the list [*self.filter_vertical, *self.filter_horizontal], set kwargs['widget'] to widgets.FilteredSelectMultiple(db_field.verbose_name, db_field.name in self.filter_vertical); if the name is in both filter lists, the vertical filter flag is True. RESULT kwargs]
+            [COMMAND If 'queryset' is not in kwargs, set queryset = self.get_field_queryset(db, db_field, request); if queryset is not None, set kwargs['queryset'] = queryset. If 'queryset' is already present or the lookup returns None, leave kwargs['queryset'] unchanged. RESULT kwargs]
+            [COMMAND Set form_field = db_field.formfield(**kwargs). RESULT form_field]
+            [COMMAND If isinstance(form_field.widget, SelectMultiple) and not isinstance(form_field.widget, (CheckboxSelectMultiple, AutocompleteSelectMultiple)), set msg to 'Hold down "Control", or "Command" on a Mac, to select more than one.', store help_text = form_field.help_text, and set form_field.help_text to format_lazy('{} {}', help_text, msg) if help_text is truthy; otherwise set form_field.help_text to msg. RESULT form_field]
+            [COMMAND Return form_field. RESULT form_field]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured autocomplete_fields attribute, which is the list of ForeignKey and/or ManyToMany fields that should use an autocomplete widget." get_autocomplete_fields]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "HTTP request object; unused by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "The value of self.autocomplete_fields; typically a list of ForeignKey and/or ManyToMany fields, but could also be None or an empty list depending on how it was initialized."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the instance attribute autocomplete_fields from self. RESULT autocomplete_fields_value]
+            [COMMAND Return the autocomplete_fields_value to the caller. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the admin view-on-site URL for the supplied object by invoking a custom callable when view_on_site is a truthy callable, or by reversing the admin view-on-site URL using the object's content type and primary key when get_absolute_url is available, and returns None when no object is provided, view_on_site is disabled, or neither branch applies." get_view_on_site_url]
+    [INPUTS]
+        <REF> self </REF>: object "The bound Django admin instance on which this method is called."
+        <REF> obj </REF>: object "Django model instance for which the view-on-site URL is generated; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string or None "The resolved admin view-on-site URL, or None when the feature is disabled, no object is provided, or neither branch applies."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept the obj parameter, which defaults to None. RESULT obj]
+            [COMMAND If obj is None or not self.view_on_site, return None immediately. RESULT None]
+            [COMMAND Evaluate whether self.view_on_site is callable using callable(self.view_on_site). RESULT is_view_on_site_callable]
+            [COMMAND If is_view_on_site_callable is true, execute the callable branch and return its result. RESULT callable_result]
+            [COMMAND If is_view_on_site_callable is false, evaluate self.view_on_site and hasattr(obj, 'get_absolute_url') with short-circuit semantics. RESULT can_use_absolute_url]
+            [COMMAND If can_use_absolute_url is true, execute the absolute-url branch and return its result. RESULT view_on_site_url]
+            [COMMAND If neither branch condition is true, return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_view_on_site_callable is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.view_on_site(obj) and return its result. RESULT callable_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: is_view_on_site_callable is false and self.view_on_site is truthy and obj has get_absolute_url]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the content type ID with get_content_type_for_model(obj).pk. RESULT content_type_id]
+            [COMMAND Obtain the object ID with obj.pk. RESULT object_id]
+            [COMMAND Return reverse('admin:view_on_site', kwargs={'content_type_id': content_type_id, 'object_id': object_id}). RESULT view_on_site_url]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured empty_value_display value, preferring the ModelAdmin's own attribute and falling back to the AdminSite's attribute, with the selected value passed through mark_safe." get_empty_value_display]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The mark_safe-wrapped empty value display string."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to access self.empty_value_display, pass it through mark_safe(), and assign the marked-safe value to result. RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Accessing self.empty_value_display raises AttributeError because ModelAdmin does not define it.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.admin_site.empty_value_display, pass it through mark_safe(), and assign the marked-safe value to result. RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured exclude list for the given request and optional object." get_exclude]
+    [INPUTS]
+        <REF> request </REF>: object "The request object for which the exclude hook is invoked."
+        <REF> obj </REF>: object or None "The optional object being edited or viewed; used by subclasses to customize the exclude list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> exclude </REF>: object "The value of self.exclude, typically a list or tuple of field names, or None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of the exclude attribute on this instance. RESULT exclude]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns self.fields when it is truthy; otherwise obtains a form through _get_form_for_get_fields and returns the combined list of the form's base field names and the readonly fields for the request and object." get_fields]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance providing fields, form generation, and readonly-fields lookup."
+        <REF> request </REF>: object "The request object passed to the field-determination logic."
+        <REF> obj </REF>: object or None "The object for which fields are requested; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of field names: self.fields when truthy, otherwise form.base_fields followed by the readonly fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND On the fallback path where self.fields is falsy, call self._get_form_for_get_fields(request, obj) and assign the returned form to form. RESULT form]
+            [COMMAND On the fallback path, read form.base_fields and store the base field names as base_fields. RESULT base_fields]
+            [COMMAND On the fallback path, call self.get_readonly_fields(request, obj) and store the returned readonly field names as readonly_fields. RESULT readonly_fields]
+            [COMMAND On the fallback path, return a new list containing each element of base_fields followed by each element of readonly_fields. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.fields is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.fields directly. RESULT self.fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns self.fieldsets when it is truthy, otherwise builds and returns a default one-fieldset list from self.get_fields(request, obj)." get_fieldsets]
+    [INPUTS]
+        <REF> request </REF>: object "HTTP request object passed through to get_fields."
+        <REF> obj </REF>: object or None "Optional model instance; defaults to None and is passed to get_fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or fieldsets "The configured self.fieldsets if truthy, otherwise a list containing (None, {'fields': field_list})."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.fieldsets is truthy. RESULT fieldsets_truthy]
+            [COMMAND If self.fieldsets is falsy, call self.get_fields(request, obj) to obtain the field list. RESULT field_definitions]
+            [COMMAND Construct the list [(None, {'fields': field_definitions})] and return it. RESULT default_fieldsets]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If self.fieldsets is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.fieldsets immediately. RESULT configured_fieldsets]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the field ordering configured on the object, defaulting to an empty tuple when no ordering is set." get_ordering]
+    [INPUTS]
+        <REF> self </REF>: object "Current object instance; provides the ordering attribute."
+        <REF> request </REF>: object "HTTP request object; not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The value of self.ordering if it is truthy; otherwise an empty tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the value of self.ordering from the current object. RESULT ordering_value]
+            [COMMAND Evaluate whether ordering_value is truthy. RESULT ordering_is_truthy]
+            [COMMAND If ordering_is_truthy is true, return ordering_value unchanged. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: ordering_is_truthy is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a new empty tuple () as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the readonly_fields attribute of the current admin instance as a customizable hook for specifying readonly fields." get_readonly_fields]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming HTTP request."
+        <REF> obj </REF>: object or None "The object being viewed or edited, or None when adding a new object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> readonly_fields </REF>: list or tuple "The configured readonly fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of self.readonly_fields. RESULT readonly_fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the admin class's configured prepopulated fields for the given request and optional object." get_prepopulated_fields]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request instance."
+        <REF> obj </REF>: Optional[Model] "The object being edited, or None when adding a new object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: dict "The configured prepopulated fields mapping."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of self.prepopulated_fields. RESULT prepopulated_fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a QuerySet of all model instances editable by the admin site, applying the request-derived ordering when one is configured." get_queryset]
+    [INPUTS]
+        <REF> self </REF>: object "The admin class instance that provides the model and get_ordering behavior."
+        <REF> request </REF>: HttpRequest "The current admin request used to determine the ordering specification."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> queryset </REF>: QuerySet "The QuerySet for the model, with the configured ordering applied when ordering is truthy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the initial QuerySet by calling self.model._default_manager.get_queryset() and assign it to qs. RESULT qs]
+            [COMMAND Retrieve the ordering specification by calling self.get_ordering(request) and assign it to ordering. RESULT ordering]
+            [COMMAND If ordering is truthy, reorder qs by calling qs.order_by(*ordering) and assign the ordered QuerySet back to qs; otherwise leave qs unchanged. RESULT qs]
+            [COMMAND Return the resulting QuerySet qs. RESULT qs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the explicit sortable_by field override when it is not None, otherwise falls back to self.get_list_display(request) to derive the sortable fields." get_sortable_by]
+    [INPUTS]
+        <REF> request </REF>: object "The HTTP request passed to get_list_display when sortable_by is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The sortable fields list: self.sortable_by if it is not None, otherwise the result of self.get_list_display(request)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.sortable_by from the current instance. RESULT sortable_by_value]
+            [COMMAND If sortable_by_value is not None, return sortable_by_value immediately. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: sortable_by_value is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_list_display(request) with the provided request. RESULT list_display_result]
+            [COMMAND Return list_display_result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a requested lookup is allowed by checking related foreign-key limit_choices_to constraints, decomposing the lookup path into relational parts, and validating those parts against the configured date_hierarchy and list filters." lookup_allowed]
+    [INPUTS]
+        <REF> self </REF>: object "Admin model instance providing model, date_hierarchy, list_filter, and related lookup helpers."
+        <REF> lookup </REF>: str "Django lookup expression to validate."
+        <REF> value </REF>: object "Value supplied for the lookup; compared against allowed foreign-key limit_choices_to parameters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the lookup is permitted, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set model to self.model. RESULT model]
+            [COMMAND Scan model._meta.related_fkey_lookups; for each fk_lookup, call fk_lookup() first if callable(fk_lookup), build the lookup dictionary with widgets.url_params_from_lookup_dict(fk_lookup), and check whether the tuple (lookup, value) is one of its items. If a match is found, return True immediately. RESULT fkey_match_found]
+            [COMMAND Initialize relation_parts to an empty list and prev_field to None. RESULT relation_parts]
+            [COMMAND For each part in lookup.split(LOOKUP_SEP), try to get field = model._meta.get_field(part); if FieldDoesNotExist is raised, break. If prev_field is None or (prev_field.is_relation is true and field is not in prev_field.get_path_info()[-1].target_fields), append part to relation_parts. If getattr(field, 'get_path_info', None) is falsy, break. Otherwise update prev_field to field and model to field.get_path_info()[-1].to_opts.model. RESULT relation_parts]
+            [COMMAND Check whether len(relation_parts) is less than or equal to 1; if it is, return True immediately because the lookup is local or has no relational prefix. RESULT local_lookup_allowed]
+            [COMMAND Initialize valid_lookups as a set containing self.date_hierarchy. RESULT valid_lookups]
+            [COMMAND For each filter_item in self.list_filter, if filter_item is a type and issubclass(filter_item, SimpleListFilter), add filter_item.parameter_name to valid_lookups; else if filter_item is a list or tuple, add filter_item[0]; else add filter_item itself. RESULT valid_lookups]
+            [COMMAND Return the boolean result of not {LOOKUP_SEP.join(relation_parts), LOOKUP_SEP.join(relation_parts + [part])}.isdisjoint(valid_lookups), using the loop variable part as it remains after the lookup parsing loop. RESULT lookup_allowed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the specified to_field may be referenced by this admin's model by allowing primary keys, matching many-to-many target field names, or reverse relationships from registered models." to_field_allowed]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The admin instance whose associated model is checked."
+        <REF> request </REF>: HttpRequest "The HTTP request object associated with the admin view; not used in the method body."
+        <REF> to_field </REF>: str "The name of the field being checked for reference permission."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if the field can be referenced by this admin model; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the model metadata by assigning opts = self.model._meta. RESULT opts]
+            [COMMAND Resolve the requested field by calling opts.get_field(to_field) and assigning the result to field. RESULT field]
+            [COMMAND If field.primary_key is true, return True immediately. RESULT return_value]
+            [COMMAND For each many_to_many in opts.many_to_many, if many_to_many.m2m_target_field_name() equals to_field, return True immediately. RESULT return_value]
+            [COMMAND Initialize registered_models as an empty set. RESULT registered_models]
+            [COMMAND For each model, admin in self.admin_site._registry.items(), add model to registered_models; then for each inline in admin.inlines, add inline.model to registered_models. RESULT registered_models]
+            [COMMAND Build related_objects as a generator over opts.get_fields(include_hidden=True), keeping only fields for which auto_created is true and concrete is false. RESULT related_objects]
+            [COMMAND For each related_object in related_objects, assign related_model = related_object.related_model. RESULT related_model]
+            [COMMAND Within the same loop over related_objects, assign remote_field = related_object.field.remote_field. RESULT remote_field]
+            [COMMAND Within the loop over related_objects, evaluate in order with short-circuiting: any model in registered_models is a subclass of related_model, remote_field has a get_related_field attribute, and remote_field.get_related_field() equals field; if all are true, return True. RESULT return_value]
+            [COMMAND After the loop over related_objects completes without a matching relationship, return False. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: opts.get_field(to_field) raises FieldDoesNotExist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately because the requested field does not exist on the model. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether the request user has the add permission for the model options associated with this object." has_add_permission]
+    [INPUTS]
+        <REF> self </REF>: object "The bound model admin instance whose opts metadata contains the app_label used to build the permission string."
+        <REF> request </REF>: HttpRequest "The request whose user is checked for the add permission."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if request.user has the '<app_label>.add_<model_name>' permission; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.opts to local variable opts. RESULT opts]
+            [COMMAND Call get_permission_codename('add', opts) and assign the returned permission codename to local variable codename. RESULT codename]
+            [COMMAND Format the permission string as '%s.%s' with opts.app_label and codename, and assign it to local variable permission_string. RESULT permission_string]
+            [COMMAND Call request.user.has_perm(permission_string) and return its boolean result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the request user has the change permission for the model represented by self.opts, ignoring the obj parameter." has_change_permission]
+    [INPUTS]
+        <REF> self </REF>: object "ModelAdmin instance whose opts provide the app label and permission codename."
+        <REF> request </REF>: HttpRequest "Request object whose user is checked for permission."
+        <REF> obj </REF>: object or None "Optional model instance; not examined by the default implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the request user has the model change permission, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.opts from the current model admin instance and store it as opts. RESULT opts]
+            [COMMAND Call get_permission_codename('change', opts) to obtain the change permission codename. RESULT codename]
+            [COMMAND Return request.user.has_perm with the formatted full permission string using opts.app_label and codename. RESULT permission_granted]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether the request user has the Django delete permission for the model represented by this object's options, without inspecting the obj parameter." has_delete_permission]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming request whose user is checked for delete permission."
+        <REF> obj </REF>: object "Optional model instance to be deleted; ignored by the default implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if request.user.has_perm returns True for the delete permission codename; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the model options object from self.opts. RESULT opts]
+            [COMMAND Compute the delete permission codename by calling get_permission_codename('delete', opts). RESULT codename]
+            [COMMAND Return the result of request.user.has_perm with the permission string formatted as opts.app_label + '.' + codename. RESULT permission_granted]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the request user has either the view or change permission for the model, while ignoring the optional obj parameter." has_view_permission]
+    [INPUTS]
+        <REF> self </REF>: object "The admin model class instance providing opts."
+        <REF> request </REF>: HttpRequest "The request whose user is checked for the permission."
+        <REF> obj </REF>: object or None "Optional Django model instance; accepted but ignored by this default implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permission_granted </REF>: bool "True if request.user has either the view or change permission for the model; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the model options from self.opts and assign them to opts. RESULT opts]
+            [COMMAND Call get_permission_codename('view', opts) and assign the returned codename to codename_view. RESULT codename_view]
+            [COMMAND Call get_permission_codename('change', opts) and assign the returned codename to codename_change. RESULT codename_change]
+            [COMMAND Return permission_granted as True if request.user.has_perm('%s.%s' % (opts.app_label, codename_view)) is true, otherwise as True if request.user.has_perm('%s.%s' % (opts.app_label, codename_change)) is true, otherwise False; due to OR short-circuiting, the second check is evaluated only if the first is false. RESULT permission_granted]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the requesting user has view or change permission for the target object, using short-circuit OR evaluation." has_view_or_change_permission]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which has_view_permission and has_change_permission are called."
+        <REF> request </REF>: object "The request object used to determine permissions."
+        <REF> obj </REF>: object|null "The optional object or model instance to check; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if either has_view_permission or has_change_permission returns True; False only if both return False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.has_view_permission(request, obj) and store the returned value as view_permission_result. RESULT view_permission_result]
+            [COMMAND If view_permission_result is truthy, short-circuit the OR expression by returning view_permission_result directly without evaluating has_change_permission. RESULT return_value]
+            [COMMAND If view_permission_result is falsy, call self.has_change_permission(request, obj) and store the returned value as change_permission_result. RESULT change_permission_result]
+            [COMMAND Return change_permission_result as the final result of the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the request user has any permission in the app label associated with the current model admin's metadata." has_module_permission]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "Current model admin instance whose opts.app_label defines the app label to check."
+        <REF> request </REF>: HttpRequest "Django HTTP request whose user is checked for module-level permissions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if request.user.has_module_perms(self.opts.app_label) returns True; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the app label from self.opts.app_label. RESULT app_label]
+            [COMMAND Call request.user.has_module_perms(app_label) to determine whether the request user has any permission in that app label. RESULT has_permission]
+            [COMMAND Return the boolean result from has_permission. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS ModelAdmin
+
+[DEFINE_WORKER: "Initializes the object by storing the model, model._meta, and admin_site as instance attributes, then calls the superclass initializer." __init__]
+    [INPUTS]
+        <REF> model </REF>: object "Model instance whose _meta attribute is stored on self.opts."
+        <REF> admin_site </REF>: object "Admin site instance stored on self.admin_site."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the model parameter to self.model. RESULT self.model]
+            [COMMAND Read model._meta and assign it to self.opts. RESULT self.opts]
+            [COMMAND Assign the admin_site parameter to self.admin_site. RESULT self.admin_site]
+            [COMMAND Call super().__init__() with no arguments to initialize the superclass. RESULT super_init_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the list of inline admin instances for a request and optional object, skipping inlines for which the user lacks all relevant permissions and disabling add forms when add permission is missing." get_inline_instances]
+    [INPUTS]
+        <REF> self </REF>: object "ModelAdmin instance that provides inlines, model, and admin_site."
+        <REF> request </REF>: HttpRequest or None "Current request used for permission checks; if falsy, permission checks are skipped."
+        <REF> obj </REF>: object or None "Target object for permission checks; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> inline_instances </REF>: list "List of inline admin instances that pass permission filtering, with max_num set to 0 when add permission is missing."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize inline_instances as an empty list. RESULT inline_instances]
+            [COMMAND For each inline_class in self.inlines, instantiate inline by calling inline_class(self.model, self.admin_site). RESULT inline]
+            [COMMAND Within the loop over inline_class, if request is truthy and the short-circuit OR of inline.has_view_or_change_permission(request, obj), inline.has_add_permission(request, obj), and inline.has_delete_permission(request, obj) is false, continue to the next inline_class without appending inline. RESULT inline_instances]
+            [COMMAND Still within the loop over inline_class, when request is truthy and the previous condition did not continue, if inline.has_add_permission(request, obj) is false, set inline.max_num to 0. RESULT inline.max_num]
+            [COMMAND After the request-based permission handling, append inline to inline_instances. RESULT inline_instances]
+            [COMMAND Return inline_instances. RESULT inline_instances]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the Django admin URL patterns for the current model by wrapping each view with admin-site validation and adding a backwards-compatible redirect from the raw object id to the change view." get_urls]
+    [INPUTS]
+        <REF> self </REF>: object "ModelAdmin instance providing admin_site, model metadata, and the view methods changelist_view, add_view, autocomplete_view, history_view, delete_view, and change_view."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> urlpatterns </REF>: list "List of Django URL pattern objects: six named admin URL patterns plus the backwards-compatible '<path:object_id>/' redirect to the change page."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import path from django.urls within the method body. RESULT path]
+            [COMMAND Define the inner function wrap(view) that creates a wrapper closure; wrapper(*args, **kwargs) returns self.admin_site.admin_view(view)(*args, **kwargs), sets wrapper.model_admin = self, and returns update_wrapper(wrapper, view). RESULT wrap]
+            [COMMAND Set info to the tuple (self.model._meta.app_label, self.model._meta.model_name). RESULT info]
+            [COMMAND Initialize urlpatterns as an empty list. RESULT urlpatterns]
+            [COMMAND Append path('', wrap(self.changelist_view), name='%s_%s_changelist' % info) to urlpatterns. RESULT urlpatterns]
+            [COMMAND Append path('add/', wrap(self.add_view), name='%s_%s_add' % info) to urlpatterns. RESULT urlpatterns]
+            [COMMAND Append path('autocomplete/', wrap(self.autocomplete_view), name='%s_%s_autocomplete' % info) to urlpatterns. RESULT urlpatterns]
+            [COMMAND Append path('<path:object_id>/history/', wrap(self.history_view), name='%s_%s_history' % info) to urlpatterns. RESULT urlpatterns]
+            [COMMAND Append path('<path:object_id>/delete/', wrap(self.delete_view), name='%s_%s_delete' % info) to urlpatterns. RESULT urlpatterns]
+            [COMMAND Append path('<path:object_id>/change/', wrap(self.change_view), name='%s_%s_change' % info) to urlpatterns. RESULT urlpatterns]
+            [COMMAND Append path('<path:object_id>/', wrap(RedirectView.as_view(pattern_name='%s:%s_%s_change' % ((self.admin_site.name,) + info)))) to urlpatterns. RESULT urlpatterns]
+            [COMMAND Return urlpatterns. RESULT urlpatterns]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the result of calling get_urls on the current object." urls]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: unknown "The value returned by self.get_urls()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call get_urls on self and return its return value directly to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a forms.Media component for the Django admin's JavaScript assets, selecting minified filenames when settings.DEBUG is false and prefixing each asset with 'admin/js/'." media]
+    [INPUTS]
+        <REF> self </REF>: object "The admin class instance whose media assets are being defined."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> media </REF>: forms.Media "A forms.Media object listing the admin JavaScript assets, with 'admin/js/' prefixed paths and minified variants when settings.DEBUG is disabled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the asset suffix: if settings.DEBUG is truthy, set extra to an empty string; otherwise set extra to '.min'. RESULT extra]
+            [COMMAND Build the js list of admin asset filenames by substituting extra into templated entries and keeping literal entries unchanged: 'vendor/jquery/jquery%s.js', 'jquery.init.js', 'core.js', 'admin/RelatedObjectLookups.js', 'actions%s.js', 'urlify.js', 'prepopulate%s.js', 'vendor/xregexp/xregexp%s.js'. RESULT js]
+            [COMMAND Return forms.Media(js=['admin/js/%s' % url for url in js]) by prefixing each URL in js with 'admin/js/'. RESULT media]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a dictionary indicating whether the current user has add, change, delete, and view permissions on this model for the given request." get_model_perms]
+    [INPUTS]
+        <REF> request </REF>: object "The request object passed to the permission-checking methods."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> perms_dict </REF>: dict "Dictionary with keys add, change, delete, and view mapped to the corresponding boolean permission results."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check add permission on this model by calling self.has_add_permission(request). RESULT add_permission]
+            [COMMAND Check change permission on this model by calling self.has_change_permission(request). RESULT change_permission]
+            [COMMAND Check delete permission on this model by calling self.has_delete_permission(request). RESULT delete_permission]
+            [COMMAND Check view permission on this model by calling self.has_view_permission(request). RESULT view_permission]
+            [COMMAND Return a dictionary with keys 'add', 'change', 'delete', and 'view' mapped to the corresponding permission results. RESULT perms_dict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the form created for the given request and object by delegating to get_form with fields explicitly set to None, so no field restriction is applied." _get_form_for_get_fields]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Request object passed through to get_form and used during form construction."
+        <REF> obj </REF>: object "Model instance or object for which the form is generated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Form "The form instance returned by self.get_form(request, obj, fields=None)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call get_form on self with request, obj, and fields set to None, and return the resulting form instance directly. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns the ModelForm class for the Django admin add or change view by resolving fields, excludes, readonly-field removals, and permission constraints, then delegating to modelform_factory." get_form]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The current admin request, used for permission checks and formfield callbacks."
+        <REF> obj </REF>: object or None "The model instance being edited, or None for an add view."
+        <REF> change </REF>: bool "True when building a change form; used to apply permission-based field exclusion."
+        <REF> kwargs </REF>: dict "Additional form options to pass to modelform_factory; a 'fields' entry, if present, is popped and used as the fields list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> form_class </REF>: ModelForm subclass "The form class returned by modelform_factory, optionally subclassed to remove readonly declared fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If 'fields' is present in kwargs, pop it and assign the value to fields; otherwise assign fields to flatten_fieldsets(self.get_fieldsets(request, obj)). RESULT fields]
+            [COMMAND Assign excluded to the result of self.get_exclude(request, obj). RESULT excluded]
+            [COMMAND Assign exclude to an empty list if excluded is None, otherwise to list(excluded). RESULT exclude]
+            [COMMAND Assign readonly_fields to the result of self.get_readonly_fields(request, obj). RESULT readonly_fields]
+            [COMMAND Extend exclude with readonly_fields. RESULT exclude]
+            [COMMAND With short-circuit 'and' evaluation, if change is true, request has a 'user' attribute, and self.has_change_permission(request, obj) returns false, extend exclude with fields. RESULT exclude]
+            [COMMAND With short-circuit 'and' evaluation, if excluded is None, self.form has a '_meta' attribute, and self.form._meta.exclude is truthy, extend exclude with self.form._meta.exclude. RESULT exclude]
+            [COMMAND Normalize exclude to None if exclude is falsy; otherwise keep it unchanged. RESULT exclude]
+            [COMMAND Build new_attrs as a dictionary created from the field names in readonly_fields that also appear in self.form.declared_fields. RESULT new_attrs]
+            [COMMAND Create form as a dynamic subclass of self.form using type(self.form.__name__, (self.form,), new_attrs). RESULT form]
+            [COMMAND Build defaults with form, fields, exclude, formfield_callback as partial(self.formfield_for_dbfield, request=request), and merge kwargs so kwargs keys override earlier defaults. RESULT defaults]
+            [COMMAND If defaults['fields'] is None and modelform_defines_fields(defaults['form']) is false, set defaults['fields'] to forms.ALL_FIELDS. RESULT defaults]
+            [COMMAND Call modelform_factory(self.model, **defaults) and return its result. RESULT form_class]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: modelform_factory(self.model, **defaults) raises FieldError]
+        [LOG "The caught FieldError is re-raised as a new FieldError whose message combines the original error and 'Check fields/fieldsets/exclude attributes of class <class name>.'"]
+        [THROW FieldError "Re-raised FieldError with the original message plus a hint to check fields, fieldsets, or exclude attributes of the admin class."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Imports the Django admin ChangeList class and returns it for use on the changelist page." get_changelist]
+    [INPUTS]
+        <REF> self </REF>: object "The current admin model admin instance."
+        <REF> request </REF>: HttpRequest "The HTTP request object for the changelist page."
+        <REF> kwargs </REF>: dict "Additional keyword arguments passed to the method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ChangeList </REF>: type "The Django admin ChangeList class."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the ChangeList class from django.contrib.admin.views.main RESULT ChangeList]
+            [COMMAND Return the imported ChangeList class RESULT ChangeList]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns a Django admin ChangeList instance for the given request using resolved list display, links, filters, search fields, sorting, and pagination configuration." get_changelist_instance]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The current HTTP request used to build the admin changelist."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: ChangeList "The constructed ChangeList instance for the requested admin view."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_list_display(request) and assign the returned list of display field names to list_display. RESULT list_display]
+            [COMMAND Call self.get_list_display_links(request, list_display) and assign the resolved list-display link specification to list_display_links. RESULT list_display_links]
+            [COMMAND After the optional action-checkbox branch, call self.get_sortable_by(request) and assign the returned sortable field specification to sortable_by. RESULT sortable_by]
+            [COMMAND Call self.get_changelist(request) and assign the returned changelist class or factory to ChangeList. RESULT ChangeList]
+            [COMMAND Construct ChangeList with request, self.model, list_display, list_display_links, self.get_list_filter(request), self.date_hierarchy, self.get_search_fields(request), self.get_list_select_related(request), self.list_per_page, self.list_max_show_all, self.list_editable, self, and sortable_by, then return the constructed instance. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If self.get_actions(request) is truthy, after computing list_display_links and before computing sortable_by.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the if self.get_actions(request) branch, prepend the literal string 'action_checkbox' to the front of list_display. RESULT list_display]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: If a called changelist helper raises IncorrectLookupParameters because the request lookup parameters are invalid.]
+        [LOG "IncorrectLookupParameters raised while constructing the ChangeList instance."]
+        [THROW IncorrectLookupParameters "Raised when the changelist lookup parameters are invalid."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a matching model instance for a given object_id by resolving the target field to the primary key when from_field is omitted, and returns None when validation or lookup fails." get_object]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The Django request object passed to get_queryset."
+        <REF> object_id </REF>: Any "The raw value to coerce and match against the resolved field."
+        <REF> from_field </REF>: str or None "Optional field name used for the lookup. If None, the model primary key is used; an empty string is not treated as None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> instance </REF>: Model instance or None "The model instance matched by the field value, or None if validation fails or no match exists."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the queryset by calling self.get_queryset(request). RESULT queryset]
+            [COMMAND Get the model class from the queryset's model attribute. RESULT model]
+            [COMMAND Resolve the field to use: if from_field is None, set field to model._meta.pk; otherwise set field to model._meta.get_field(from_field). RESULT field]
+            [COMMAND Convert object_id by calling field.to_python(object_id) and assign the converted value back to object_id. RESULT object_id]
+            [COMMAND Fetch the instance by calling queryset.get(**{field.name: object_id}). RESULT instance]
+            [COMMAND Return the fetched instance. RESULT instance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the try block, if field.to_python(object_id) raises ValidationError or ValueError, or queryset.get(**{field.name: object_id}) raises model.DoesNotExist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None as the fallback result. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a model form class for the changelist page formset, with a request-bound formfield callback and fields defaulting to ALL_FIELDS when no field set is otherwise defined." get_changelist_form]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The admin class instance providing the model and the formfield_for_dbfield method."
+        <REF> request </REF>: HttpRequest "The current HTTP request, passed to formfield_for_dbfield through the partial callback."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to modelform_factory; entries may override values in the defaults dictionary."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ModelForm class "A model form class produced by modelform_factory using the configured defaults."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct the defaults dictionary with the key 'formfield_callback' set to partial(self.formfield_for_dbfield, request=request), then unpack **kwargs so any keys from kwargs override earlier values in the dictionary. RESULT defaults]
+            [COMMAND If defaults.get('fields') is None and modelform_defines_fields(defaults.get('form')) is false, set defaults['fields'] to forms.ALL_FIELDS. RESULT defaults]
+            [COMMAND Call modelform_factory(self.model, **defaults) and return the resulting form class. RESULT returned_form_class]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a model formset class for the changelist page by calling modelformset_factory with the model's changelist form, the list_editable fields, extra=0, and a defaults dictionary containing a request-bound formfield callback merged with kwargs." get_changelist_formset]
+    [INPUTS]
+        <REF> self </REF>: object "The admin model class instance on which the method is invoked, providing model, list_editable, get_changelist_form, and formfield_for_dbfield."
+        <REF> request </REF>: HttpRequest "The current HTTP request, bound into the formfield callback and passed to get_changelist_form."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to modelformset_factory; if it contains 'formfield_callback', it overrides the default callback."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> formset_class </REF>: class "A ModelFormSet class configured for the changelist editing page."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a defaults dictionary with 'formfield_callback' set to partial(self.formfield_for_dbfield, request=request), then unpack all key-value pairs from kwargs into defaults so that a kwargs 'formfield_callback' overrides the default callback. RESULT defaults]
+            [COMMAND Return the result of modelformset_factory(self.model, self.get_changelist_form(request), extra=0, fields=self.list_editable, **defaults), which is the changelist formset class. RESULT formset_class]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over inline instances for the given request and object, creating and yielding each inline's formset alongside the inline instance." get_formsets_with_inlines]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The current request passed to the inline instances."
+        <REF> obj </REF>: object or None "The object being edited, or None when adding a new object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: generator of (formset, inline) "Yields a (formset, inline) pair for each inline instance returned by get_inline_instances."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Obtain the inline instances to process from self.get_inline_instances(request, obj). RESULT inline_instances]
+            [COMMAND For each inline instance in inline_instances, call inline.get_formset(request, obj) to create the formset. RESULT formset]
+            [COMMAND Within the for loop over inline_instances, yield the tuple (formset, inline) to the caller. RESULT yielded_pair]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates and returns a paginator instance for the given queryset using the supplied per_page, orphans, and allow_empty_first_page settings." get_paginator]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Incoming HTTP request; not used in the paginator creation logic."
+        <REF> queryset </REF>: QuerySet or iterable "The data collection to be paginated."
+        <REF> per_page </REF>: int "Number of items to include on each page."
+        <REF> orphans </REF>: int "Minimum number of items allowed on the last page; defaults to 0."
+        <REF> allow_empty_first_page </REF>: bool "Whether an empty first page is allowed; defaults to True."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> paginator_result </REF>: Paginator "The paginator object returned by self.paginator."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.paginator with queryset, per_page, orphans, and allow_empty_first_page, then return its result. RESULT paginator_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Logs that an object has been successfully added by creating and returning an admin LogEntry via LogEntry.objects.log_action using the current user, the object's content type and primary key, its string representation, the ADDITION action flag, and the provided change message." log_addition]
+    [INPUTS]
+        <REF> self </REF>: object "The ModelAdmin instance on which log_addition is called."
+        <REF> request </REF>: HttpRequest "The current request, used to identify the logged-in user via request.user.pk."
+        <REF> object </REF>: Model "The newly added object whose addition is being logged; its model class, primary key, and string representation are used."
+        <REF> message </REF>: str "The change message describing the addition."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: LogEntry "The created LogEntry record returned by LogEntry.objects.log_action."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the LogEntry model and the ADDITION action flag from django.contrib.admin.models. RESULT imports]
+            [COMMAND Determine the user_id as request.user.pk, the content_type_id as get_content_type_for_model(object).pk, the object_id as object.pk, and the object_repr as str(object). RESULT log_action_arguments]
+            [COMMAND Call LogEntry.objects.log_action with user_id=request.user.pk, content_type_id=get_content_type_for_model(object).pk, object_id=object.pk, object_repr=str(object), action_flag=ADDITION (constant 1), and change_message=message, noting that object_repr is truncated to 200 characters by log_action. RESULT log_entry]
+            [COMMAND Return the created LogEntry instance. RESULT log_entry]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Logs that an object has been successfully changed by creating a Django admin LogEntry with the request user, the object's content type, pk, string representation, CHANGE action flag, and the provided change message." log_change]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The request object; request.user.pk identifies the user performing the change."
+        <REF> object </REF>: Model object "The changed object; its model, pk, and string representation are used in the log entry."
+        <REF> message </REF>: str "The change message to store in the log entry."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: LogEntry "The admin LogEntry instance created by the log_action call."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import LogEntry model and CHANGE action constant from django.contrib.admin.models. RESULT log_entry_model_and_change_constant]
+            [COMMAND Resolve the ContentType for the supplied object by calling get_content_type_for_model(object). RESULT content_type]
+            [COMMAND Read request.user.pk as user_id. RESULT user_id]
+            [COMMAND Read object.pk as object_id. RESULT object_id]
+            [COMMAND Convert object to its string representation and store it as object_repr. RESULT object_repr]
+            [COMMAND Call LogEntry.objects.log_action with user_id, content_type_id=content_type.pk, object_id, object_repr, action_flag=CHANGE, and change_message=message. RESULT log_entry]
+            [COMMAND Return the created log_entry. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Logs that an object will be deleted by using Django's admin LogEntry manager to create and save a deletion LogEntry; this method must be called before the deletion." log_deletion]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Request whose user is recorded as the actor performing the deletion."
+        <REF> object </REF>: Model instance "Model instance that is about to be deleted; its pk is used as the LogEntry object_id and its content type is resolved."
+        <REF> object_repr </REF>: str "Human-readable representation of the object to store in the LogEntry."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: None "The method returns None because LogEntryManager.log_action() saves the LogEntry and does not return it."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import LogEntry and DELETION from django.contrib.admin.models. RESULT imported_admin_logging_names]
+            [COMMAND Call LogEntry.objects.log_action with user_id equal to request.user.pk, content_type_id equal to get_content_type_for_model(object).pk, object_id equal to object.pk, object_repr equal to the object_repr argument, action_flag equal to DELETION (normally 3), and no change_message argument, causing Django to use the default empty string; log_action constructs and saves the admin LogEntry for the deletion, truncating object_repr to 200 characters, and yields the return value of log_action. RESULT log_action_return_value]
+            [COMMAND Return log_action_return_value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders an HTML checkbox for the given object using the primary key as the checkbox value and the fixed action checkbox name." action_checkbox]
+    [INPUTS]
+        <REF> self </REF>: object "The model admin instance that defines the list_display method."
+        <REF> obj </REF>: object "The object whose primary key is used to render the checkbox."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rendered_checkbox </REF>: string "The rendered HTML for the action checkbox."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the primary key of the given object to a string. RESULT pk_string]
+            [COMMAND Call helpers.checkbox.render with helpers.ACTION_CHECKBOX_NAME and pk_string as arguments. RESULT rendered_checkbox]
+            [COMMAND Return rendered_checkbox as the result of the method. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Combines actions from the admin site and the ModelAdmin's own actions, decorates each with a user-readable short description, and returns a filter iterator that excludes falsy entries." _get_base_actions]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> action_filter </REF>: filter "A filter object yielding truthy (func, name, description) tuples from the combined admin-site and ModelAdmin actions."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize actions as an empty list to accumulate action tuples. RESULT actions]
+            [COMMAND Iterate over self.admin_site.actions, unpacking each element as (name, func). RESULT admin_site_action]
+            [COMMAND Within the for loop over self.admin_site.actions, for the current (name, func), compute description using getattr(func, 'short_description', name.replace('_', ' ')). RESULT description]
+            [COMMAND Within the same for loop, append the tuple (func, name, description) to actions. RESULT actions]
+            [COMMAND Use Python's short-circuit 'or' to set action_source to self.actions if self.actions is truthy, otherwise set action_source to an empty list. RESULT action_source]
+            [COMMAND Create a generator yielding self.get_action(action) for each action in action_source. RESULT generated_actions]
+            [COMMAND Extend actions with all values produced by generated_actions. RESULT actions]
+            [COMMAND Return filter(None, actions), which yields only truthy entries from actions. RESULT action_filter]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Filters the provided actions, keeping an action if its callable has no allowed_permissions attribute or if at least one declared self.has_<permission>_permission method returns truthy for the request." _filter_actions_by_permissions]
+    [INPUTS]
+        <REF> request </REF>: object "The request object used to evaluate permission-check methods."
+        <REF> actions </REF>: list "List of action tuples where each action[0] is the callable whose permissions should be inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> filtered_actions </REF>: list "List of actions that either have no allowed_permissions attribute or pass at least one declared permission check for the given request."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize filtered_actions as an empty list. RESULT filtered_actions]
+            [COMMAND For each action in actions, determine whether action should be kept. RESULT action]
+            [COMMAND Within the for loop over actions, set callable to action[0]. RESULT callable]
+            [COMMAND Within the for loop over actions, if callable does not have the attribute allowed_permissions, append action to filtered_actions and continue to the next action. RESULT filtered_actions]
+            [COMMAND For each action whose callable has allowed_permissions, define permission_checks as a lazy generator that yields getattr(self, 'has_%s_permission' % permission) for each permission in callable.allowed_permissions. RESULT permission_checks]
+            [COMMAND Within the same loop, evaluate any(has_permission(request) for has_permission in permission_checks), which short-circuits at the first permission check that returns truthy for request. RESULT permission_granted]
+            [COMMAND If permission_granted is true, append action to filtered_actions. RESULT filtered_actions]
+            [COMMAND After the loop finishes, return filtered_actions, which includes actions whose callables have no allowed_permissions or whose permission checks pass; actions with empty allowed_permissions fail any() and are not included. RESULT filtered_actions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a dictionary mapping each action name to a (callable, name, description) tuple for the actions allowed by the request, or an empty dictionary when actions are disabled or the popup parameter is present." get_actions]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The ModelAdmin instance whose actions and permission filters are used."
+        <REF> request </REF>: HttpRequest "The HTTP request used to detect the popup parameter and to filter actions by permissions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: dict "A dictionary mapping action names to (func, name, desc) tuples, or an empty dictionary if actions are disabled or the popup variable is present."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the complete base action list by calling self._get_base_actions() RESULT base_actions]
+            [COMMAND Filter base_actions by permissions using self._filter_actions_by_permissions(request, base_actions) RESULT actions]
+            [COMMAND Build the return dictionary by mapping each action name to its (func, name, desc) tuple from actions RESULT action_dict]
+            [COMMAND Return action_dict RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.actions is None (actions disabled; short-circuit prevents request.GET evaluation) or IS_POPUP_VAR is present in request.GET]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty dictionary RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a list of form choices by copying default choices and appending a formatted (name, description) tuple for each available action retrieved from the request." get_action_choices]
+    [INPUTS]
+        <REF> request </REF>: object "The request object used to obtain available actions via self.get_actions(request)."
+        <REF> default_choices </REF>: list "Initial list of choice tuples; defaults to BLANK_CHOICE_DASH."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> choices </REF>: list "A new list of (name, formatted_description) tuples, starting with default_choices and followed by choices derived from each action."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize choices as a new list containing all elements from default_choices by concatenating an empty list with default_choices. RESULT choices]
+            [COMMAND Iterate over each value in self.get_actions(request).values(), unpacking each value into func, name, and description. RESULT action_tuple]
+            [COMMAND Within the loop over actions, compute model_format_dict(self.opts) and format description using percentage formatting to produce formatted_description; create choice tuple (name, formatted_description). RESULT choice]
+            [COMMAND Within the same loop over actions, append choice to choices. RESULT choices]
+            [COMMAND Return the accumulated choices list. RESULT choices]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the action argument into a callable (the provided callable, an unbound method from the admin class, or a registered admin-site action), normalizes the action name, and returns it with a human-readable description; returns None if the admin-site action lookup fails with KeyError." get_action]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin instance "The ModelAdmin instance on which the action is being resolved; provides admin_site and the class used for unbound-method lookup."
+        <REF> action </REF>: callable or str "A callable object, or a string naming a ModelAdmin method or a registered admin-site action."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple or None "A tuple (func, action, description) containing the resolved callable, normalized action name, and short description; None when the admin-site lookup raises KeyError."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the action parameter into func and a normalized action name by selecting the appropriate lookup path. RESULT func, action]
+            [COMMAND Derive description by selecting the appropriate branch based on whether func has a short_description attribute. RESULT description]
+            [COMMAND Return the tuple (func, action, description). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If action is callable]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set func to the callable action. RESULT func]
+            [COMMAND Set action to action.__name__ to normalize it to a string name. RESULT action]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If action is not callable and self.__class__ has an attribute named action]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set func to getattr(self.__class__, action), retrieving the unbound method from the class so calling conventions match plain functions. RESULT func]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If action is not callable and is not an attribute of self.__class__, treat it as a registered admin-site action]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set func to self.admin_site.get_action(action). RESULT func]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the admin-site lookup path, if self.admin_site.get_action(action) raises KeyError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the KeyError and return None immediately, skipping the remaining steps. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After action resolution, if func has a short_description attribute]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set description to func.short_description. RESULT description]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After action resolution, if func does not have a short_description attribute]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set description to capfirst(action.replace('_', ' ')). RESULT description]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured sequence of fields to be displayed on the changelist by accessing self.list_display." get_list_display]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "HTTP request object; unused in this method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self.list_display </REF>: sequence "The fields to be displayed on the changelist."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of self.list_display as the sequence of fields to be displayed on the changelist. RESULT self.list_display]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns self.list_display_links directly when it is truthy, None, or list_display is empty; otherwise returns a single-element list containing the first item of list_display." get_list_display_links]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming HTTP request for the changelist; not used by this field-selection logic."
+        <REF> list_display </REF>: sequence "The list of field names currently configured for display on the changelist."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: sequence|None "The value of self.list_display_links when the direct-return condition is met; otherwise a list containing only the first element of list_display."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate using short-circuit or semantics whether self.list_display_links is truthy, or is None, or list_display is falsy. RESULT _condition_met]
+            [COMMAND If _condition_met is true, return self.list_display_links unchanged. RESULT _direct_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When self.list_display_links is falsy, is not None, and list_display is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert list_display to a list and take the slice containing only its first element. RESULT _first_item_list]
+            [COMMAND Return the first-item list. RESULT _fallback_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the list_filter attribute of the current object, which specifies the fields to display as filters in the changelist sidebar." get_list_filter]
+    [INPUTS]
+        <REF> self </REF>: object "The current model admin or changelist-related object instance."
+        <REF> request </REF>: HttpRequest "The HTTP request object; not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> list_filter </REF>: sequence "The list_filter attribute value, typically a list or tuple of field names."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the list_filter attribute on self and return its value without modification. RESULT list_filter]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured list_select_related attribute of the admin instance so the changelist query can use the specified related fields." get_list_select_related]
+    [INPUTS]
+        <REF> self </REF>: object "The current model admin instance."
+        <REF> request </REF>: HttpRequest "The current request object; not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The value of self.list_select_related, which is a set, list, tuple, or boolean used for select_related() in the changelist query."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the list_select_related attribute from self and return it to the caller. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured search_fields sequence that should be used when a search query is submitted." get_search_fields]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming search request; not referenced in this implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: sequence "The sequence of fields to be searched."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.search_fields as the sequence of fields to be searched. RESULT self.search_fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Filters the provided Django queryset by applying each whitespace-separated token of the search term across the configured search fields using OR-combined ORM lookups, and returns the filtered queryset plus a boolean indicating whether DISTINCT may be required." get_search_results]
+    [INPUTS]
+        <REF> self </REF>: object "Django ModelAdmin instance providing get_search_fields(request) and opts, used for search configuration and distinct checks."
+        <REF> request </REF>: object "Current Django request object passed to get_search_fields to obtain the searchable fields."
+        <REF> queryset </REF>: QuerySet "Initial Django queryset to be filtered by the search term."
+        <REF> search_term </REF>: str "Keyword search string; it is split on whitespace into tokens, and each token is applied as an AND filter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A tuple (queryset, use_distinct) where queryset is the filtered queryset and use_distinct is a boolean indicating whether the results may require DISTINCT handling."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested helper construct_search(field_name) to convert a search field name into a Django ORM lookup expression. If field_name starts with '^', return field_name[1:] + '__istartswith'; if it starts with '=', return field_name[1:] + '__iexact'; if it starts with '@', return field_name[1:] + '__search'. Otherwise, resolve the field path: set opts = queryset.model._meta, split field_name by LOOKUP_SEP, initialize prev_field = None, and for each path_part, replace 'pk' with opts.pk.name, try to get field = opts.get_field(path_part); on FieldDoesNotExist, if prev_field and prev_field.get_lookup(path_part) are truthy, return the original field_name; if the field is successfully resolved, set prev_field = field and, if field has get_path_info, update opts = field.get_path_info()[-1].to_opts. After the loop, return field_name + '__icontains'. RESULT construct_search]
+            [COMMAND Initialize use_distinct = False. RESULT use_distinct]
+            [COMMAND Set search_fields = self.get_search_fields(request). RESULT search_fields]
+            [COMMAND If search_fields and search_term are both truthy, build orm_lookups = [construct_search(str(search_field)) for search_field in search_fields]; otherwise skip the if body and proceed to the return step. RESULT orm_lookups]
+            [COMMAND Within the if search_fields and search_term block, for each bit in search_term.split(), build or_queries = [models.Q(**{orm_lookup: bit}) for orm_lookup in orm_lookups], combine them with reduce(operator.or_, or_queries), and set queryset = queryset.filter(combined_Q). RESULT queryset]
+            [COMMAND Within the if search_fields and search_term block, after the token loop, execute use_distinct |= any(lookup_needs_distinct(self.opts, search_spec) for search_spec in orm_lookups); the RHS generator is evaluated eagerly for the augmented assignment, though any(...) itself short-circuits on the first true search_spec. RESULT use_distinct]
+            [COMMAND Return the tuple (queryset, use_distinct). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the preserved filters querystring wrapped in a _changelist_filters URL-encoded parameter when filter preservation is enabled and a resolver match exists, otherwise returns an empty string." get_preserved_filters]
+    [INPUTS]
+        <REF> self </REF>: object "Bound admin class instance that provides preserve_filters and model metadata."
+        <REF> request </REF>: django.http.HttpRequest "HTTP request whose resolver_match and GET query parameters are used to build the preserved filters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: str "URL-encoded query string containing _changelist_filters if preserved filters exist; empty string otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign request.resolver_match to match. RESULT match]
+            [COMMAND Evaluate the short-circuit condition self.preserve_filters and match; if it is false, follow the alternative flow for the false outer condition. RESULT outer_condition]
+            [COMMAND If the outer condition is true, assign self.model._meta to opts. RESULT opts]
+            [COMMAND Build current_url using the '%s:%s' format with match.app_name and match.url_name. RESULT current_url]
+            [COMMAND Build changelist_url using the 'admin:%s_%s_changelist' format with opts.app_label and opts.model_name. RESULT changelist_url]
+            [COMMAND If current_url equals changelist_url, set preserved_filters to request.GET.urlencode(); otherwise follow the alternative flow for a non-changelist URL. RESULT preserved_filters]
+            [COMMAND If preserved_filters is truthy, return urlencode({'_changelist_filters': preserved_filters}); otherwise return an empty string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.preserve_filters is falsy, or match is falsy after self.preserve_filters is evaluated as truthy (short-circuit and).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: current_url does not equal changelist_url.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set preserved_filters to request.GET.get('_changelist_filters'). RESULT preserved_filters]
+            [COMMAND If preserved_filters is truthy, return urlencode({'_changelist_filters': preserved_filters}); otherwise return an empty string. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the change message list produced by delegating to the helper function construct_change_message with the given form, formsets, and add flag." construct_change_message]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "HTTP request object; not used by the method body."
+        <REF> form </REF>: Form "Form instance whose changed_data is inspected for change messages."
+        <REF> formsets </REF>: iterable "Iterable of formsets containing new_objects, changed_objects, and deleted_objects."
+        <REF> add </REF>: bool "Boolean flag indicating whether the object is being added; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> change_message </REF>: list "List of change messages returned by the delegate function construct_change_message."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call construct_change_message with form, formsets, and add and store the returned change message list in change_message. RESULT change_message]
+            [COMMAND Return change_message to the caller. RESULT change_message]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes the message level, accepting an integer or a named string constant, and forwards the message to Django's messages.add_message backend for delivery to the user." message_user]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The current request object that the Django messages framework uses to store the message."
+        <REF> message </REF>: str "The message text to send to the user."
+        <REF> level </REF>: int or str "The message level as an integer constant or a named string; defaults to messages.INFO."
+        <REF> extra_tags </REF>: str "Extra tags to attach to the message; defaults to an empty string."
+        <REF> fail_silently </REF>: bool "Determines whether errors from the messages framework are suppressed; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the message level: if level is an instance of int, keep it unchanged as the normalized level. RESULT level]
+            [COMMAND If level is not an instance of int, treat it as a named level string by calling level.upper() and looking up that attribute on messages.constants; if the lookup succeeds, assign the found constant to level. RESULT level]
+            [COMMAND Call messages.add_message with request, level, message, extra_tags, and fail_silently. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: While normalizing a non-int level, level.upper() or the attribute lookup on messages.constants raises AttributeError, meaning the level name is invalid or level is not string-like.]
+        [LOG "Bad message level string: `{level}`. Possible values are: {levels_repr}."]
+        [THROW ValueError "Indicates that the provided message level string cannot be resolved to a valid Django message level constant."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns an unsaved model instance from the supplied ModelForm by calling save with commit=False." save_form]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Incoming HTTP request; unused in the method body."
+        <REF> form </REF>: ModelForm "Bound ModelForm containing the data used to populate the model instance."
+        <REF> change </REF>: bool "Indicates whether the object is being changed (True) or added (False); unused in the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> unsaved_instance </REF>: Model "Model instance populated from the form's cleaned_data but not yet saved to the database."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call save on the form with commit=False to build an unsaved model instance, then return that instance to the caller. RESULT unsaved_instance]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Saves the given model instance to the database by calling its save method and discarding the return value." save_model]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request object associated with the save action."
+        <REF> obj </REF>: Model "The model instance to save."
+        <REF> form </REF>: Form "The form instance containing validated data for the model."
+        <REF> change </REF>: bool "Indicates whether the object is being changed or added."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call save() on obj and discard its return value to persist the model instance to the database. RESULT obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deletes a given model instance from the database by invoking its delete method." delete_model]
+    [INPUTS]
+        <REF> self </REF>: object "The current model admin instance."
+        <REF> request </REF>: HttpRequest "The HTTP request object."
+        <REF> obj </REF>: Model instance "The model instance to delete."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call delete() on the provided model instance obj to remove it from the database. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deletes the given queryset from the database." delete_queryset]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request object accepted by this method; unused by the deletion logic."
+        <REF> queryset </REF>: QuerySet "The queryset whose matched rows should be deleted from the database."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call queryset.delete() to delete all rows matched by the queryset from the database, applying Django's bulk-deletion and cascade behavior; if the queryset is empty, no rows are deleted. The call result is not assigned or returned. RESULT deletion_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Saves the given inline formset to the database by calling formset.save()." save_formset]
+    [INPUTS]
+        <REF> self </REF>: object "The current model admin instance."
+        <REF> request </REF>: HttpRequest "The HTTP request associated with the save operation."
+        <REF> form </REF>: Form "The parent form associated with the inline formset."
+        <REF> formset </REF>: InlineFormSet "The inline formset to save to the database."
+        <REF> change </REF>: bool "Indicates whether this is a change or add operation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Save the inline formset to the database by calling formset.save(). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Saves the parent form's many-to-many relations, then iterates over all inline formsets and calls save_formset for each one." save_related]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming HTTP request for the save operation."
+        <REF> form </REF>: ModelForm "The already-saved parent form, after save_form() and save_model() have been called."
+        <REF> formsets </REF>: iterable "The collection of inline formsets whose related objects must be saved; may be empty."
+        <REF> change </REF>: bool "True when the parent object is being changed, False when it is being added."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke form.save_m2m() to persist all many-to-many field values from form.cleaned_data onto the already-saved parent model instance. RESULT None]
+            [COMMAND For each formset in formsets, in iteration order, invoke self.save_formset(request, form, formset, change=change) to save the current inline formset; if formsets is empty, perform no loop iterations. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders the Django admin add/change form by preparing preserved filters, checking for editable inline formsets, enriching context with permission and form metadata, selecting the appropriate template, and returning a TemplateResponse." render_change_form]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "Admin class instance providing model metadata, permissions, templates, save flags, and the admin site."
+        <REF> request </REF>: HttpRequest "Incoming HTTP request used for permissions, preserved filters, and current_app assignment."
+        <REF> context </REF>: dict "Template context containing adminform and inline_admin_formsets; updated with rendering variables."
+        <REF> add </REF>: bool "Whether the form is for adding a new object; defaults to False."
+        <REF> change </REF>: bool "Whether the form is for changing an existing object; defaults to False."
+        <REF> form_url </REF>: str "POST target URL for the form; defaults to empty string."
+        <REF> obj </REF>: Model or None "The object being edited, or None when adding; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: TemplateResponse "Rendered admin add/change form template response with the fully updated context."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store self.model._meta in opts. RESULT opts]
+            [COMMAND Store opts.app_label in app_label. RESULT app_label]
+            [COMMAND Store the result of self.get_preserved_filters(request) in preserved_filters. RESULT preserved_filters]
+            [COMMAND Call add_preserved_filters with {'preserved_filters': preserved_filters, 'opts': opts} and the current form_url; assign the result back to form_url. RESULT form_url]
+            [COMMAND Store the result of self.get_view_on_site_url(obj) in view_on_site_url. RESULT view_on_site_url]
+            [COMMAND Set has_editable_inline_admin_formsets to False. RESULT has_editable_inline_admin_formsets]
+            [COMMAND For each inline in context['inline_admin_formsets'], if inline.has_add_permission or inline.has_change_permission or inline.has_delete_permission is truthy, set has_editable_inline_admin_formsets to True and break; if no inline satisfies the condition, leave the flag False. RESULT has_editable_inline_admin_formsets]
+            [COMMAND Update context with add=add, change=change, has_view_permission=self.has_view_permission(request, obj), has_add_permission=self.has_add_permission(request), has_change_permission=self.has_change_permission(request, obj), has_delete_permission=self.has_delete_permission(request, obj), has_editable_inline_admin_formsets=has_editable_inline_admin_formsets, has_file_field computed from context['adminform'].form.is_multipart() or any(admin_formset.formset.is_multipart() for admin_formset in context['inline_admin_formsets']) with short-circuit or evaluation, has_absolute_url calculated as view_on_site_url is not None, absolute_url=view_on_site_url, form_url=form_url, opts=opts, content_type_id=get_content_type_for_model(self.model).pk, save_as=self.save_as, save_on_top=self.save_on_top, to_field_var=TO_FIELD_VAR, is_popup_var=IS_POPUP_VAR, app_label=app_label. RESULT context]
+            [COMMAND If add is truthy and self.add_form_template is not None, using short-circuit evaluation, assign form_template = self.add_form_template; otherwise assign form_template = self.change_form_template. RESULT form_template]
+            [COMMAND Set request.current_app to self.admin_site.name so reverse URL resolution uses this admin site namespace. RESULT request]
+            [COMMAND Return TemplateResponse(request, form_template or the standard fallback change-form templates, context), using the fallback templates when form_template is falsy; the fallbacks are 'admin/<app_label>/<model_name>/change_form.html', 'admin/<app_label>/change_form.html', and 'admin/change_form.html'. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines the appropriate HTTP response after a new object is saved in the Django admin add view, handling popup responses, save-and-continue, save-and-add-another, and default save actions." response_add]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request containing POST data that indicates which save action was triggered."
+        <REF> obj </REF>: Model "The newly added model instance."
+        <REF> post_url_continue </REF>: str or None "Optional URL to redirect to for a continue action; defaults to the object's change URL when None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: HttpResponse "A TemplateResponse for popup requests, an HttpResponseRedirect for continue/add-another/plain save paths, or the result of response_post_save_add for the default save path."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set opts to obj._meta. RESULT opts]
+            [COMMAND Compute preserved_filters by calling self.get_preserved_filters(request). RESULT preserved_filters]
+            [COMMAND Build obj_url by reversing the admin change URL using opts.app_label, opts.model_name, quote(obj.pk), and current_app=self.admin_site.name. RESULT obj_url]
+            [COMMAND Determine obj_repr: if self.has_change_permission(request, obj) is true, set obj_repr to format_html('<a href="{}">{}</a>', urlquote(obj_url), obj); otherwise set obj_repr to str(obj). RESULT obj_repr]
+            [COMMAND Create msg_dict with keys 'name' set to opts.verbose_name and 'obj' set to obj_repr. RESULT msg_dict]
+            [COMMAND Inspect request.POST for the presence of IS_POPUP_VAR, '_continue', '_saveasnew' combined with save_as_continue and change permission, '_addanother', or the default fallback, and select the corresponding response branch. RESULT response_branch]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: IS_POPUP_VAR is in request.POST]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set to_field to request.POST.get(TO_FIELD_VAR). RESULT to_field]
+            [COMMAND Within the popup branch, if to_field is truthy, set attr to str(to_field); otherwise set attr to obj._meta.pk.attname. RESULT attr]
+            [COMMAND Set value to obj.serializable_value(attr). RESULT value]
+            [COMMAND Build popup_response_data by JSON-encoding {'value': str(value), 'obj': str(obj)}. RESULT popup_response_data]
+            [COMMAND Return TemplateResponse(request, self.popup_response_template or ['admin/%s/%s/popup_response.html' % (opts.app_label, opts.model_name), 'admin/%s/popup_response.html' % opts.app_label, 'admin/popup_response.html'], {'popup_response_data': popup_response_data}). RESULT http_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: '_continue' is in request.POST, or '_saveasnew' is in request.POST and self.save_as_continue is true and self.has_change_permission(request, obj) is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set msg to _('The {name} "{obj}" was added successfully.'). RESULT msg]
+            [COMMAND If self.has_change_permission(request, obj), append ' ' + _('You may edit it again below.') to msg. RESULT msg]
+            [COMMAND Call self.message_user(request, format_html(msg, **msg_dict), messages.SUCCESS). RESULT message_user_result]
+            [COMMAND If post_url_continue is None, set post_url_continue to obj_url. RESULT post_url_continue]
+            [COMMAND Set post_url_continue to add_preserved_filters({'preserved_filters': preserved_filters, 'opts': opts}, post_url_continue). RESULT post_url_continue]
+            [COMMAND Return HttpResponseRedirect(post_url_continue). RESULT http_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: '_addanother' is in request.POST]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set msg to format_html(_('The {name} "{obj}" was added successfully. You may add another {name} below.'), **msg_dict). RESULT msg]
+            [COMMAND Call self.message_user(request, msg, messages.SUCCESS). RESULT message_user_result]
+            [COMMAND Set redirect_url to request.path. RESULT redirect_url]
+            [COMMAND Set redirect_url to add_preserved_filters({'preserved_filters': preserved_filters, 'opts': opts}, redirect_url). RESULT redirect_url]
+            [COMMAND Return HttpResponseRedirect(redirect_url). RESULT http_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: None of the popup, continue/save-as-new, or add-another conditions match (default save)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set msg to format_html(_('The {name} "{obj}" was added successfully.'), **msg_dict). RESULT msg]
+            [COMMAND Call self.message_user(request, msg, messages.SUCCESS). RESULT message_user_result]
+            [COMMAND Return self.response_post_save_add(request, obj). RESULT http_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines the HttpResponse for a Django admin change view, returning a popup TemplateResponse when requested, and otherwise showing a success message and redirecting according to the selected save button or delegating to response_post_save_change." response_change]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The Django request object whose POST data identifies the popup mode and the chosen submit action."
+        <REF> obj </REF>: Model "The model instance that was changed; used for model metadata, serialized values, and redirect targets."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponse "A TemplateResponse for popup requests, an HttpResponseRedirect for the selected save action, or the return value of response_post_save_change for the default save action."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine if the popup marker IS_POPUP_VAR is in request.POST. If yes, execute the popup alternative flow and return its TemplateResponse immediately; otherwise continue to normal processing. RESULT popup_decision]
+            [COMMAND When IS_POPUP_VAR is not in request.POST, set opts to self.model._meta. RESULT opts]
+            [COMMAND When IS_POPUP_VAR is not in request.POST, set preserved_filters to self.get_preserved_filters(request). RESULT preserved_filters]
+            [COMMAND When IS_POPUP_VAR is not in request.POST, build msg_dict with 'name' set to opts.verbose_name and 'obj' set to format_html('<a href="{}">{}</a>', urlquote(request.path), obj). RESULT msg_dict]
+            [COMMAND When IS_POPUP_VAR is not in request.POST, evaluate request.POST for '_continue', then '_saveasnew', then '_addanother'. Use the first matching alternative flow; if none match, use the default save alternative flow. RESULT submit_decision]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: IS_POPUP_VAR in request.POST]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the popup branch, set opts to obj._meta. RESULT opts]
+            [COMMAND In the popup branch, set to_field to request.POST.get(TO_FIELD_VAR). RESULT to_field]
+            [COMMAND In the popup branch, set attr to str(to_field) if to_field is truthy, otherwise opts.pk.attname. RESULT attr]
+            [COMMAND In the popup branch, set value to request.resolver_match.kwargs['object_id']. RESULT value]
+            [COMMAND In the popup branch, set new_value to obj.serializable_value(attr). RESULT new_value]
+            [COMMAND In the popup branch, build popup_response_data as json.dumps({'action': 'change', 'value': str(value), 'obj': str(obj), 'new_value': str(new_value)}). RESULT popup_response_data]
+            [COMMAND In the popup branch, return TemplateResponse(request, self.popup_response_template or ['admin/%s/%s/popup_response.html' % (opts.app_label, opts.model_name), 'admin/%s/popup_response.html' % opts.app_label, 'admin/popup_response.html'], {'popup_response_data': popup_response_data}). RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: IS_POPUP_VAR not in request.POST and '_continue' in request.POST]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the '_continue' branch, build msg with format_html(_('The {name} "{obj}" was changed successfully. You may edit it again below.'), **msg_dict). RESULT msg]
+            [COMMAND In the '_continue' branch, call self.message_user(request, msg, messages.SUCCESS). RESULT message_sent]
+            [COMMAND In the '_continue' branch, set redirect_url to request.path. RESULT redirect_url]
+            [COMMAND In the '_continue' branch, set redirect_url to add_preserved_filters({'preserved_filters': preserved_filters, 'opts': opts}, redirect_url). RESULT redirect_url]
+            [COMMAND In the '_continue' branch, return HttpResponseRedirect(redirect_url). RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: IS_POPUP_VAR not in request.POST and '_saveasnew' in request.POST]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the '_saveasnew' branch, build msg with format_html(_('The {name} "{obj}" was added successfully. You may edit it again below.'), **msg_dict). RESULT msg]
+            [COMMAND In the '_saveasnew' branch, call self.message_user(request, msg, messages.SUCCESS). RESULT message_sent]
+            [COMMAND In the '_saveasnew' branch, set redirect_url to reverse('admin:%s_%s_change' % (opts.app_label, opts.model_name), args=(obj.pk,), current_app=self.admin_site.name). RESULT redirect_url]
+            [COMMAND In the '_saveasnew' branch, set redirect_url to add_preserved_filters({'preserved_filters': preserved_filters, 'opts': opts}, redirect_url). RESULT redirect_url]
+            [COMMAND In the '_saveasnew' branch, return HttpResponseRedirect(redirect_url). RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: IS_POPUP_VAR not in request.POST and '_addanother' in request.POST]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the '_addanother' branch, build msg with format_html(_('The {name} "{obj}" was changed successfully. You may add another {name} below.'), **msg_dict). RESULT msg]
+            [COMMAND In the '_addanother' branch, call self.message_user(request, msg, messages.SUCCESS). RESULT message_sent]
+            [COMMAND In the '_addanother' branch, set redirect_url to reverse('admin:%s_%s_add' % (opts.app_label, opts.model_name), current_app=self.admin_site.name). RESULT redirect_url]
+            [COMMAND In the '_addanother' branch, set redirect_url to add_preserved_filters({'preserved_filters': preserved_filters, 'opts': opts}, redirect_url). RESULT redirect_url]
+            [COMMAND In the '_addanother' branch, return HttpResponseRedirect(redirect_url). RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: IS_POPUP_VAR not in request.POST and none of '_continue', '_saveasnew', '_addanother' is present in request.POST]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the default save branch, build msg with format_html(_('The {name} "{obj}" was changed successfully.'), **msg_dict). RESULT msg]
+            [COMMAND In the default save branch, call self.message_user(request, msg, messages.SUCCESS). RESULT message_sent]
+            [COMMAND In the default save branch, return self.response_post_save_change(request, obj). RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Redirects to the model changelist with preserved filters when the user has view or change permission, otherwise redirects to the admin index." _response_post_save]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The Django admin ModelAdmin instance on which the method is called."
+        <REF> request </REF>: HttpRequest "The current HTTP request used for permission and preserved-filter state."
+        <REF> obj </REF>: object "The saved object instance; not used in the redirect logic."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponseRedirect "Redirect to the model changelist with preserved filters when the user has view or change permission, otherwise redirect to the admin index."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve model metadata from self.model._meta and store it in opts. RESULT opts]
+            [COMMAND Select and execute the alternative flow based on self.has_view_or_change_permission(request); the selected flow sets post_url. RESULT post_url]
+            [COMMAND Return an HttpResponseRedirect constructed from post_url. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.has_view_or_change_permission(request) returns True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the Django admin changelist URL for the model using opts.app_label and opts.model_name with current_app=self.admin_site.name, and store it in post_url. RESULT post_url]
+            [COMMAND Retrieve preserved filters from the request using self.get_preserved_filters(request), and store them in preserved_filters. RESULT preserved_filters]
+            [COMMAND Call add_preserved_filters with {'preserved_filters': preserved_filters, 'opts': opts} and the current post_url, and store the result in post_url. RESULT post_url]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.has_view_or_change_permission(request) returns False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the Django admin index URL with current_app=self.admin_site.name, and store it in post_url. RESULT post_url]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines and returns the post-save redirect for a newly added object by delegating to self._response_post_save(request, obj)." response_post_save_add]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance providing the _response_post_save helper method."
+        <REF> request </REF>: HttpRequest "Incoming request object forwarded unchanged to _response_post_save."
+        <REF> obj </REF>: object "Newly added object forwarded unchanged to _response_post_save."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> redirect_target </REF>: HttpResponseRedirect "Redirect response returned by _response_post_save and passed through to the caller."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._response_post_save(request, obj) and return its result directly to the caller. RESULT redirect_target]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines where to redirect after saving an existing object by delegating to _response_post_save and returning its result." response_post_save_change]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request object for the save operation."
+        <REF> obj </REF>: object "The existing object being edited."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: HttpResponseRedirect "The redirect target returned by _response_post_save."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _response_post_save with request and obj and immediately return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Handles a submitted Django admin action form by parsing the submitted action index, building and validating the form, applying the selected action to either the selected objects or all objects when select_across is set, and returning the action's response, a redirect to the current page, or None." response_action]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The POST request containing the action form data and selected object IDs."
+        <REF> queryset </REF>: QuerySet "The base queryset of objects that the admin action may operate on."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: HttpResponseBase or None "The action's HTTP response, an HttpResponseRedirect to the current page, or None when the action is not handled."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Parse action_index from request.POST.get('index', 0) with int(); if a ValueError is raised, set action_index to 0. RESULT action_index]
+            [COMMAND Create a mutable copy of request.POST as data. RESULT data]
+            [COMMAND Remove helpers.ACTION_CHECKBOX_NAME and 'index' from data using pop(..., None). RESULT data]
+            [COMMAND Set data['action'] to data.getlist('action')[action_index]; if IndexError is raised, leave data unchanged. RESULT data]
+            [COMMAND Build action_form as self.action_form(data, auto_id=None). RESULT action_form]
+            [COMMAND Assign self.get_action_choices(request) to action_form.fields['action'].choices. RESULT action_form]
+            [COMMAND Check action_form.is_valid(); if false, branch to the invalid form alternative. RESULT is_valid]
+            [COMMAND Get action from action_form.cleaned_data['action']. RESULT action]
+            [COMMAND Get select_across from action_form.cleaned_data['select_across']. RESULT select_across]
+            [COMMAND Get func from self.get_actions(request)[action][0]. RESULT func]
+            [COMMAND Get selected from request.POST.getlist(helpers.ACTION_CHECKBOX_NAME). RESULT selected]
+            [COMMAND Check selected and select_across; if selected is empty and select_across is false, branch to the no-selection alternative. RESULT selection_check]
+            [COMMAND If select_across is false, replace queryset with queryset.filter(pk__in=selected); otherwise keep queryset unchanged. RESULT queryset]
+            [COMMAND Call response = func(self, request, queryset). RESULT response]
+            [COMMAND If isinstance(response, HttpResponseBase), return response; otherwise return HttpResponseRedirect(request.get_full_path()). RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: action_form.is_valid() is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set msg to _('No action selected.'). RESULT msg]
+            [COMMAND Call self.message_user(request, msg, messages.WARNING). RESULT None]
+            [COMMAND Return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: selected is empty and select_across is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set msg to _('Items must be selected in order to perform actions on them. No items have been changed.'). RESULT msg]
+            [COMMAND Call self.message_user(request, msg, messages.WARNING). RESULT None]
+            [COMMAND Return None. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines the HTTP response for the Django admin delete_view stage, returning a popup TemplateResponse when a popup delete is requested and otherwise showing a success message and redirecting to the changelist or admin index after deletion." response_delete]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Incoming HTTP request; its POST data is checked for the popup flag and it is passed to TemplateResponse."
+        <REF> obj_display </REF>: str "Display name of the deleted object, used in the success message."
+        <REF> obj_id </REF>: object "Identifier of the deleted object, converted to a string for the popup response payload."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: HttpResponse "TemplateResponse for popup delete requests or HttpResponseRedirect to the appropriate post-delete URL."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve opts from self.model._meta. RESULT opts]
+            [COMMAND After confirming IS_POPUP_VAR is not in request.POST, show a success message to the user using the translated string 'The %(name)s "%(obj)s" was deleted successfully.' formatted with opts.verbose_name and obj_display, at messages.SUCCESS level. RESULT success_message_sent]
+            [COMMAND Determine post_url by checking self.has_change_permission(request, None); if true, set post_url to reverse('admin:%s_%s_changelist' % (opts.app_label, opts.model_name), current_app=self.admin_site.name), retrieve preserved filters via self.get_preserved_filters(request), and set post_url to add_preserved_filters({'preserved_filters': preserved_filters, 'opts': opts}, post_url); otherwise set post_url to reverse('admin:index', current_app=self.admin_site.name). RESULT post_url]
+            [COMMAND Return HttpResponseRedirect(post_url). RESULT http_response_redirect]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: IS_POPUP_VAR is present in request.POST]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set popup_response_data to json.dumps({'action': 'delete', 'value': str(obj_id)}). RESULT popup_response_data]
+            [COMMAND Select popup_template_list using the short-circuit expression self.popup_response_template or the fallback list of 'admin/%s/%s/popup_response.html' % (opts.app_label, opts.model_name), 'admin/%s/popup_response.html' % opts.app_label, and 'admin/popup_response.html'. RESULT popup_template_list]
+            [COMMAND Return TemplateResponse(request, popup_template_list, {'popup_response_data': popup_response_data}). RESULT template_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders the delete confirmation page by setting the current admin app on the request, adding popup and media variables to the context, and returning a TemplateResponse for the configured or fallback delete confirmation template." render_delete_form]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The admin class instance providing model metadata, admin_site name, media, and delete_confirmation_template."
+        <REF> request </REF>: HttpRequest "The current HTTP request; its current_app attribute is set to the admin site name."
+        <REF> context </REF>: Context "The template context that is updated with to_field_var, is_popup_var, and media."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: TemplateResponse "A TemplateResponse built from the request, selected delete confirmation template, and updated context."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.model._meta and assign it to opts. RESULT opts]
+            [COMMAND Read opts.app_label and assign it to app_label. RESULT app_label]
+            [COMMAND Set request.current_app to self.admin_site.name. RESULT request.current_app]
+            [COMMAND Update context in place by setting the 'to_field_var' key to the TO_FIELD_VAR constant, the 'is_popup_var' key to the IS_POPUP_VAR constant, and the 'media' key to self.media. RESULT context]
+            [COMMAND Determine template_name by checking self.delete_confirmation_template first (short-circuit): if it is truthy, use it as template_name; otherwise build the fallback template list from app_label and opts.model_name, with entries 'admin/{app_label}/{opts.model_name}/delete_confirmation.html', 'admin/{app_label}/delete_confirmation.html', and 'admin/delete_confirmation.html'. RESULT template_name]
+            [COMMAND Return a TemplateResponse constructed with request, template_name, and context. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a list of InlineAdminFormSet helper objects by pairing each inline admin instance with its corresponding formset and collecting per-inline fieldsets, readonly fields, permission flags, and prepopulated fields." get_inline_formsets]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The current HTTP request object passed to inline permission and field retrieval methods."
+        <REF> formsets </REF>: list "List of formsets to be paired with inline instances."
+        <REF> inline_instances </REF>: list "List of inline admin instances to process."
+        <REF> obj </REF>: object "Optional object being edited; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> inline_admin_formsets </REF>: list "List of constructed InlineAdminFormSet objects, one per inline/formset pair."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize inline_admin_formsets as an empty list. RESULT inline_admin_formsets]
+            [COMMAND For each (inline, formset) pair in zip(inline_instances, formsets), stopping when the shorter input is exhausted, convert inline.get_fieldsets(request, obj) to a list and assign to fieldsets. RESULT fieldsets]
+            [COMMAND Within the same loop over (inline, formset) pairs, convert inline.get_readonly_fields(request, obj) to a list and assign to readonly. RESULT readonly]
+            [COMMAND Within the same loop over (inline, formset) pairs, assign the result of inline.has_add_permission(request, obj) to has_add_permission. RESULT has_add_permission]
+            [COMMAND Within the same loop over (inline, formset) pairs, assign the result of inline.has_change_permission(request, obj) to has_change_permission. RESULT has_change_permission]
+            [COMMAND Within the same loop over (inline, formset) pairs, assign the result of inline.has_delete_permission(request, obj) to has_delete_permission. RESULT has_delete_permission]
+            [COMMAND Within the same loop over (inline, formset) pairs, assign the result of inline.has_view_permission(request, obj) to has_view_permission. RESULT has_view_permission]
+            [COMMAND Within the same loop over (inline, formset) pairs, convert inline.get_prepopulated_fields(request, obj) to a dict and assign to prepopulated. RESULT prepopulated]
+            [COMMAND Within the same loop over (inline, formset) pairs, construct helpers.InlineAdminFormSet with inline, formset, fieldsets, prepopulated, readonly, model_admin=self, has_add_permission, has_change_permission, has_delete_permission, and has_view_permission, then assign to inline_admin_formset. RESULT inline_admin_formset]
+            [COMMAND Within the same loop over (inline, formset) pairs, append inline_admin_formset to inline_admin_formsets. RESULT inline_admin_formsets]
+            [COMMAND After the loop completes, return inline_admin_formsets. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Convert the HTTP GET request parameters into an initial form-data dictionary, normalizing ManyToManyField values from comma-separated strings to lists." get_changeform_initial_data]
+    [INPUTS]
+        <REF> self </REF>: object "ModelAdmin instance whose model attribute provides the model class and its field metadata."
+        <REF> request </REF>: HttpRequest "Django HTTP request object; request.GET is the QueryDict of GET query parameters."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> initial </REF>: dict "Dictionary mapping model field names to initial values; normal fields hold strings, while ManyToManyField values hold lists of comma-separated PK strings."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a plain dictionary initial from request.GET.items(), collapsing duplicate query-string keys by keeping the last value. RESULT initial]
+            [COMMAND For each key k in initial, in dictionary iteration order, set f = self.model._meta.get_field(k). If that lookup raises FieldDoesNotExist, continue to the next key. RESULT f]
+            [COMMAND Within the loop over k, if f is an instance of models.ManyToManyField, replace initial[k] with the list produced by initial[k].split(','), converting the comma-separated PK string into a list. RESULT initial]
+            [COMMAND After the loop, return initial. RESULT initial]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Displays a warning message stating that the specified object does not exist and returns a redirect to the admin index page." _get_obj_does_not_exist_redirect]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "Admin class instance providing message_user and admin_site."
+        <REF> request </REF>: HttpRequest "Current HTTP request used to send the warning message."
+        <REF> opts </REF>: Options "Model metadata options providing the verbose_name of the missing object."
+        <REF> object_id </REF>: str "Raw identifier of the missing object, URL-decoded with unquote before being displayed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> redirect_response </REF>: HttpResponseRedirect "HTTP redirect response to the admin index page."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build a message by invoking translation on the literal string '%(name)s with ID "%(key)s" doesn't exist. Perhaps it was deleted?' and substituting 'name' with opts.verbose_name and 'key' with unquote(object_id); assign the formatted message to msg. RESULT msg]
+            [COMMAND Call self.message_user(request, msg, messages.WARNING) to display a warning to the user. RESULT None]
+            [COMMAND Resolve the admin index URL by calling reverse('admin:index', current_app=self.admin_site.name) and assign the resolved URL to url. RESULT url]
+            [COMMAND Return an HttpResponseRedirect constructed from url. RESULT redirect_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Executes the changeform view inside an atomic database transaction on the write database for the model and returns the delegate view's response." changeform_view]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The current admin class instance."
+        <REF> request </REF>: HttpRequest "The incoming HTTP request."
+        <REF> object_id </REF>: int|str|None "The primary key of the object being changed, or None for an add view."
+        <REF> form_url </REF>: str "The URL to use for the form submission."
+        <REF> extra_context </REF>: dict|None "Additional context variables for the changeform template, or None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponse "The HTTP response produced by the delegated changeform view."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the write database alias for self.model using router.db_for_write(self.model). RESULT db_alias]
+            [COMMAND Within an atomic transaction using db_alias, call self._changeform_view(request, object_id, form_url, extra_context) and return its result. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates the current request to AutocompleteJsonView with this ModelAdmin instance bound as model_admin and returns the resulting JSON HTTP response." autocomplete_view]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The ModelAdmin instance to be bound as model_admin on the AutocompleteJsonView."
+        <REF> request </REF>: HttpRequest "The incoming HTTP request containing a GET query dictionary."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: JsonResponse or HttpResponse "The HTTP response produced by AutocompleteJsonView for the given request."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Use the current ModelAdmin instance self as the admin object to bind. RESULT admin_instance]
+            [COMMAND Call AutocompleteJsonView.as_view(model_admin=admin_instance) to create a view callable with model_admin set on the view instance. RESULT view_callable]
+            [COMMAND Invoke view_callable(request) to set up the view, dispatch the request, and execute the autocomplete lookup logic. RESULT response]
+            [COMMAND Return response from autocomplete_view. RESULT final_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If request.method is not GET, AutocompleteJsonView's dispatch returns an HTTP 405 response instead of executing the GET autocomplete logic.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the HTTP 405 response produced by AutocompleteJsonView.dispatch. RESULT final_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates to changeform_view with a None object ID to create a new object and returns the resulting HTTP response." add_view]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming HTTP request for the add view."
+        <REF> form_url </REF>: str "Optional URL for the form; defaults to an empty string."
+        <REF> extra_context </REF>: dict|None "Optional extra context dictionary for the admin change form; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponse "The HTTP response returned by changeform_view."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.changeform_view(request, None, form_url, extra_context) and return its result directly. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates a Django admin change view request to changeform_view by forwarding request, object_id, form_url, and extra_context unchanged, and returns the resulting response." change_view]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "Incoming HTTP request containing metadata, authentication, permissions, and submitted data."
+        <REF> object_id </REF>: str or int or None "Identifier of the object to change; None indicates an add view."
+        <REF> form_url </REF>: str "Optional URL override; defaults to empty string."
+        <REF> extra_context </REF>: dict or None "Additional template context; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponse "The response returned by changeform_view."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.changeform_view(request, object_id, form_url, extra_context) with the original values forwarded as positional arguments and immediately return its response. RESULT response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the queryset of objects edited through list_editable by validating the POSTed primary keys and filtering the base queryset by those keys, falling back to the unfiltered queryset if any key is invalid." _get_list_editable_queryset]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The current Django request containing POST data for list_editable."
+        <REF> prefix </REF>: str "The form prefix used to identify the edited objects in the POST data."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> queryset </REF>: QuerySet "The queryset filtered to the edited primary keys, or the unfiltered queryset if primary key validation fails."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the edited object primary keys by calling self._get_edited_object_pks(request, prefix) and assign the result to object_pks. RESULT object_pks]
+            [COMMAND Get the base queryset by calling self.get_queryset(request) and assign it to queryset. RESULT queryset]
+            [COMMAND Get the primary key field's to_python converter from queryset.model._meta.pk and assign it to validate. RESULT validate]
+            [COMMAND In the try block, iterate over each pk in object_pks and call validate(pk) to convert and validate the primary key. RESULT validated_pks]
+            [COMMAND After the validation loop completes without a ValidationError, return queryset.filter(pk__in=object_pks). RESULT filtered_queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If any call to validate(pk) raises ValidationError while iterating through object_pks, the POST data is considered tampered with.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the unfiltered queryset unchanged to disable the list_editable optimization. RESULT queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Customizes the delete process for the delete view and delete-selected action by returning the shared get_deleted_objects helper result for objs, request, and self.admin_site." get_deleted_objects]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The ModelAdmin instance whose admin_site is passed to the helper."
+        <REF> objs </REF>: Iterable "A homogeneous iterable or QuerySet of model objects to process for deletion."
+        <REF> request </REF>: HttpRequest "The current request; request.user is used for permission checks."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A four-part tuple (deleted_objects, model_count, perms_needed, protected) returned by get_deleted_objects."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the helper function get_deleted_objects(objs, request, self.admin_site) and return its result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: objs is empty]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the empty deletion result tuple ([], {}, set(), []) because get_deleted_objects short-circuits on an empty objs collection. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deletes an object via the admin delete view inside an atomic transaction routed to the model's write database, delegating the actual deletion logic to _delete_view." delete_view]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The admin class instance; used to access the model for database routing."
+        <REF> request </REF>: HttpRequest "The HTTP request object for the delete view."
+        <REF> object_id </REF>: int or str "The identifier of the object to delete."
+        <REF> extra_context </REF>: dict or None "Optional additional context data passed to the internal delete view."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: HttpResponse "The response returned by the internal _delete_view method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the write database alias for self.model using router.db_for_write(self.model). RESULT db_alias]
+            [COMMAND Begin an atomic transaction on db_alias. RESULT atomic_context]
+            [COMMAND Inside the atomic transaction, call self._delete_view(request, object_id, extra_context) and capture its return value. RESULT delete_view_result]
+            [COMMAND Return delete_view_result after the atomic transaction commits. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Handles the Django admin delete view by validating to_field and permissions, fetching the object, computing deletable related objects, performing deletion on a confirmed POST, and otherwise rendering the deletion confirmation page." _delete_view]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The current Django admin request containing POST or GET data and popup state."
+        <REF> object_id </REF>: str "The model object identifier from the URL, possibly URL-encoded, to be unquoted before lookup."
+        <REF> extra_context </REF>: dict or None "Optional dictionary merged into the template context; may override the standard context keys when provided."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> response </REF>: HttpResponse "The admin response: a redirect when the object does not exist, the deletion response on successful confirmed deletion, or a rendered delete confirmation form."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve opts = self.model._meta and app_label = opts.app_label. RESULT opts, app_label]
+            [COMMAND Resolve to_field = request.POST.get(TO_FIELD_VAR, request.GET.get(TO_FIELD_VAR)), preferring the POST value and falling back to the GET value when TO_FIELD_VAR is absent from POST. RESULT to_field]
+            [COMMAND If to_field is truthy and self.to_field_allowed(request, to_field) is false, raise DisallowedModelAdminToField; otherwise continue. RESULT to_field_validation]
+            [COMMAND Resolve obj = self.get_object(request, unquote(object_id), to_field). RESULT obj]
+            [COMMAND If self.has_delete_permission(request, obj) is false, raise PermissionDenied; otherwise continue. RESULT delete_permission_validation]
+            [COMMAND If obj is None, return self._get_obj_does_not_exist_redirect(request, opts, object_id); otherwise continue. RESULT obj_exists]
+            [COMMAND Unpack deleted_objects, model_count, perms_needed, protected from self.get_deleted_objects([obj], request). RESULT deleted_objects, model_count, perms_needed, protected]
+            [COMMAND If request.POST is truthy and protected is false, route to the confirmed-deletion alternative flow; otherwise continue to the confirmation form path. RESULT deletion_confirmed]
+            [COMMAND In the confirmation form path, compute object_name = str(opts.verbose_name). RESULT object_name]
+            [COMMAND In the confirmation form path, if perms_needed or protected is true set title = _('Cannot delete %(name)s') % {'name': object_name}; otherwise set title = _('Are you sure?'). RESULT title]
+            [COMMAND In the confirmation form path, build the context dictionary by starting with self.admin_site.each_context(request), adding the standard deletion context keys (title, object_name, object, deleted_objects, model_count as dict(model_count).items(), perms_lacking, protected, opts, app_label, preserved_filters from self.get_preserved_filters(request), is_popup as whether IS_POPUP_VAR is present in request.POST or request.GET, and to_field), then merging extra_context if truthy otherwise {} so that extra_context overrides earlier keys. RESULT context]
+            [COMMAND In the confirmation form path, return self.render_delete_form(request, context). RESULT delete_form_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj is None after self.has_delete_permission(request, obj) passes.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._get_obj_does_not_exist_redirect(request, opts, object_id). RESULT does_not_exist_redirect]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: request.POST is truthy, protected is false, and perms_needed is falsy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the confirmed-deletion path, compute obj_display = str(obj). RESULT obj_display]
+            [COMMAND In the confirmed-deletion path, compute attr = str(to_field) if to_field is truthy else opts.pk.attname. RESULT attr]
+            [COMMAND In the confirmed-deletion path, compute obj_id = obj.serializable_value(attr). RESULT obj_id]
+            [COMMAND In the confirmed-deletion path, call self.log_deletion(request, obj, obj_display). RESULT deletion_logged]
+            [COMMAND In the confirmed-deletion path, call self.delete_model(request, obj). RESULT model_deleted]
+            [COMMAND In the confirmed-deletion path, return self.response_delete(request, obj_display, obj_id). RESULT delete_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: to_field is truthy and self.to_field_allowed(request, to_field) is false.]
+        [LOG "The supplied to_field cannot be referenced by this model admin."]
+        [THROW DisallowedModelAdminToField "Raised when a to_field is supplied but self.to_field_allowed(request, to_field) returns false."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.has_delete_permission(request, obj) is false.]
+        [LOG "The requesting user does not have delete permission for the object."]
+        [THROW PermissionDenied "Raised when the user lacks delete permission for the requested object."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: request.POST is truthy, protected is false, and perms_needed is truthy.]
+        [LOG "Deletion was confirmed, but related-object permissions are lacking."]
+        [THROW PermissionDenied "Raised inside the confirmed-deletion path when perms_needed is non-empty."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders the Django admin change history page for a model object, returning a redirect if the object does not exist and raising PermissionDenied if the user lacks view or change permission." history_view]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming HTTP request for the admin history view."
+        <REF> object_id </REF>: str "The URL-encoded primary key of the object whose history is being viewed."
+        <REF> extra_context </REF>: dict or None "Optional dictionary of additional template context values; its keys override the default context entries."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> template_response </REF>: TemplateResponse "The rendered admin object history template returned when the object exists and the user has permission."
+        <REF> redirect_response </REF>: HttpResponseRedirect "The redirect returned when the requested object does not exist."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import LogEntry from django.contrib.admin.models. RESULT LogEntry]
+            [COMMAND Read self.model and assign it to model. RESULT model]
+            [COMMAND Call self.get_object(request, unquote(object_id)) and assign the result to obj. RESULT obj]
+            [COMMAND Check that obj is not None before continuing with the history view. RESULT obj]
+            [COMMAND Check that self.has_view_or_change_permission(request, obj) is True. RESULT has_permission]
+            [COMMAND Set opts to model._meta. RESULT opts]
+            [COMMAND Set app_label to opts.app_label. RESULT app_label]
+            [COMMAND Build action_list as LogEntry.objects.filter(object_id=unquote(object_id), content_type=get_content_type_for_model(model)).select_related().order_by('action_time'). RESULT action_list]
+            [COMMAND Build context by starting with self.admin_site.each_context(request), then adding 'title' as _('Change history: %s') % obj, 'action_list', 'module_name' as str(capfirst(opts.verbose_name_plural)), 'object', 'opts', 'preserved_filters' as self.get_preserved_filters(request), and finally merging **(extra_context or {}) so that extra_context keys override earlier values. RESULT context]
+            [COMMAND Set request.current_app to self.admin_site.name. RESULT request]
+            [COMMAND Return TemplateResponse(request, self.object_history_template or ['admin/%s/%s/object_history.html' % (app_label, opts.model_name), 'admin/%s/object_history.html' % app_label, 'admin/object_history.html'], context). RESULT template_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._get_obj_does_not_exist_redirect(request, model._meta, object_id). RESULT redirect_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: has_permission is False]
+        [LOG "Raising PermissionDenied because the current user does not have view or change permission for the object."]
+        [THROW PermissionDenied "Raised to stop rendering the history view when the user lacks the required admin permission."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates inline formsets and inline instances for Django admin add/change views, applying prefix disambiguation, POST-data binding, and validation bypass for view-only inlines." _create_formsets]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The Django HTTP request used to determine POST data and formset binding."
+        <REF> obj </REF>: object "The model instance being edited, or None in add views; passed to formsets and permission checks depending on change."
+        <REF> change </REF>: bool "True for change views; controls whether obj is included in get_formsets_args and whether permission checks receive obj or None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple containing the list of created formsets and the list of corresponding inline instances."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize formsets to an empty list. RESULT formsets]
+            [COMMAND Initialize inline_instances to an empty list. RESULT inline_instances]
+            [COMMAND Initialize prefixes to an empty dictionary. RESULT prefixes]
+            [COMMAND Initialize get_formsets_args to a list containing request. RESULT get_formsets_args]
+            [COMMAND If change is truthy, append obj to get_formsets_args. RESULT get_formsets_args]
+            [COMMAND For each (FormSet, inline) returned by self.get_formsets_with_inlines(*get_formsets_args), set prefix to FormSet.get_default_prefix(). RESULT prefix]
+            [COMMAND Within the outer for loop over (FormSet, inline), set prefixes[prefix] to prefixes.get(prefix, 0) + 1. RESULT prefixes]
+            [COMMAND Within the outer for loop, if prefixes[prefix] is not equal to 1 or prefix is falsy, set prefix to '%s-%s' % (prefix, prefixes[prefix]). RESULT prefix]
+            [COMMAND Within the outer for loop, set formset_params to {'instance': obj, 'prefix': prefix, 'queryset': inline.get_queryset(request)}. RESULT formset_params]
+            [COMMAND Within the outer for loop, if request.method is 'POST', update formset_params with data equal to request.POST.copy(), files equal to request.FILES, and save_as_new equal to '_saveasnew' in request.POST. RESULT formset_params]
+            [COMMAND Within the outer for loop, set formset by calling FormSet(**formset_params). RESULT formset]
+            [COMMAND Within the outer for loop, define the nested function user_deleted_form(request, obj, formset, index) that returns inline.has_delete_permission(request, obj) and ('{}-{}-DELETE'.format(formset.prefix, index) in request.POST), preserving the short-circuiting behavior of the and operator. RESULT user_deleted_form]
+            [COMMAND Within the outer for loop, if not inline.has_change_permission(request, obj if change else None), then for each index, form in enumerate(formset.initial_forms), continue to the next form when user_deleted_form(request, obj, formset, index) is true; otherwise set form._errors to {} and set form.cleaned_data to form.initial to bypass validation. RESULT form]
+            [COMMAND Within the outer for loop, append formset to formsets. RESULT formsets]
+            [COMMAND Within the outer for loop, append inline to inline_instances. RESULT inline_instances]
+            [COMMAND After the outer for loop completes, return the tuple (formsets, inline_instances). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS InlineModelAdmin
+
+[DEFINE_WORKER: "Initializes an inline model admin instance by storing the admin site and parent model, retrieving model metadata, checking model registration, calling the superclass initializer, and applying model metadata defaults to unset verbose names." InlineModelAdmin.__init__]
+    [INPUTS]
+        <REF> parent_model </REF>: Model "The parent model class for this inline admin; may be None for top-level admin configurations."
+        <REF> admin_site </REF>: AdminSite "The admin site instance to store on self.admin_site and use for checking model registration."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the admin_site parameter to the self.admin_site instance attribute. RESULT self.admin_site]
+            [COMMAND Assign the parent_model parameter to the self.parent_model instance attribute. RESULT self.parent_model]
+            [COMMAND Retrieve self.model._meta and assign it to self.opts. RESULT self.opts]
+            [COMMAND Call admin_site.is_registered(self.model) and assign the returned boolean to self.has_registered_model. RESULT self.has_registered_model]
+            [COMMAND Call super().__init__() with no arguments to initialize the parent class. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After calling super().__init__(), self.verbose_name is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.model._meta.verbose_name to self.verbose_name. RESULT self.verbose_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After calling super().__init__(), self.verbose_name_plural is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign self.model._meta.verbose_name_plural to self.verbose_name_plural. RESULT self.verbose_name_plural]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a forms.Media object containing the admin JavaScript assets, including jQuery, select filter, and collapse scripts, with debug or minified suffixes based on settings.DEBUG." media]
+    [INPUTS]
+        <REF> self </REF>: object "Admin configuration object providing filter_vertical, filter_horizontal, and classes attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: forms.Media "Media object with the compiled list of admin JavaScript file URLs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate settings.DEBUG; if it is truthy set extra to an empty string, otherwise set extra to '.min'. RESULT extra]
+            [COMMAND Build the initial js list as ['vendor/jquery/jquery%s.js' % extra, 'jquery.init.js', 'inlines%s.js' % extra]. RESULT js]
+            [COMMAND If self.filter_vertical or self.filter_horizontal is truthy, using Python's short-circuit OR, extend js with ['SelectBox.js', 'SelectFilter2.js']. RESULT js]
+            [COMMAND If self.classes is truthy and 'collapse' is in self.classes, using Python's short-circuit AND, append 'collapse%s.js' % extra to js. RESULT js]
+            [COMMAND Create the final list of admin JavaScript URLs by prefixing each url in js with 'admin/js/'. RESULT admin_js_urls]
+            [COMMAND Return forms.Media(js=admin_js_urls). RESULT media_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured number of extra inline forms from the instance's 'extra' attribute." get_extra]
+    [INPUTS]
+        <REF> self </REF>: object "The inline formset instance whose 'extra' attribute is returned."
+        <REF> request </REF>: HttpRequest "The HTTP request object."
+        <REF> obj </REF>: object or None "The optional object being edited; unused by the method."
+        <REF> kwargs </REF>: dict "Additional keyword arguments; unused by the method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: int "Value of self.extra, typically the number of extra inline forms."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of the current instance's 'extra' attribute. RESULT self.extra]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured minimum number of inline forms from the min_num attribute on self." get_min_num]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming request object; not used by this method."
+        <REF> obj </REF>: object "Optional object associated with the inline form; defaults to None and is not used by this method."
+        <REF> kwargs </REF>: dict "Additional keyword arguments; not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> min_num </REF>: int "The minimum number of inline forms configured on self.min_num."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.min_num to get the configured minimum number of inline forms. RESULT min_num]
+            [COMMAND Return min_num unchanged to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the configured maximum number of extra inline forms by reading the instance attribute self.max_num." get_max_num]
+    [INPUTS]
+        <REF> self </REF>: object "The inline formset instance whose max_num attribute is read."
+        <REF> request </REF>: object "The HTTP request object passed to the inline formset hook."
+        <REF> obj </REF>: object "Optional parent object for which the inline forms are generated; defaults to None."
+        <REF> kwargs </REF>: dict "Additional keyword arguments passed to the hook."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: number "The current value stored in self.max_num, returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the current value of self.max_num from the instance state without modification. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns the BaseInlineFormSet for an inline admin, resolving fields, exclusion, and permission settings and wrapping the form class to prevent deletion of protected related objects and unauthorized changes." get_formset]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest or None "The current admin request; used for permission checks. May be None."
+        <REF> obj </REF>: Model instance or None "The object being edited in the admin; None when adding a new object."
+        <REF> kwargs </REF>: dict "Extra keyword arguments passed to the formset factory; may include 'fields' and may override default formset options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> formset_class </REF>: BaseInlineFormSet subclass "Configured inline formset class to use in admin add/change views."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the fields value: if the 'fields' key is present in kwargs, pop it and assign the popped value to fields, removing the key from kwargs; otherwise compute fields by calling self.get_fieldsets(request, obj) and flattening the result with flatten_fieldsets. RESULT fields]
+            [COMMAND Read the inline admin's exclude configuration by calling self.get_exclude(request, obj); if it is None, set exclude to an empty list, otherwise set exclude to list(excluded). RESULT exclude]
+            [COMMAND Extend exclude with the list returned by self.get_readonly_fields(request, obj). RESULT exclude]
+            [COMMAND If excluded is None, self.form has a _meta attribute, and self.form._meta.exclude is non-empty, extend exclude with self.form._meta.exclude. RESULT exclude]
+            [COMMAND Normalize exclude: if exclude is falsy, set it to None; otherwise keep the existing non-empty list. RESULT exclude]
+            [COMMAND Compute can_delete with short-circuit and: self.can_delete and self.has_delete_permission(request, obj). RESULT can_delete]
+            [COMMAND Build the defaults dictionary with entries 'form': self.form, 'formset': self.formset, 'fk_name': self.fk_name, 'fields': fields, 'exclude': exclude, 'formfield_callback': partial(self.formfield_for_dbfield, request=request), 'extra': self.get_extra(request, obj, **kwargs), 'min_num': self.get_min_num(request, obj, **kwargs), 'max_num': self.get_max_num(request, obj, **kwargs), 'can_delete': can_delete, and then merge remaining kwargs at the end so keys in kwargs override the explicit entries. RESULT defaults]
+            [COMMAND Set base_model_form to defaults['form'] after any kwargs override has been applied. RESULT base_model_form]
+            [COMMAND Compute can_change: if request is truthy, use self.has_change_permission(request, obj); otherwise set can_change to True. RESULT can_change]
+            [COMMAND Compute can_add: if request is truthy, use self.has_add_permission(request, obj); otherwise set can_add to True. RESULT can_add]
+            [COMMAND Define DeleteProtectedModelForm as a nested class inheriting base_model_form, with methods hand_clean_DELETE, is_valid, and has_changed. RESULT DeleteProtectedModelForm]
+            [COMMAND Within DeleteProtectedModelForm.hand_clean_DELETE, if self.cleaned_data.get(DELETION_FIELD_NAME, False) is truthy, determine the write database with router.db_for_write(self._meta.model), create a NestedObjects collector for that database, and return early if self.instance._state.adding is true; otherwise collect self.instance with collector.collect([self.instance]). RESULT collector]
+            [COMMAND Within DeleteProtectedModelForm.hand_clean_DELETE, if collector.protected is non-empty, build the objs list from the protected objects, construct params with class_name, instance, and related_objects via get_text_list(objs, _('and')), and raise ValidationError with the deleting_protected code. RESULT ValidationError]
+            [COMMAND Within DeleteProtectedModelForm.is_valid, call super().is_valid(), store its result, call self.hand_clean_DELETE() regardless of the super validation result, and return the stored result. RESULT is_valid_result]
+            [COMMAND Within DeleteProtectedModelForm.has_changed, if can_change is false and the instance is not being added, return False; if can_add is false and the instance is being added, return False; otherwise delegate to super().has_changed(). RESULT has_changed_result]
+            [COMMAND Assign defaults['form'] = DeleteProtectedModelForm. RESULT defaults['form']]
+            [COMMAND If defaults['fields'] is None and modelform_defines_fields(defaults['form']) is false, set defaults['fields'] to forms.ALL_FIELDS. RESULT defaults['fields']]
+            [COMMAND Return the result of inlineformset_factory(self.parent_model, self.model, **defaults). RESULT formset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: In DeleteProtectedModelForm.hand_clean_DELETE, when the DELETE field flag is truthy, the instance is not being added, and NestedObjects.collect([self.instance]) produces protected related objects in collector.protected.]
+        [LOG "A ValidationError with code 'deleting_protected' is raised: Deleting %(class_name)s %(instance)s would require deleting the following protected related objects: %(related_objects)s."]
+        [THROW ValidationError "Blocks deletion of an inline instance when protected related objects would be deleted; params include class_name, instance, and related_objects."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the form class used by the formset created by get_formset for the given request and optional object, without restricting fields." _get_form_for_get_fields]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request passed through to get_formset."
+        <REF> obj </REF>: Optional[Model] "The object being edited; may be None for new or unmodified objects."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> form </REF>: Type[Form] "The form class stored in the .form attribute of the formset returned by get_formset."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.get_formset(request, obj, fields=None) and store the returned formset object. RESULT formset]
+            [COMMAND Return the form attribute of the formset. RESULT form]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves the parent class queryset for the given request, then returns an empty queryset when the requester lacks view or change permission." get_queryset]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The incoming HTTP request used for permission checks and queryset filtering."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> queryset </REF>: QuerySet "The resulting queryset, empty if the current user lacks view or change permission."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().get_queryset(request) and assign the returned queryset to the local variable queryset. RESULT queryset]
+            [COMMAND If self.has_view_or_change_permission(request) returns false, replace queryset with queryset.none(). RESULT queryset]
+            [COMMAND Return queryset. RESULT queryset]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the requesting user has any of the specified permissions for the target model behind an auto-created ManyToManyField through model." _has_any_perms_for_target_model]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "The ModelAdmin instance whose opts may be an auto-created ManyToManyField through model."
+        <REF> request </REF>: HttpRequest "The current request object providing the user whose permissions are checked."
+        <REF> perms </REF>: Iterable[str] "Iterable of permission codenames such as add, change, delete, and view."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the user has any of the given permissions for the target model; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize opts to self.opts. RESULT opts]
+            [COMMAND For each field in opts.fields in order, check whether field.remote_field is truthy and field.remote_field.model is not self.parent_model; if both conditions hold, reassign opts to field.remote_field.model._meta and break out of the loop immediately. If no field satisfies the condition, leave opts unchanged. RESULT opts]
+            [COMMAND For each perm in perms, call request.user.has_perm with the permission string formed as '%s.%s' % (opts.app_label, get_permission_codename(perm, opts)). RESULT permission_checks]
+            [COMMAND Return True as soon as any permission_checks value is True; if none are True, return False. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether the user has add permission; for auto-created intermediate models it checks the change permission on the related target model, otherwise it delegates to the default admin permission check." has_add_permission]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request object used to determine the current user and permission context."
+        <REF> obj </REF>: object "The model instance being added, if any; not used in this method body but preserved for interface compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permission </REF>: bool "True if add permission is granted; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().has_add_permission(request) and return its result. RESULT inherited_has_add_permission]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.opts.auto_created is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of calling self._has_any_perms_for_target_model(request, ['change']). RESULT target_model_change_permission]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the current user has change permission for the target model, using the auto-created permission shortcut when the model options were auto-created and otherwise delegating to the superclass." has_change_permission]
+    [INPUTS]
+        <REF> self </REF>: object "The model/option instance providing opts and permission helper methods."
+        <REF> request </REF>: HttpRequest "The incoming HTTP request used to evaluate user permissions."
+        <REF> obj </REF>: object or None "Optional target object accepted by the method signature; it is not used by the auto-created branch and is not forwarded to the superclass call."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the user has change permission on the target model, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the target model options were auto-created. RESULT auto_created_flag]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: auto_created_flag is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of self._has_any_perms_for_target_model(request, ['change']). RESULT auto_created_permission_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: auto_created_flag is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of super().has_change_permission(request), passing only request and omitting obj so the superclass default is used. RESULT superclass_permission_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns delete permission by delegating auto-created models to the target model's change permission check and otherwise delegating to the parent admin's delete permission." has_delete_permission]
+    [INPUTS]
+        <REF> self </REF>: object "The model admin instance on which the permission check is invoked."
+        <REF> request </REF>: HttpRequest "The incoming HTTP request used to determine user permissions."
+        <REF> obj </REF>: object or None "The model object being checked for delete permission; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the user has delete permission, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.opts.auto_created is truthy. RESULT auto_created_flag]
+            [COMMAND In the default case where auto_created_flag is falsy, return super().has_delete_permission(request, obj). RESULT super_permission_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: auto_created_flag is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self._has_any_perms_for_target_model(request, ['change']) immediately, exiting the method. RESULT auto_created_permission_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the user has view permission by returning a combined view/change permission check for auto-created target models and delegating to the superclass implementation otherwise." has_view_permission]
+    [INPUTS]
+        <REF> request </REF>: HttpRequest "The HTTP request object used to check permissions."
+        <REF> obj </REF>: object or None "Optional object instance on which view permission is being checked; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> permission_granted </REF>: bool "True if the user has the required view permission, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.opts.auto_created is true. RESULT is_auto_created]
+            [COMMAND If is_auto_created is false, return the result of super().has_view_permission(request). RESULT permission_granted]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If is_auto_created is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of _has_any_perms_for_target_model(request, ['view', 'change']). RESULT permission_granted]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS StackedInline
+
+# CLASS TabularInline
+
+[DEFINE_WORKER: "Returns the ContentType instance that exactly matches the given Django model, model instance, or related object, using for_concrete_model=False so proxy models are not upcast to their concrete parent model." get_content_type_for_model]
+    [INPUTS]
+        <REF> obj </REF>: object "Django model class, model instance, or other value accepted by ContentType.objects.get_for_model."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: ContentType "ContentType instance for obj, resolved with for_concrete_model=False to preserve the exact model or proxy-model content type."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the ContentType class locally from django.contrib.contenttypes.models. RESULT ContentType]
+            [COMMAND Call ContentType.objects.get_for_model with the input obj and for_concrete_model=False to produce the exactly matching ContentType instance. RESULT content_type]
+            [COMMAND Return the produced ContentType instance immediately as the function result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the CSS class 'radiolist' if radio_style equals the VERTICAL constant, otherwise returns 'radiolist inline'." get_ul_class]
+    [INPUTS]
+        <REF> radio_style </REF>: any "Style value compared against the VERTICAL constant to select the returned CSS class."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The selected CSS class: 'radiolist' when radio_style equals VERTICAL, otherwise 'radiolist inline'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compare radio_style with the VERTICAL constant for equality and store the result. RESULT is_vertical]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_vertical is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string literal 'radiolist'. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: is_vertical is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the string literal 'radiolist inline'. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

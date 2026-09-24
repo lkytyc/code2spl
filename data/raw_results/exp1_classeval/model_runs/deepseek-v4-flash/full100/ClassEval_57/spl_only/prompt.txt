@@ -1,0 +1,168 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `MetricsCalculator2.__init__`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Initializes an object without performing any setup or assigning attributes because the method body is empty." __init__]
+    [INPUTS]
+        <REF> self </REF>: object "The instance being initialized."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do nothing; the empty method body contains only the pass statement, so execution yields no operation. RESULT _void]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `MetricsCalculator2.mrr`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes Mean Reciprocal Rank (MRR) for a single tuple input or a list of tuple inputs by weighting each sublist with reciprocal-rank weights, taking the first positive weighted value as the per-item MRR, and returning the overall mean and per-item list; empty input returns 0.0 with [0.0]." mrr]
+    [INPUTS]
+        <REF> data </REF>: tuple or list "Either a tuple (sub_list, total_num) for one query, or a list of such tuples for multiple queries. sub_list must be an iterable of numeric relevance values."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "A pair (mean_mrr, per_item_mrr_list). For tuple input per_item_mrr_list is [mr]; for empty input it is [0.0]; for list input it contains one mr per element."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate data with exact type checks: if type(data) is not list and is not tuple, raise an Exception. RESULT validation_done]
+            [COMMAND If len(data) == 0, return (0.0, [0.0]). RESULT empty_result]
+            [COMMAND Dispatch on type(data): if type(data) == tuple execute the tuple alternative; if type(data) == list execute the list alternative. RESULT type_dispatch]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: type(data) == tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack data into (sub_list, total_num). RESULT unpacked_data]
+            [COMMAND Convert sub_list to a NumPy array named sub_list. RESULT sub_list]
+            [COMMAND If total_num == 0, return (0.0, [0.0]). RESULT tuple_zero_total_result]
+            [COMMAND Since total_num != 0, compute ranking_array = 1.0 / (np.array(list(range(len(sub_list)))) + 1), giving weights [1, 1/2, ..., 1/len(sub_list)]. RESULT ranking_array]
+            [COMMAND Compute mr_np = sub_list * ranking_array elementwise. RESULT mr_np]
+            [COMMAND Initialize mr = 0.0. RESULT mr]
+            [COMMAND Iterate through mr_np in order; if team > 0, set mr = team and break out of the loop. RESULT mr]
+            [COMMAND Return (mr, [mr]). RESULT tuple_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: type(data) == list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize separate_result = []. RESULT separate_result]
+            [COMMAND For each (sub_list, total_num) in data, convert sub_list to a NumPy array. RESULT sub_list]
+            [COMMAND Within the outer loop, if total_num == 0, set mr = 0.0. RESULT mr]
+            [COMMAND Within the outer loop, when total_num != 0, compute ranking_array = 1.0 / (np.array(list(range(len(sub_list)))) + 1), giving weights [1, 1/2, ..., 1/len(sub_list)]. RESULT ranking_array]
+            [COMMAND Within the outer loop, compute mr_np = sub_list * ranking_array elementwise. RESULT mr_np]
+            [COMMAND Within the outer loop, initialize mr = 0.0. RESULT mr]
+            [COMMAND Within the outer loop, iterate through mr_np in order; if team > 0, set mr = team and break out of the inner loop. RESULT mr]
+            [COMMAND Append mr to separate_result. RESULT separate_result]
+            [COMMAND After the outer loop over data completes, compute np.mean(separate_result). RESULT mean_mrr]
+            [COMMAND Return (mean_mrr, separate_result). RESULT list_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: type(data) is neither list nor tuple]
+        [LOG "the input must be a tuple([0,...,1,...],int) or a iteration of list of tuple"]
+        [THROW Exception "Raises an Exception because data must be a tuple (sub_list, total_num) or a list of such tuples."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `MetricsCalculator2.map`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Computes average precision for either a single ranked relevance list or a collection of ranked relevance lists, returning the AP value(s) and, for collections, the mean AP." map]
+    [INPUTS]
+        <REF> data </REF>: list|tuple "Either a tuple (sub_list, total_num) where sub_list is a list of relevance scores, or a list of such tuples."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple(float, list[float]) "For a tuple input returns (ap, [ap]); for a list input returns (mean_ap, list_of_ap_values); for empty data returns (0.0, [0.0])."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate the exact type of data: if it is neither a list nor a tuple, raise an Exception with the message 'the input must be a tuple([0,...,1,...],int) or a iteration of list of tuple'. RESULT data_type_validated]
+            [COMMAND If len(data) is 0, return (0.0, [0.0]). RESULT empty_data_result]
+            [COMMAND Dispatch based on the exact type of data: tuple input takes the single-ranking AP path; list input takes the list-of-rankings mean AP path. RESULT type_dispatch]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: type(data) is exactly tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Unpack data into sub_list and total_num, then convert sub_list to a numpy array. RESULT tuple_data]
+            [COMMAND If total_num is 0, return (0.0, [0.0]). RESULT tuple_zero_return]
+            [COMMAND Build ranking_array as 1.0 divided by (position + 1) for positions 0 through len(sub_list)-1, giving reciprocal ranks [1/1, 1/2, ..., 1/n]. RESULT ranking_array]
+            [COMMAND Initialize right_ranking_list to an empty list and count to 1. RESULT ranking_accumulator_initialized]
+            [COMMAND For each element t in the numpy array sub_list, if t is 0 append 0 to right_ranking_list; otherwise append the current count and then increment count. RESULT right_ranking_list]
+            [COMMAND Compute ap as the sum of (right_ranking_list as a numpy array multiplied by ranking_array) divided by total_num. RESULT ap_value]
+            [COMMAND Return (ap, [ap]). RESULT tuple_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: type(data) is exactly list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize separate_result to an empty list. RESULT separate_result]
+            [COMMAND For each tuple (sub_list, total_num) in data, convert sub_list to a numpy array. RESULT list_item_data]
+            [COMMAND Within the for loop over data, if total_num is 0 set ap to 0.0; otherwise build ranking_array as 1.0 divided by (position + 1), initialize right_ranking_list and count to 1, iterate through sub_list appending 0 for zero elements or the current count and incrementing count for nonzero elements, then compute ap as the sum of (right_ranking_list as a numpy array multiplied by ranking_array) divided by total_num. RESULT list_item_ap]
+            [COMMAND Append the computed ap value to separate_result. RESULT appended_separate_result]
+            [COMMAND After completing the for loop, return (np.mean(separate_result), separate_result). RESULT list_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: type(data) is not list and type(data) is not tuple]
+        [LOG "the input must be a tuple([0,...,1,...],int) or a iteration of list of tuple"]
+        [THROW Exception "Raised when input data is neither a list nor a tuple."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+

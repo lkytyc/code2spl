@@ -1,0 +1,176 @@
+import numpy as np
+
+class KappaCalculator:
+    """
+    This is a class as KappaCalculator, supporting to calculate Cohen's and Fleiss' kappa coefficient.
+    """
+
+    @staticmethod
+    def kappa(testData, k):
+        """
+        Calculate the cohens kappa value of a k-dimensional matrix
+        :param testData: The k-dimensional matrix that needs to calculate the cohens kappa value
+        :param k: int, Matrix dimension
+        :return:float, the cohens kappa value of the matrix
+        >>> KappaCalculator.kappa([[2, 1, 1], [1, 2, 1], [1, 1, 2]], 3)
+        0.25
+        """
+        testData = np.array(testData)
+        total = np.sum(testData)
+
+        # Observed agreement: sum of diagonal / total
+        p_o = np.trace(testData) / total
+
+        # Expected agreement: sum over categories of (row_sum * col_sum) / total^2
+        row_sums = np.sum(testData, axis=1)
+        col_sums = np.sum(testData, axis=0)
+        p_e = np.sum(row_sums * col_sums) / (total ** 2)
+
+        if p_e == 1.0:
+            return 1.0
+
+        kappa = (p_o - p_e) / (1 - p_e)
+        return kappa
+
+    @staticmethod
+    def fleiss_kappa(testData, N, k, n):
+        """
+        Calculate the fliss kappa value of an N * k matrix
+        :param testData: Input data matrix, N * k
+        :param N: int, Number of samples
+        :param k: int, Number of categories
+        :param n: int, Number of raters
+        :return: float, fleiss kappa value
+        >>> KappaCalculator.fleiss_kappa([[0, 0, 0, 0, 14],
+        >>>                              [0, 2, 6, 4, 2],
+        >>>                              [0, 0, 3, 5, 6],
+        >>>                              [0, 3, 9, 2, 0],
+        >>>                              [2, 2, 8, 1, 1],
+        >>>                              [7, 7, 0, 0, 0],
+        >>>                              [3, 2, 6, 3, 0],
+        >>>                              [2, 5, 3, 2, 2],
+        >>>                              [6, 5, 2, 1, 0],
+        >>>                              [0, 2, 2, 3, 7]], 10, 5, 14)
+        0.20993070442195522
+        """
+        testData = np.array(testData, dtype=float)
+
+        # Proportion of raters who assigned each subject to each category
+        # p_j: proportion of all assignments in category j
+        p_j = np.sum(testData, axis=0) / (N * n)
+
+        # P_i: extent of agreement for subject i
+        # P_i = (1 / (n*(n-1))) * (sum_j(n_ij^2) - n)
+        P_i = (np.sum(testData ** 2, axis=1) - n) / (n * (n - 1))
+
+        # Overall observed agreement
+        P_bar = np.mean(P_i)
+
+        # Expected agreement
+        P_e_bar = np.sum(p_j ** 2)
+
+        if P_e_bar == 1.0:
+            return 1.0
+
+        kappa = (P_bar - P_e_bar) / (1 - P_e_bar)
+        return kappa
+
+import unittest
+
+
+class KappaCalculatorTestKappa(unittest.TestCase):
+    def test_kappa_1(self):
+        self.assertEqual(KappaCalculator.kappa([[2, 1, 1], [1, 2, 1], [1, 1, 2]], 3), 0.25)
+
+    def test_kappa_2(self):
+        self.assertAlmostEqual(KappaCalculator.kappa([[2, 2, 1], [1, 2, 1], [1, 1, 2]], 3), 0.19469026548672572)
+
+    def test_kappa_3(self):
+        self.assertAlmostEqual(KappaCalculator.kappa([[2, 1, 2], [1, 2, 1], [1, 1, 2]], 3), 0.19469026548672572)
+
+    def test_kappa_4(self):
+        self.assertAlmostEqual(KappaCalculator.kappa([[2, 1, 1], [2, 2, 1], [1, 1, 2]], 3), 0.19469026548672572)
+
+    def test_kappa_5(self):
+        self.assertAlmostEqual(KappaCalculator.kappa([[2, 1, 1], [1, 2, 2], [1, 1, 2]], 3), 0.19469026548672572)
+
+
+class KappaCalculatorTestFleissKappa(unittest.TestCase):
+    def test_fleiss_kappa_1(self):
+        self.assertEqual(KappaCalculator.fleiss_kappa([[0, 0, 0, 0, 14],
+                                                       [0, 2, 6, 4, 2],
+                                                       [0, 0, 3, 5, 6],
+                                                       [0, 3, 9, 2, 0],
+                                                       [2, 2, 8, 1, 1],
+                                                       [7, 7, 0, 0, 0],
+                                                       [3, 2, 6, 3, 0],
+                                                       [2, 5, 3, 2, 2],
+                                                       [6, 5, 2, 1, 0],
+                                                       [0, 2, 2, 3, 7]], 10, 5, 14), 0.20993070442195522)
+
+    def test_fleiss_kappa_2(self):
+        self.assertEqual(KappaCalculator.fleiss_kappa([[1, 0, 0, 0, 14],
+                                                       [0, 2, 6, 4, 2],
+                                                       [0, 0, 3, 5, 6],
+                                                       [0, 3, 9, 2, 0],
+                                                       [2, 2, 8, 1, 1],
+                                                       [7, 7, 0, 0, 0],
+                                                       [3, 2, 6, 3, 0],
+                                                       [2, 5, 3, 2, 2],
+                                                       [6, 5, 2, 1, 0],
+                                                       [0, 2, 2, 3, 7]], 10, 5, 14), 0.2115748928799344)
+
+    def test_fleiss_kappa_3(self):
+        self.assertEqual(KappaCalculator.fleiss_kappa([[0, 1, 0, 0, 14],
+                                                       [0, 2, 6, 4, 2],
+                                                       [0, 0, 3, 5, 6],
+                                                       [0, 3, 9, 2, 0],
+                                                       [2, 2, 8, 1, 1],
+                                                       [7, 7, 0, 0, 0],
+                                                       [3, 2, 6, 3, 0],
+                                                       [2, 5, 3, 2, 2],
+                                                       [6, 5, 2, 1, 0],
+                                                       [0, 2, 2, 3, 7]], 10, 5, 14), 0.21076904123090398)
+
+    def test_fleiss_kappa_4(self):
+        self.assertEqual(KappaCalculator.fleiss_kappa([[0, 0, 1, 0, 14],
+                                                       [0, 2, 6, 4, 2],
+                                                       [0, 0, 3, 5, 6],
+                                                       [0, 3, 9, 2, 0],
+                                                       [2, 2, 8, 1, 1],
+                                                       [7, 7, 0, 0, 0],
+                                                       [3, 2, 6, 3, 0],
+                                                       [2, 5, 3, 2, 2],
+                                                       [6, 5, 2, 1, 0],
+                                                       [0, 2, 2, 3, 7]], 10, 5, 14), 0.2096583016522883)
+
+    def test_fleiss_kappa_5(self):
+        self.assertEqual(KappaCalculator.fleiss_kappa([[0, 0, 0, 1, 14],
+                                                       [0, 2, 6, 4, 2],
+                                                       [0, 0, 3, 5, 6],
+                                                       [0, 3, 9, 2, 0],
+                                                       [2, 2, 8, 1, 1],
+                                                       [7, 7, 0, 0, 0],
+                                                       [3, 2, 6, 3, 0],
+                                                       [2, 5, 3, 2, 2],
+                                                       [6, 5, 2, 1, 0],
+                                                       [0, 2, 2, 3, 7]], 10, 5, 14), 0.21147425143148907)
+
+
+class KappaCalculatorTest(unittest.TestCase):
+    def test_kappacalculator(self):
+        self.assertEqual(KappaCalculator.kappa([[2, 1, 1], [1, 2, 1], [1, 1, 2]], 3), 0.25)
+        self.assertEqual(KappaCalculator.fleiss_kappa([[0, 0, 0, 0, 14],
+                                                       [0, 2, 6, 4, 2],
+                                                       [0, 0, 3, 5, 6],
+                                                       [0, 3, 9, 2, 0],
+                                                       [2, 2, 8, 1, 1],
+                                                       [7, 7, 0, 0, 0],
+                                                       [3, 2, 6, 3, 0],
+                                                       [2, 5, 3, 2, 2],
+                                                       [6, 5, 2, 1, 0],
+                                                       [0, 2, 2, 3, 7]], 10, 5, 14), 0.20993070442195522)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

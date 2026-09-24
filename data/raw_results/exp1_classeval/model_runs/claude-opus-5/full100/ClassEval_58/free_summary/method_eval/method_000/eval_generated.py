@@ -1,0 +1,108 @@
+import random
+
+class MinesweeperGame:
+    def __init__(self, n, k):
+        self.n = n
+        self.k = k
+
+        # Build internal map filled with zeros
+        self.minesweeper_map = [[0] * n for _ in range(n)]
+        self.player_map = [['-'] * n for _ in range(n)]
+        self.score = 0
+
+        # Place k mines (no collision check — duplicates possible)
+        for _ in range(k):
+            x = random.randint(0, n - 1)
+            y = random.randint(0, n - 1)
+            self.minesweeper_map[x][y] = 'X'
+
+            # Increment neighbor counts (runs even if cell was already a mine)
+            for dx in [-1, 0, 1]:
+                for dy in [-1, 0, 1]:
+                    if dx == 0 and dy == 0:
+                        continue
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < n and 0 <= ny < n:
+                        if self.minesweeper_map[nx][ny] != 'X':
+                            self.minesweeper_map[nx][ny] += 1
+
+    def check_won(self):
+        for i in range(self.n):
+            for j in range(self.n):
+                if self.player_map[i][j] == '-' and self.minesweeper_map[i][j] != 'X':
+                    return False
+        return True
+
+    def sweep(self, x, y):
+        if self.minesweeper_map[x][y] == 'X':
+            return False
+
+        self.player_map[x][y] = self.minesweeper_map[x][y]
+        self.score += 1
+
+        if self.check_won():
+            return True
+
+        return self.player_map
+
+import unittest
+
+class MinesweeperGameTestGenerateMineSweeperMap(unittest.TestCase):
+    def test_generate_mine_sweeper_map(self):
+        minesweeper_game = MinesweeperGame(3, 2)
+        length = len(minesweeper_game.minesweeper_map)
+        mine_num = 0
+        for row in minesweeper_game.minesweeper_map:
+            for cell in row:
+                if cell == 'X':
+                    mine_num += 1
+        self.assertEqual(3, length)
+        self.assertEqual(2, mine_num)
+
+    def test_generate_mine_sweeper_map_2(self):
+        minesweeper_game = MinesweeperGame(3, 1)
+        length = len(minesweeper_game.minesweeper_map)
+        mine_num = 0
+        for row in minesweeper_game.minesweeper_map:
+            for cell in row:
+                if cell == 'X':
+                    mine_num += 1
+        self.assertEqual(3, length)
+        self.assertEqual(1, mine_num)
+
+    def test_generate_mine_sweeper_map_3(self):
+        minesweeper_game = MinesweeperGame(3, 0)
+        length = len(minesweeper_game.minesweeper_map)
+        mine_num = 0
+        for row in minesweeper_game.minesweeper_map:
+            for cell in row:
+                if cell == 'X':
+                    mine_num += 1
+        self.assertEqual(3, length)
+        self.assertEqual(0, mine_num)
+
+    def test_generate_mine_sweeper_map_4(self):
+        minesweeper_game = MinesweeperGame(5, 1)
+        length = len(minesweeper_game.minesweeper_map)
+        mine_num = 0
+        for row in minesweeper_game.minesweeper_map:
+            for cell in row:
+                if cell == 'X':
+                    mine_num += 1
+        self.assertEqual(length,5)
+        self.assertEqual(mine_num, 1)
+
+    def test_generate_mine_sweeper_map_5(self):
+        minesweeper_game = MinesweeperGame(4, 1)
+        length = len(minesweeper_game.minesweeper_map)
+        mine_num = 0
+        for row in minesweeper_game.minesweeper_map:
+            for cell in row:
+                if cell == 'X':
+                    mine_num += 1
+        self.assertEqual(length, 4)
+        self.assertEqual(mine_num, 1)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

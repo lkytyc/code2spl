@@ -1,0 +1,556 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   from collections import defaultdict, deque
+2   from heapq import heappush, heappop
+3   from itertools import permutations, accumulate
+4   import sys
+5   import math
+6   import bisect
+7   def LI(): return [int(x) for x in sys.stdin.buffer.readline().split()]
+8   def I(): return int(sys.stdin.buffer.readline())
+9   def LS():return [list(x) for x in sys.stdin.readline().split()]
+10  def S():
+11      res = list(sys.stdin.readline())
+12      if res[-1] == "\n":
+13          return res[:-1]
+14      return res
+15  def IR(n):
+16      return [I() for i in range(n)]
+17  def LIR(n):
+18      return [LI() for i in range(n)]
+19  def SR(n):
+20      return [S() for i in range(n)]
+21  def LSR(n):
+22      return [LS() for i in range(n)]
+23  sys.setrecursionlimit(1000000)
+24  def solve():
+25      mod = 1000000007
+26      s = S()
+27      t = S()
+28      ns = len(s)
+29      nt = len(t)
+30      f = {}
+31      for i in range(26):
+32          f[chr(i + ord("a"))] = i + 1
+33      for i in range(ns):
+34          s[i] = f[s[i]]
+35      for i in range(nt):
+36          t[i] = f[t[i]]
+37      b = 10
+38      mod1 = 1000000007
+39      mod2 = 1000000009
+40      pownt1 = pow(b,nt,mod)
+41      invnt1 = pow(pownt1,mod1-2,mod1)
+42      powns1 = pow(b,ns,mod1)
+43      invns1 = pow(powns1,mod1-2,mod1)
+44      pownt2 = pow(b,nt,mod2)
+45      invnt2 = pow(pownt2,mod2-2,mod2)
+46      powns2 = pow(b,ns,mod2)
+47      invns2 = pow(powns2,mod2-2,mod2)
+48      l = 0
+49      r = ns+2
+50      while r > l+1:
+51          m = (l+r) >> 1
+52          n = m*nt
+53          st = [m]*nt
+54          ms = n//ns
+55          rs = n-ms*ns
+56          ss = []
+57          for i in range(ns):
+58              if i < rs:
+59                  ss.append(ms + 1)
+60              else:
+61                  ss.append(ms)
+62          p1 = pow(b,n,mod1)
+63          p2 = pow(b,n,mod2)
+64          h1 = 0
+65          h2 = 0
+66          for i in range(nt):
+67              ti = t[i]
+68              pow1 = pow(b,(n-i)*mod1,mod1)
+69              pows1 = pow(pownt1,st[i],mod1)
+70              h1 += ti*pow1*(pows1-1)*pow(pows1*(1-invnt1),mod1-2,mod1)%mod1
+71              h1 %= mod1
+72              pow2 = pow(b,(n-i)*mod2,mod2)
+73              pows2 = pow(pownt2,st[i],mod2)
+74              h2 += ti*pow2*(pows2-1)*pow(pows2*(1-invnt2),mod2-2,mod2)%mod2
+75              h2 %= mod2
+76          k1 = 0
+77          k2 = 0
+78          for i in range(ns):
+79              if not ss[i]:
+80                  break
+81              si = s[i]
+82              pow1 = pow(b,(n-i)*mod1,mod1)
+83              pows1 = pow(powns1,ss[i],mod1)
+84              k1 += si*pow1*(pows1-1)*pow(pows1*(1-invns1),mod1-2,mod1)%mod1
+85              k1 %= mod1
+86              pow2 = pow(b,(n-i)*mod2,mod2)
+87              pows2 = pow(powns2,ss[i],mod2)
+88              k2 += si*pow2*(pows2-1)*pow(pows2*(1-invns2),mod2-2,mod2)%mod2
+89              k2 %= mod2
+90          k = 0
+91          for j in range(rs,ns+rs):
+92              if (h1,h2) == (k1,k2):
+93                  l = m
+94                  break
+95              i = j%ns
+96              si = s[i]
+97              sk = s[k]
+98              k1 -= sk*p1%mod1
+99              k1 += si
+100              k1 *= b
+101              k1 %= mod1
+102              k2 -= sk*p2%mod2
+103              k2 += si
+104              k2 *= b
+105              k2 %= mod2
+106              k += 1
+107          else:
+108              r = m
+109      if l == ns+1:
+110          print(-1)
+111      else:
+112          print(l)
+113      return
+114  if __name__ == "__main__":
+115      solve()
+```
+
+
+**Question**: Does `(i,57)` have data dependence over `(h2,74)` in function `solve`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: solve
+Target source anchor: variable=h2, line=74
+Trace source anchor: variable=i, line=57
+Attached SPL owners: solve
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within the same midpoint m, set p1 = pow(b, n, mod1), p2 = pow(b, n, mod2), h1 = 0, h2 = 0. For i in range(nt), compute h1 using ti = t[i], pow1 = pow(b, (n - i) * mod1, mod1), pows1 = pow(pownt1, st[i], mod1), h1 = (h1 + ti * pow1 * (pows1 - 1) * pow(pows1 * (1 - invnt1), mod1 - 2, mod1)) % mod1; compute h2 analogously with mod2, pow(b, (n - i) * mod2, mod2), pow(pownt2, st[i], mod2), and invnt2. RESULT h1, h2]
+- [COMMAND Within the same midpoint m, set k = 0. For j in range(rs, ns + rs): if (h1, h2) == (k1, k2), set l = m and break; otherwise let i = j % ns, si = s[i], sk = s[k], update k1 = (((k1 - ((sk * p1) % mod1)) + si) * b) % mod1 and k2 = (((k2 - ((sk * p2) % mod2)) + si) * b) % mod2, then increment k. RESULT l, k1, k2]
+- [COMMAND Set b = 10, mod1 = 1000000007, mod2 = 1000000009. Compute pownt1 = pow(b, nt, mod), invnt1 = pow(pownt1, mod1 - 2, mod1), powns1 = pow(b, ns, mod1), invns1 = pow(powns1, mod1 - 2, mod1), pownt2 = pow(b, nt, mod2), invnt2 = pow(pownt2, mod2 - 2, mod2), powns2 = pow(b, ns, mod2), invns2 = pow(powns2, mod2 - 2, mod2). Initialize l = 0 and r = ns + 2. RESULT pownt1, invnt1, powns1, invns1, pownt2, invnt2, powns2, invns2, l, r]
+- [COMMAND Within the same midpoint m, set k1 = 0, k2 = 0. For i in range(ns): if ss[i] == 0, break; otherwise compute si = s[i], pow1 = pow(b, (n - i) * mod1, mod1), pows1 = pow(powns1, ss[i], mod1), k1 = (k1 + si * pow1 * (pows1 - 1) * pow(pows1 * (1 - invns1), mod1 - 2, mod1)) % mod1; compute k2 analogously with mod2, pow(b, (n - i) * mod2, mod2), pow(powns2, ss[i], mod2), and invns2. RESULT k1, k2]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 27: t = S()
+- line 31: for i in range(26):
+- line 33: for i in range(ns):
+- line 35: for i in range(nt):
+- line 36: t[i] = f[t[i]]
+- line 37: b = 10
+- line 39: mod2 = 1000000009
+- line 44: pownt2 = pow(b,nt,mod2)
+- line 45: invnt2 = pow(pownt2,mod2-2,mod2)
+- line 52: n = m*nt
+- line 53: st = [m]*nt
+- line 57: for i in range(ns):
+- line 65: h2 = 0
+- line 66: for i in range(nt):
+- line 67: ti = t[i]
+- line 72: pow2 = pow(b,(n-i)*mod2,mod2)
+- line 73: pows2 = pow(pownt2,st[i],mod2)
+- line 74: h2 += ti*pow2*(pows2-1)*pow(pows2*(1-invnt2),mod2-2,mod2)%mod2
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 27, "position": "before_target", "reason": "t", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["S", "t"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 31, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "in", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 33, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "in", "ns", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 35, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "in", "nt", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "t", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["f", "i", "t"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 37, "position": "before_target", "reason": "b", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["b"]}
+- {"definitions": ["mod2"], "disposition": "inspect_against_official_dependence_definition", "line": 39, "position": "before_target", "reason": "mod2", "relevant_identifiers": ["mod2"], "roles": ["definition"], "source_identifiers": ["mod2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 44, "position": "before_target", "reason": "pownt2", "relevant_identifiers": ["pow", "mod2"], "roles": ["use"], "source_identifiers": ["b", "mod2", "nt", "pow", "pownt2"]}
+- {"definitions": ["invnt2"], "disposition": "inspect_against_official_dependence_definition", "line": 45, "position": "before_target", "reason": "invnt2", "relevant_identifiers": ["pow", "invnt2", "mod2"], "roles": ["definition", "use"], "source_identifiers": ["invnt2", "mod2", "pow", "pownt2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 52, "position": "before_target", "reason": "n", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["m", "n", "nt"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 53, "position": "before_target", "reason": "st", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["m", "nt", "st"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 57, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "in", "ns", "range"]}
+- {"definitions": ["h2"], "disposition": "inspect_against_official_dependence_definition", "line": 65, "position": "before_target", "reason": "h2", "relevant_identifiers": ["h2"], "roles": ["definition"], "source_identifiers": ["h2"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 66, "position": "before_target", "reason": "i", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["for", "i", "in", "nt", "range"]}
+- {"definitions": ["ti"], "disposition": "inspect_against_official_dependence_definition", "line": 67, "position": "before_target", "reason": "ti", "relevant_identifiers": ["ti"], "roles": ["definition"], "source_identifiers": ["i", "t", "ti"]}
+- {"definitions": ["pow2"], "disposition": "inspect_against_official_dependence_definition", "line": 72, "position": "before_target", "reason": "pow2", "relevant_identifiers": ["pow2", "pow", "mod2"], "roles": ["definition", "use"], "source_identifiers": ["b", "i", "mod2", "n", "pow", "pow2"]}
+- {"definitions": ["pows2"], "disposition": "inspect_against_official_dependence_definition", "line": 73, "position": "before_target", "reason": "pows2", "relevant_identifiers": ["pows2", "pow", "mod2"], "roles": ["definition", "use"], "source_identifiers": ["i", "mod2", "pow", "pownt2", "pows2", "st"]}
+- {"definitions": ["h2"], "disposition": "inspect_against_official_dependence_definition", "line": 74, "position": "target", "reason": "h2", "relevant_identifiers": ["h2", "ti", "pow2", "pows2", "pow", "invnt2", "mod2"], "roles": ["definition", "use"], "source_identifiers": ["h2", "invnt2", "mod2", "pow", "pow2", "pows2", "ti"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 24-113
+- source signature: `def solve():`
+- source content hash: `95742ff5b0b34ed155135cff2bbfe79f240a27ec3ef59cef2a471c0dd25df380`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```python
+  24  def solve():
+  25      mod = 1000000007
+  26      s = S()
+  27      t = S()
+  28      ns = len(s)
+  29      nt = len(t)
+  30      f = {}
+  31      for i in range(26):
+  32          f[chr(i + ord("a"))] = i + 1
+  33      for i in range(ns):
+  34          s[i] = f[s[i]]
+  35      for i in range(nt):
+  36          t[i] = f[t[i]]
+  37      b = 10
+  38      mod1 = 1000000007
+  39      mod2 = 1000000009
+  40      pownt1 = pow(b,nt,mod)
+  41      invnt1 = pow(pownt1,mod1-2,mod1)
+  42      powns1 = pow(b,ns,mod1)
+  43      invns1 = pow(powns1,mod1-2,mod1)
+  44      pownt2 = pow(b,nt,mod2)
+  45      invnt2 = pow(pownt2,mod2-2,mod2)
+  46      powns2 = pow(b,ns,mod2)
+  47      invns2 = pow(powns2,mod2-2,mod2)
+  48      l = 0
+  49      r = ns+2
+  50      while r > l+1:
+  51          m = (l+r) >> 1
+  52          n = m*nt
+  53          st = [m]*nt
+  54          ms = n//ns
+  55          rs = n-ms*ns
+  56          ss = []
+  57          for i in range(ns):
+  58              if i < rs:
+  59                  ss.append(ms + 1)
+  60              else:
+  61                  ss.append(ms)
+  62          p1 = pow(b,n,mod1)
+  63          p2 = pow(b,n,mod2)
+  64          h1 = 0
+  65          h2 = 0
+  66          for i in range(nt):
+  67              ti = t[i]
+  68              pow1 = pow(b,(n-i)*mod1,mod1)
+  69              pows1 = pow(pownt1,st[i],mod1)
+  70              h1 += ti*pow1*(pows1-1)*pow(pows1*(1-invnt1),mod1-2,mod1)%mod1
+  71              h1 %= mod1
+  72              pow2 = pow(b,(n-i)*mod2,mod2)
+  73              pows2 = pow(pownt2,st[i],mod2)
+  74              h2 += ti*pow2*(pows2-1)*pow(pows2*(1-invnt2),mod2-2,mod2)%mod2
+  75              h2 %= mod2
+  76          k1 = 0
+  77          k2 = 0
+  78          for i in range(ns):
+  79              if not ss[i]:
+  80                  break
+  81              si = s[i]
+  82              pow1 = pow(b,(n-i)*mod1,mod1)
+  83              pows1 = pow(powns1,ss[i],mod1)
+  84              k1 += si*pow1*(pows1-1)*pow(pows1*(1-invns1),mod1-2,mod1)%mod1
+  85              k1 %= mod1
+  86              pow2 = pow(b,(n-i)*mod2,mod2)
+  87              pows2 = pow(powns2,ss[i],mod2)
+  88              k2 += si*pow2*(pows2-1)*pow(pows2*(1-invns2),mod2-2,mod2)%mod2
+  89              k2 %= mod2
+  90          k = 0
+  91          for j in range(rs,ns+rs):
+  92              if (h1,h2) == (k1,k2):
+  93                  l = m
+  94                  break
+  95              i = j%ns
+  96              si = s[i]
+  97              sk = s[k]
+  98              k1 -= sk*p1%mod1
+  99              k1 += si
+ 100              k1 *= b
+ 101              k1 %= mod1
+ 102              k2 -= sk*p2%mod2
+ 103              k2 += si
+ 104              k2 *= b
+ 105              k2 %= mod2
+ 106              k += 1
+ 107          else:
+ 108              r = m
+ 109      if l == ns+1:
+ 110          print(-1)
+ 111      else:
+ 112          print(l)
+ 113      return
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Binary searches over the repetition count m to find the largest m such that the string t repeated m times is a cyclic shift of a periodic extension of s, using double modular rolling hashes, and prints that m or -1." solve]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize mod = 1000000007, read s and t by calling S(), set ns = len(s), nt = len(t), and create an empty dictionary f. RESULT mod, s, t, ns, nt, f]
+            [COMMAND For i in range(26), assign f[chr(i + ord('a'))] = i + 1. Then for i in range(ns), replace s[i] with f[s[i]], and for i in range(nt), replace t[i] with f[t[i]]. RESULT f, s, t]
+            [COMMAND Set b = 10, mod1 = 1000000007, mod2 = 1000000009. Compute pownt1 = pow(b, nt, mod), invnt1 = pow(pownt1, mod1 - 2, mod1), powns1 = pow(b, ns, mod1), invns1 = pow(powns1, mod1 - 2, mod1), pownt2 = pow(b, nt, mod2), invnt2 = pow(pownt2, mod2 - 2, mod2), powns2 = pow(b, ns, mod2), invns2 = pow(powns2, mod2 - 2, mod2). Initialize l = 0 and r = ns + 2. RESULT pownt1, invnt1, powns1, invns1, pownt2, invnt2, powns2, invns2, l, r]
+            [COMMAND While r > l + 1, for each midpoint m = (l + r) >> 1: set n = m * nt, st = [m] * nt, ms = n // ns, rs = n - ms * ns, and build ss = [] by appending ms + 1 for i in range(rs) and appending ms for i in range(rs, ns). RESULT ss]
+            [COMMAND Within the same midpoint m, set p1 = pow(b, n, mod1), p2 = pow(b, n, mod2), h1 = 0, h2 = 0. For i in range(nt), compute h1 using ti = t[i], pow1 = pow(b, (n - i) * mod1, mod1), pows1 = pow(pownt1, st[i], mod1), h1 = (h1 + ti * pow1 * (pows1 - 1) * pow(pows1 * (1 - invnt1), mod1 - 2, mod1)) % mod1; compute h2 analogously with mod2, pow(b, (n - i) * mod2, mod2), pow(pownt2, st[i], mod2), and invnt2. RESULT h1, h2]
+            [COMMAND Within the same midpoint m, set k1 = 0, k2 = 0. For i in range(ns): if ss[i] == 0, break; otherwise compute si = s[i], pow1 = pow(b, (n - i) * mod1, mod1), pows1 = pow(powns1, ss[i], mod1), k1 = (k1 + si * pow1 * (pows1 - 1) * pow(pows1 * (1 - invns1), mod1 - 2, mod1)) % mod1; compute k2 analogously with mod2, pow(b, (n - i) * mod2, mod2), pow(powns2, ss[i], mod2), and invns2. RESULT k1, k2]
+            [COMMAND Within the same midpoint m, set k = 0. For j in range(rs, ns + rs): if (h1, h2) == (k1, k2), set l = m and break; otherwise let i = j % ns, si = s[i], sk = s[k], update k1 = (((k1 - ((sk * p1) % mod1)) + si) * b) % mod1 and k2 = (((k2 - ((sk * p2) % mod2)) + si) * b) % mod2, then increment k. RESULT l, k1, k2]
+            [COMMAND After the for j loop at this midpoint, execute Python's for-else: if the loop completed without hitting break, set r = m. Continue the outer while loop. RESULT r]
+            [COMMAND After the binary-search loop terminates, if l == ns + 1 print -1, otherwise print l, and return. RESULT printed_output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

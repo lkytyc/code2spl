@@ -1,0 +1,466 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   import sys, math, os
+2   from fractions import Fraction, gcd
+3   LocaL = "MATE_DESKTOP_SESSION_ID" in os.environ
+4   def mle_assert(x):
+5       if LocaL:
+6           assert x
+7       elif not x:
+8           x = range(10**8)
+9   def tle_assert(x):
+10      if LocaL:
+11          assert x
+12      elif not x:
+13          for i in range(10000):
+14              for j in range(1000):
+15                  for k in range(1000):
+16                      pass
+17  sys.setrecursionlimit(10000)
+18  ssr = sys.stdin.readline
+19  ssw = sys.stdout.write
+20  ssf = sys.stdout.flush
+21  sew = sys.stderr.write
+22  def rdline(): return ssr().strip()
+23  def rdstrs(): return ssr().split()
+24  def rdints(): return map(int, ssr().split())
+25  def rd1int(): return int(rdline())
+26  def do_one_case(cnum):
+27      N = rd1int()
+28      XY = []
+29      for i in range(N):
+30          x, y = rdints()
+31          XY.append((x,y))
+32      XY.sort()
+33      A = {}
+34      for j in xrange(1,N):
+35          x2, y2 = XY[j]
+36          for i in xrange(j):
+37              x1, y1 = XY[i]
+38              a = x2-x1
+39              b = y2-y1
+40              g = gcd(a,b)
+41              a /= g
+42              b /= g
+43              if (a,b) in A:
+44                  A[(a,b)].append((i,j))
+45                  A[(-a,-b)].append((j,i))
+46              else:
+47                  A[(a,b)] = [ (i,j) ]
+48                  A[(-a,-b)] = [ (j,i) ]
+49      m = 1
+50      for a,b in A:
+51          E = A[(a,b)]
+52          I = {}
+53          O = {}
+54          for i,j in E:
+55              if i in O:
+56                  O[i].append(j)
+57              else:
+58                  O[i] = [j]
+59              if j in I:
+60                  I[j].append(i)
+61              else:
+62                  I[j] = [i]
+63          NI = set(range(N)) - set(I)
+64          C = []
+65          for x in NI:
+66              if x in O:
+67                  Q = [ (0,x)] + [(len(I[y]),y) for y in O[x] ]
+68                  Q.sort()
+69                  C.append([y for x,y in Q])
+70              else:
+71                  C.append([x])
+72          C1 = [ q for q in C if len(q)==1 ]
+73          C2 = [ q for q in C if len(q)&1==0 ]
+74          C3 = [ q for q in C if len(q)>1 and len(q)&1==1 ]
+75          while len(C3)>1:
+76              C2.append(C3[-2]+C3[-1])
+77              del C3[-2:]
+78          C3 = (C3 + C1)[:2]
+79          l2 = sum(len(q) for q in C2)
+80          l3 = sum(len(q) for q in C3)
+81          if l3:
+82              l = l2 + l3
+83          elif len(C2)>1:
+84              l = l2-1
+85          else:
+86              l = l2
+87          m = max(m, l)
+88      print "Case #%d: %d" % (cnum, m)
+89  def main():
+90      T = rd1int()
+91      for i in range(T):
+92          do_one_case(i+1)
+93          sys.stdout.flush()
+94  if __name__ == "__main__":
+95      main()
+```
+
+
+**Question**: Does line `66` have control dependence over line `79` in function `do_one_case`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: do_one_case
+Target source anchor: variable=<none>, line=66
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: do_one_case
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND For i from 0 through N-1 inclusive, read two integers x and y from rdints(), append the tuple (x,y) to XY. RESULT XY]
+- [COMMAND Within that same direction iteration, compute NI = set(range(N)) - set(I); initialize C as an empty list; for each source node x in NI, if x has outgoing edges in O, build Q = [(0,x)] + [(len(I[y]), y) for y in O[x]], sort Q by its first then second tuple element, and append the node sequence [y for (priority, y) in Q] to C; otherwise append the singleton [x] to C. RESULT NI, C]
+- [COMMAND For each j from 1 through N-1 inclusive, let x2,y2 = XY[j]; then for each i from 0 through j-1 inclusive, let x1,y1 = XY[i]; compute a = x2-x1, b = y2-y1, and g = gcd(a,b); divide a and b by g; if (a,b) is already a key in A, append (i,j) to A[(a,b)] and append (j,i) to A[(-a,-b)]; otherwise set A[(a,b)] = [(i,j)] and A[(-a,-b)] = [(j,i)]. RESULT A]
+- [COMMAND For each direction key (a,b) in A, set E = A[(a,b)], initialize I as an empty dictionary and O as an empty dictionary. RESULT E, I, O]
+- [COMMAND Within that same direction iteration, for every directed edge (i,j) in E, append j to the outgoing list O[i] (creating O[i] = [j] if needed) and append i to the incoming list I[j] (creating I[j] = [i] if needed). RESULT I, O]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 29: for i in range(N):
+- line 34: for j in xrange(1,N):
+- line 36: for i in xrange(j):
+- line 43: if (a,b) in A:
+- line 46: else:
+- line 50: for a,b in A:
+- line 54: for i,j in E:
+- line 55: if i in O:
+- line 57: else:
+- line 59: if j in I:
+- line 61: else:
+- line 65: for x in NI:
+- line 66: if x in O:
+- line 70: else:
+- line 75: while len(C3)>1:
+- line 81: if l3:
+- line 85: else:
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 29, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["N", "for", "i", "in", "range"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 34, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["N", "for", "in", "j", "xrange"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 36, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["for", "i", "in", "j", "xrange"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 43, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["A", "a", "b", "if", "in"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 46, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 50, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["A", "a", "b", "for", "in"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 54, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["E", "for", "i", "in", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in", "O"], "roles": ["use", "control"], "source_identifiers": ["O", "i", "if", "in"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 57, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 59, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["in"], "roles": ["use", "control"], "source_identifiers": ["I", "if", "in", "j"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 61, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": ["x"], "disposition": "inspect_against_official_dependence_definition", "line": 65, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["x", "in"], "roles": ["definition", "use", "control"], "source_identifiers": ["NI", "for", "in", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 66, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["x", "in", "O"], "roles": ["use", "control"], "source_identifiers": ["O", "if", "in", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 70, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 75, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["C3", "len", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 81, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "l3"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 85, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["else"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `do_one_case`
+- source lines: 26-88
+- source signature: `def do_one_case(cnum):`
+- source content hash: `d6c64a8b817bd8628ed2cdd41c48caa1030d29dfbc957ec78b1b18b376fac1d7`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```python
+  26  def do_one_case(cnum):
+  27      N = rd1int()
+  28      XY = []
+  29      for i in range(N):
+  30          x, y = rdints()
+  31          XY.append((x,y))
+  32      XY.sort()
+  33      A = {}
+  34      for j in xrange(1,N):
+  35          x2, y2 = XY[j]
+  36          for i in xrange(j):
+  37              x1, y1 = XY[i]
+  38              a = x2-x1
+  39              b = y2-y1
+  40              g = gcd(a,b)
+  41              a /= g
+  42              b /= g
+  43              if (a,b) in A:
+  44                  A[(a,b)].append((i,j))
+  45                  A[(-a,-b)].append((j,i))
+  46              else:
+  47                  A[(a,b)] = [ (i,j) ]
+  48                  A[(-a,-b)] = [ (j,i) ]
+  49      m = 1
+  50      for a,b in A:
+  51          E = A[(a,b)]
+  52          I = {}
+  53          O = {}
+  54          for i,j in E:
+  55              if i in O:
+  56                  O[i].append(j)
+  57              else:
+  58                  O[i] = [j]
+  59              if j in I:
+  60                  I[j].append(i)
+  61              else:
+  62                  I[j] = [i]
+  63          NI = set(range(N)) - set(I)
+  64          C = []
+  65          for x in NI:
+  66              if x in O:
+  67                  Q = [ (0,x)] + [(len(I[y]),y) for y in O[x] ]
+  68                  Q.sort()
+  69                  C.append([y for x,y in Q])
+  70              else:
+  71                  C.append([x])
+  72          C1 = [ q for q in C if len(q)==1 ]
+  73          C2 = [ q for q in C if len(q)&1==0 ]
+  74          C3 = [ q for q in C if len(q)>1 and len(q)&1==1 ]
+  75          while len(C3)>1:
+  76              C2.append(C3[-2]+C3[-1])
+  77              del C3[-2:]
+  78          C3 = (C3 + C1)[:2]
+  79          l2 = sum(len(q) for q in C2)
+  80          l3 = sum(len(q) for q in C3)
+  81          if l3:
+  82              l = l2 + l3
+  83          elif len(C2)>1:
+  84              l = l2-1
+  85          else:
+  86              l = l2
+  87          m = max(m, l)
+  88      print "Case #%d: %d" % (cnum, m)
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads N points, groups directed point pairs by normalized direction vector, and computes the maximum combined even/odd chain length over those direction groups, printing the case result." do_one_case]
+    [INPUTS]
+        <REF> cnum </REF>: int "Case number used in the output line."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read integer N from rd1int() and initialize XY as an empty list. RESULT N, XY]
+            [COMMAND For i from 0 through N-1 inclusive, read two integers x and y from rdints(), append the tuple (x,y) to XY. RESULT XY]
+            [COMMAND Sort XY lexicographically. RESULT XY]
+            [COMMAND Initialize A as an empty dictionary. RESULT A]
+            [COMMAND For each j from 1 through N-1 inclusive, let x2,y2 = XY[j]; then for each i from 0 through j-1 inclusive, let x1,y1 = XY[i]; compute a = x2-x1, b = y2-y1, and g = gcd(a,b); divide a and b by g; if (a,b) is already a key in A, append (i,j) to A[(a,b)] and append (j,i) to A[(-a,-b)]; otherwise set A[(a,b)] = [(i,j)] and A[(-a,-b)] = [(j,i)]. RESULT A]
+            [COMMAND Initialize m to 1. RESULT m]
+            [COMMAND For each direction key (a,b) in A, set E = A[(a,b)], initialize I as an empty dictionary and O as an empty dictionary. RESULT E, I, O]
+            [COMMAND Within that same direction iteration, for every directed edge (i,j) in E, append j to the outgoing list O[i] (creating O[i] = [j] if needed) and append i to the incoming list I[j] (creating I[j] = [i] if needed). RESULT I, O]
+            [COMMAND Within that same direction iteration, compute NI = set(range(N)) - set(I); initialize C as an empty list; for each source node x in NI, if x has outgoing edges in O, build Q = [(0,x)] + [(len(I[y]), y) for y in O[x]], sort Q by its first then second tuple element, and append the node sequence [y for (priority, y) in Q] to C; otherwise append the singleton [x] to C. RESULT NI, C]
+            [COMMAND Within that same direction iteration, partition C into C1 = groups of length 1, C2 = groups of even length, and C3 = groups of odd length greater than 1; while len(C3) > 1, concatenate the last two groups of C3 into one group, append that combined group to C2, and remove those two groups from C3. RESULT C1, C2, C3]
+            [COMMAND Within that same direction iteration, set C3 = (C3 + C1)[:2], compute l2 as the sum of lengths of all groups in C2 and l3 as the sum of lengths of all groups in C3; if l3 is nonzero, set l = l2 + l3; otherwise if C2 has more than one group, set l = l2 - 1; otherwise set l = l2. RESULT l]
+            [COMMAND Within that same direction iteration, update m = max(m, l). RESULT m]
+            [COMMAND Print the formatted string 'Case #%d: %d' with cnum and m as the two integer arguments. RESULT output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

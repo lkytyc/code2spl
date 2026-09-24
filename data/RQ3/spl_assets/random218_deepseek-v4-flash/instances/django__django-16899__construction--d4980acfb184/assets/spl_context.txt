@@ -1,0 +1,1850 @@
+# FILE: django/contrib/admin/checks.py
+# CLASS BaseModelAdminChecks
+
+[DEFINE_WORKER: "Validates an admin object by running all configured admin checks and returning their combined diagnostics as a single flat list in fixed order." check]
+    [INPUTS]
+        <REF> admin_obj </REF>: object "Admin object passed to all internal check methods; its attributes determine validation results."
+        <REF> kwargs </REF>: dict "Additional keyword arguments; not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Flat list containing all diagnostics returned by the internal check methods in fixed declaration order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._check_autocomplete_fields(admin_obj) and store the returned iterable as autocomplete_errors. RESULT autocomplete_errors]
+            [COMMAND Call self._check_raw_id_fields(admin_obj) and store the returned iterable as raw_id_errors. RESULT raw_id_errors]
+            [COMMAND Call self._check_fields(admin_obj) and store the returned iterable as fields_errors. RESULT fields_errors]
+            [COMMAND Call self._check_fieldsets(admin_obj) and store the returned iterable as fieldsets_errors. RESULT fieldsets_errors]
+            [COMMAND Call self._check_exclude(admin_obj) and store the returned iterable as exclude_errors. RESULT exclude_errors]
+            [COMMAND Call self._check_form(admin_obj) and store the returned iterable as form_errors. RESULT form_errors]
+            [COMMAND Call self._check_filter_vertical(admin_obj) and store the returned iterable as filter_vertical_errors. RESULT filter_vertical_errors]
+            [COMMAND Call self._check_filter_horizontal(admin_obj) and store the returned iterable as filter_horizontal_errors. RESULT filter_horizontal_errors]
+            [COMMAND Call self._check_radio_fields(admin_obj) and store the returned iterable as radio_fields_errors. RESULT radio_fields_errors]
+            [COMMAND Call self._check_prepopulated_fields(admin_obj) and store the returned iterable as prepopulated_fields_errors. RESULT prepopulated_fields_errors]
+            [COMMAND Call self._check_view_on_site_url(admin_obj) and store the returned iterable as view_on_site_url_errors. RESULT view_on_site_url_errors]
+            [COMMAND Call self._check_ordering(admin_obj) and store the returned iterable as ordering_errors. RESULT ordering_errors]
+            [COMMAND Call self._check_readonly_fields(admin_obj) and store the returned iterable as readonly_fields_errors. RESULT readonly_fields_errors]
+            [COMMAND Return a new list that concatenates the 13 stored iterables in the order they were captured, using iterable unpacking to flatten their elements. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.autocomplete_fields is a list or tuple; if it is not, returns the admin.E036 validation error, otherwise returns the flattened list of per-field autocomplete field check results." _check_autocomplete_fields]
+    [INPUTS]
+        <REF> self </REF>: object "Bound method instance providing _check_autocomplete_fields_item."
+        <REF> obj </REF>: object "Object whose autocomplete_fields attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or validation error "Flattened list of per-field check results when autocomplete_fields is a list/tuple; otherwise the result of must_be(..., id='admin.E036')."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether obj.autocomplete_fields is a list or tuple using isinstance(obj.autocomplete_fields, (list, tuple)). RESULT is_list_or_tuple]
+            [COMMAND If is_list_or_tuple is true, enumerate obj.autocomplete_fields to produce (index, field_name) pairs in order. RESULT enumerated_fields]
+            [COMMAND For each (index, field_name) in enumerated_fields, call self._check_autocomplete_fields_item(obj, field_name, "autocomplete_fields[%d]" % index) and collect all returned values into a list; an empty input produces an empty list. RESULT field_check_results]
+            [COMMAND Flatten field_check_results one level using chain.from_iterable and convert the flattened iterable to a list. RESULT flattened_results]
+            [COMMAND Return flattened_results. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.autocomplete_fields is not a list or tuple (isinstance returns False).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="autocomplete_fields", obj=obj, id="admin.E036") and stop execution. RESULT validation_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that an item in autocomplete_fields is a ForeignKey or ManyToManyField whose related model has a registered ModelAdmin defining search_fields, returning the appropriate Django admin validation errors for missing fields, invalid field types, missing related admins, or missing search_fields." _check_autocomplete_fields_item]
+    [INPUTS]
+        <REF> self </REF>: object "The model admin checks object that owns this validation method."
+        <REF> obj </REF>: object "The ModelAdmin instance being checked; provides model, admin_site, and class name for error messages."
+        <REF> field_name </REF>: string "Name of the field in obj.model._meta to validate."
+        <REF> label </REF>: string "Label of the autocomplete_fields item, used in validation error reporting."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> checks_result </REF>: list "A list of Django checks errors; empty when the autocomplete_fields item is valid."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the field named field_name by calling obj.model._meta.get_field(field_name); if the lookup raises FieldDoesNotExist, use the missing-field alternative flow. RESULT field]
+            [COMMAND Determine whether the field is a valid autocomplete field by checking if field.many_to_many is true or if field is an instance of models.ForeignKey. RESULT is_valid_field_type]
+            [COMMAND Look up related_admin in obj.admin_site._registry using field.remote_field.model as the registry key. RESULT related_admin]
+            [COMMAND If related_admin is not None, inspect related_admin.search_fields to determine whether it defines any search fields. RESULT has_search_fields]
+            [COMMAND Return [] when the field type is valid, a related admin exists, and related_admin.search_fields is non-empty. RESULT checks_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The field lookup obj.model._meta.get_field(field_name) raises FieldDoesNotExist.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return refer_to_missing_field(field=field_name, option=label, obj=obj, id="admin.E037"). RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The field exists, but field.many_to_many is false and the field is not an instance of models.ForeignKey.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a foreign key or a many-to-many field", option=label, obj=obj, id="admin.E038"). RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The field is a valid ForeignKey or ManyToManyField, but obj.admin_site._registry.get(field.remote_field.model) returns None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build and return a list containing checks.Error with id "admin.E039" and message "An admin for model \"<remote_model_name>\" has to be registered to be referenced by <obj_class_name>.autocomplete_fields.", using field.remote_field.model.__name__ for <remote_model_name>, type(obj).__name__ for <obj_class_name>, and setting obj to obj.__class__. RESULT error_E039_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The field is valid and a related admin exists, but related_admin.search_fields is empty.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build and return a list containing checks.Error with id "admin.E040" and message "<related_admin_class_name> must define \"search_fields\", because it's referenced by <obj_class_name>.autocomplete_fields.", using related_admin.__class__.__name__ for <related_admin_class_name>, type(obj).__name__ for <obj_class_name>, and setting obj to obj.__class__. RESULT error_E040_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether obj.raw_id_fields is a list or tuple; if it is not, returns an admin.E001 validation error, otherwise returns a flattened list of results from validating each field name." _check_raw_id_fields]
+    [INPUTS]
+        <REF> self </REF>: object "The object instance on which the check method is invoked."
+        <REF> obj </REF>: object "The object whose raw_id_fields attribute is being checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or error object "A flattened list of validation messages from the field checks, or the must_be error object when raw_id_fields is not a list or tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.raw_id_fields is an instance of list or tuple. RESULT is_valid_type]
+            [COMMAND In the valid branch, build a generator expression over enumerate(obj.raw_id_fields) that calls self._check_raw_id_fields_item(obj, field_name, "raw_id_fields[%d]" % index) for each index, field_name. RESULT checked_items]
+            [COMMAND Flatten checked_items with chain.from_iterable, convert the flattened iterator to a list with list(), and return that list. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.raw_id_fields is not an instance of list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="raw_id_fields", obj=obj, id="admin.E001"). RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a single raw_id_fields entry by checking that field_name resolves to an existing field on obj.model and that the field is a ForeignKey or ManyToManyField, returning an empty list for valid fields or the corresponding admin validation error otherwise." _check_raw_id_fields_item]
+    [INPUTS]
+        <REF> self </REF>: object "The method receiver; not directly used in the validation logic."
+        <REF> obj </REF>: object "The admin object that has a model attribute used to resolve the field."
+        <REF> field_name </REF>: str "The name of the field to validate."
+        <REF> label </REF>: str "The option label used when constructing validation error messages."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of validation errors; empty if the field is valid, or a list containing the admin.E002 or admin.E003 error returned by the helper."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Try to retrieve the field named field_name from obj.model._meta using get_field(field_name). RESULT field]
+            [COMMAND In the else block after successful field retrieval, compare the retrieved field.name with field_name. RESULT name_matches]
+            [COMMAND In the else block after successful field retrieval, when field.name equals field_name, check whether field.many_to_many is True or field is an instance of models.ForeignKey. RESULT is_valid_relation]
+            [COMMAND In the else block after successful field retrieval, when is_valid_relation is true, return an empty list as the validation result. RESULT empty_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The get_field(field_name) call raises FieldDoesNotExist while retrieving the field.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return refer_to_missing_field(field=field_name, option=label, obj=obj, id='admin.E002'). RESULT missing_field_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The field is retrieved successfully, but field.name differs from field_name.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return refer_to_missing_field(field=field_name, option=label, obj=obj, id='admin.E002'). RESULT missing_field_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The field is retrieved successfully, field.name equals field_name, but field.many_to_many is False and field is not an instance of models.ForeignKey.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be('a foreign key or a many-to-many field', option=label, obj=obj, id='admin.E003'). RESULT invalid_field_type_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates the 'fields' option on an admin configuration object by requiring None or a list/tuple, forbidding a simultaneous truthy 'fieldsets' and duplicate field names, then returns the flattened field-spec check results." _check_fields]
+    [INPUTS]
+        <REF> self </REF>: object "Validator instance that provides the _check_field_spec method."
+        <REF> obj </REF>: object "Object whose fields and fieldsets configuration options are validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "List of validation errors or field-spec check results; empty when obj.fields is None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Proceed only when obj.fields is not None, obj.fields is a list or tuple, and obj.fieldsets is falsy; otherwise follow the corresponding alternative flow. RESULT validation_gate]
+            [COMMAND Flatten obj.fields by calling flatten(obj.fields) and assign the flattened result to fields. RESULT fields]
+            [COMMAND Check whether len(fields) equals len(set(fields)); if the lengths differ, follow the duplicate-field alternative flow. RESULT duplicate_check]
+            [COMMAND For each field_name in obj.fields (the original value, not the flattened fields), call self._check_field_spec(obj, field_name, 'fields'), chain the returned iterables using chain.from_iterable, convert the chain to a list, and return that list. RESULT final_check_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.fields is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately. RESULT early_return_empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.fields is not None and not isinstance(obj.fields, (list, tuple))]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="fields", obj=obj, id="admin.E004") immediately. RESULT must_be_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.fields is not None, obj.fields is a list or tuple, and obj.fieldsets is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return [checks.Error("Both 'fieldsets' and 'fields' are specified.", obj=obj.__class__, id="admin.E005")] immediately. RESULT fieldsets_conflict_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After flattening obj.fields into fields, len(fields) != len(set(fields))]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return [checks.Error("The value of 'fields' contains duplicate field(s).", obj=obj.__class__, id="admin.E006")] immediately. RESULT duplicate_fields_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates the admin object's fieldsets option, returning no errors when fieldsets is None, reporting admin.E007 when fieldsets is not a list or tuple, and otherwise flattening per-fieldset validation errors while tracking duplicate field names." CheckFieldsets]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance of the admin system checks class."
+        <REF> obj </REF>: object "Admin class or configuration object whose fieldsets attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Flat list of validation errors. Empty when fieldsets is None or all fieldsets pass; contains the admin.E007 error when fieldsets has an invalid type; otherwise concatenated per-fieldset errors."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND On the valid path where obj.fieldsets is a list or tuple, initialize an empty list named seen_fields to track field names already seen across all fieldsets. RESULT seen_fields]
+            [COMMAND For each index and fieldset in enumerate(obj.fieldsets), call self._check_fieldsets_item(obj, fieldset, 'fieldsets[%d]' % index, seen_fields) and collect each returned error list in fieldset_error_lists. RESULT fieldset_error_lists]
+            [COMMAND Flatten fieldset_error_lists using chain.from_iterable and convert the flattened iterable into a list named fields_errors. RESULT fields_errors]
+            [COMMAND Return fields_errors as the final result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.fieldsets is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list because no fieldsets are defined. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.fieldsets is not an instance of list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of must_be('a list or tuple', option='fieldsets', obj=obj, id='admin.E007') to report the invalid fieldsets type. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a single fieldsets item's structure and field uniqueness, then returns the combined field-spec checks for its fields." _check_fieldsets_item]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance of the class containing _check_field_spec."
+        <REF> obj </REF>: object "Object or class being checked, used in error reporting."
+        <REF> fieldset </REF>: list|tuple "A pair whose second element is a dictionary containing a 'fields' key."
+        <REF> label </REF>: str "Option label used in error messages and field-spec context."
+        <REF> seen_fields </REF>: list "Mutable list that accumulates flattened field names for duplicate detection."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "List of validation or field-spec check errors; empty list when no errors are found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Validate that fieldset is a list or tuple of length 2 whose second element is a dictionary containing a 'fields' key whose value is a list or tuple; if any check fails, follow the corresponding alternative flow and return immediately. RESULT fieldset_shape_ok]
+            [COMMAND Flatten fieldset[1]['fields'] and extend seen_fields with the flattened field names in place. RESULT seen_fields]
+            [COMMAND Check whether seen_fields contains duplicate field names by comparing len(seen_fields) with len(set(seen_fields)); if duplicates exist, follow the duplicate-field alternative flow. RESULT seen_fields_unique]
+            [COMMAND For each fieldset_fields in fieldset[1]['fields'], call self._check_field_spec(obj, fieldset_fields, '%s[1]["fields"]' % label), chain all returned lists together, and return the resulting list. RESULT field_spec_checks]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: fieldset is not a list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be('a list or tuple', option=label, obj=obj, id='admin.E008'). RESULT admin_E008_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: fieldset is a list or tuple and len(fieldset) != 2]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be('of length 2', option=label, obj=obj, id='admin.E009'). RESULT admin_E009_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: fieldset is a list or tuple, len(fieldset) equals 2, and fieldset[1] is not a dict]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be('a dictionary', option='%s[1]' % label, obj=obj, id='admin.E010'). RESULT admin_E010_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: fieldset is a list or tuple, len(fieldset) equals 2, fieldset[1] is a dict, and 'fields' is not in fieldset[1]]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error("The value of '%s[1]' must contain the key 'fields'." % label, obj=obj.__class__, id='admin.E011'). RESULT admin_E011_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: fieldset is a list or tuple, len(fieldset) equals 2, fieldset[1] is a dict, 'fields' is in fieldset[1], and fieldset[1]['fields'] is not a list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="%s[1]['fields']" % label, obj=obj, id="admin.E008"). RESULT admin_E008_field_type_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: all shape validations passed, seen_fields has been extended, and len(seen_fields) != len(set(seen_fields))]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error("There are duplicate field(s) in '%s[1]'." % label, obj=obj.__class__, id="admin.E012"). RESULT admin_E012_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether fields is a tuple; if it is, checks each field name in the tuple with an indexed label and returns a flattened list of the results, otherwise checks the single field specification and returns its result directly." _check_field_spec]
+    [INPUTS]
+        <REF> obj </REF>: object "Object passed to self._check_field_spec_item for each field specification check."
+        <REF> fields </REF>: str | tuple "A field name or tuple of field names. Only a tuple is iterated; any non-tuple value, including a list, is treated as a single field specification."
+        <REF> label </REF>: str "Label prefix used to build indexed labels of the form '<label>[<index>]' for tuple elements."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list | Any "If fields is a tuple, a flattened list containing the results from checking each field name; otherwise the direct result from checking the single field specification."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the tuple branch, if isinstance(fields, tuple) is true, for each index, field_name from enumerate(fields) with index starting at 0, call self._check_field_spec_item(obj, field_name, "%s[%d]" % (label, index)) and produce the returned values as a generator; if fields is an empty tuple, the generator yields nothing. RESULT item_results_generator]
+            [COMMAND Within the tuple branch, pass item_results_generator to chain.from_iterable to flatten one level and materialize the result with list(); if the generator is empty, this produces an empty list. RESULT flattened_results]
+            [COMMAND Within the tuple branch, return flattened_results immediately. RESULT tuple_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: fields is not a tuple, including when fields is a single field name or a list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the else branch, call self._check_field_spec_item(obj, fields, label). RESULT single_result]
+            [COMMAND Within the else branch, return single_result immediately. RESULT single_return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a field referenced in an admin field specification, returning an empty list for readonly fields, non-existent fields, and normal model fields, but returning a single admin.E013 error when the field is a ManyToManyField with a manually specified relationship model." _check_field_spec_item]
+    [INPUTS]
+        <REF> self </REF>: object "The ModelAdmin instance on which the method is invoked."
+        <REF> obj </REF>: object "The model admin class that provides readonly_fields and access to model metadata."
+        <REF> field_name </REF>: str "The name of the field to validate."
+        <REF> label </REF>: str "A label used to identify the field specification in error messages."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of checks.Error objects; an empty list indicates the field is allowed, and a list containing one admin.E013 error indicates a disallowed ManyToManyField with a manually specified through model."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether field_name is present in obj.readonly_fields. RESULT is_readonly]
+            [COMMAND If is_readonly is false, in the outer else branch attempt to retrieve the field via obj.model._meta.get_field(field_name). RESULT field]
+            [COMMAND If the field lookup succeeds, check whether the retrieved field is a ManyToManyField with a manually specified through model by evaluating isinstance(field, models.ManyToManyField) and not field.remote_field.through._meta.auto_created. RESULT is_manual_m2m]
+            [COMMAND If is_manual_m2m is false, return an empty list to accept the normal model field. RESULT empty_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: field_name is in obj.readonly_fields]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list because readonly fields are allowed without model-field validation. RESULT empty_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.model._meta.get_field(field_name) raises FieldDoesNotExist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list because the field name may refer to an extra field on the form, which is allowed. RESULT empty_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field is retrieved successfully and isinstance(field, models.ManyToManyField) and not field.remote_field.through._meta.auto_created evaluates to true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a list containing one checks.Error with the message "The value of '%s' cannot include the ManyToManyField '%s', because that field manually specifies a relationship model." formatted with label and field_name, obj set to obj.__class__, and id set to "admin.E013". RESULT error_list]
+            [COMMAND Return the error list. RESULT error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.exclude is either None or a list/tuple without duplicate fields, returning an empty list for valid values or the appropriate validation error for invalid values." _check_exclude]
+    [INPUTS]
+        <REF> self </REF>: object "The current object instance on which the method is called."
+        <REF> obj </REF>: object "The object whose exclude attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list for valid values; for invalid values, the list returned by must_be for a non-list/tuple, or a list containing one checks.Error for duplicate fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If obj.exclude is None, the default value, return an empty list. RESULT empty_list_none]
+            [COMMAND If the previous condition was false and obj.exclude is not a list or tuple, return the value from must_be("a list or tuple", option="exclude", obj=obj, id="admin.E014"). RESULT must_be_error]
+            [COMMAND If the previous conditions were false and len(obj.exclude) > len(set(obj.exclude)), return a list containing checks.Error("The value of 'exclude' contains duplicate field(s).", obj=obj.__class__, id="admin.E015"). RESULT duplicate_error_list]
+            [COMMAND If all previous conditions were false, return an empty list. RESULT empty_list_valid]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether obj.form is a subclass of BaseModelForm and returns a validation error with id admin.E016 if it is not, otherwise returns an empty list." _check_form]
+    [INPUTS]
+        <REF> obj </REF>: object "Object with a form attribute to validate; obj.form must be a subclass of BaseModelForm."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "Empty list when obj.form is valid; otherwise the validation error result from must_inherit_from."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether _issubclass(obj.form, BaseModelForm) is false. RESULT form_is_not_subclass]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.form is not a subclass of BaseModelForm]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_inherit_from(parent="BaseModelForm", option="form", obj=obj, id="admin.E016") to report that obj.form must inherit from BaseModelForm. RESULT error_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.form is a subclass of BaseModelForm]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list to indicate that obj.form is valid. RESULT valid_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that obj.filter_vertical is a list or tuple, returning a validation error if it is not, otherwise checks every field name and returns the flattened list of all check results." _check_filter_vertical]
+    [INPUTS]
+        <REF> self </REF>: object "Bound method context used to call _check_filter_item."
+        <REF> obj </REF>: object "Object with a filter_vertical attribute to be validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "When filter_vertical is a list or tuple, a list of flattened check results from _check_filter_item; otherwise the value returned by must_be(...), which is a validation error result."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.filter_vertical is a list, tuple, or subclass of either; store the boolean result. RESULT is_list_or_tuple]
+            [COMMAND When is_list_or_tuple is true, enter the else branch and enumerate obj.filter_vertical to produce (index, field_name) pairs for each element. RESULT enumerated_pairs]
+            [COMMAND Within the else branch, for each (index, field_name) pair, call self._check_filter_item(obj, field_name, "filter_vertical[%d]" % index) with the index formatted into the field path, and collect the iterable returned for each call. RESULT per_item_check_results]
+            [COMMAND Within the else branch, flatten per_item_check_results using chain.from_iterable, then materialize the flattened iterable into a list. RESULT flattened_check_results]
+            [COMMAND Within the else branch, return flattened_check_results. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_list_or_tuple is false, meaning obj.filter_vertical is not a list or tuple (or subclass of either).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="filter_vertical", obj=obj, id="admin.E017") immediately without iterating obj.filter_vertical. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that the filter_horizontal option is a list or tuple and returns the flattened validation messages for each field name in it." _check_filter_horizontal]
+    [INPUTS]
+        <REF> self </REF>: object "The admin model class instance whose _check_filter_item method is called for each field."
+        <REF> obj </REF>: object "The admin options object whose filter_horizontal attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of validation errors produced by must_be for an invalid filter_horizontal type, or by _check_filter_item for each field name when the type is valid."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.filter_horizontal is an instance of list or tuple. RESULT filter_horizontal_type_check]
+            [COMMAND If filter_horizontal is a list or tuple, enumerate it to produce (index, field_name) pairs. RESULT enumerated_fields]
+            [COMMAND For each index and field_name in enumerated_fields, call self._check_filter_item(obj, field_name, "filter_horizontal[%d]" % index). RESULT check_results]
+            [COMMAND Flatten check_results using chain.from_iterable and convert the flattened iterator to a list. RESULT flat_errors]
+            [COMMAND Return flat_errors. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.filter_horizontal is not an instance of list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="filter_horizontal", obj=obj, id="admin.E018"). RESULT error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks one item of filter_vertical or filter_horizontal by verifying that the given field exists and is a ManyToManyField." _check_filter_item]
+    [INPUTS]
+        <REF> self </REF>: object "Bound method instance; not directly used in the core logic."
+        <REF> obj </REF>: object "Admin object whose model attribute is used to resolve the field."
+        <REF> field_name </REF>: str "Name of the field to look up in obj.model._meta."
+        <REF> label </REF>: str "Human-readable option label used in validation error messages."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Empty list if the field is a ManyToManyField; otherwise a validation error list from refer_to_missing_field or must_be."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the field object by calling obj.model._meta.get_field(field_name), and assign it to field. RESULT field]
+            [COMMAND After the field is retrieved successfully, if field.many_to_many is True, return an empty list. RESULT []]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The field lookup obj.model._meta.get_field(field_name) raises FieldDoesNotExist.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of refer_to_missing_field with field=field_name, option=label, obj=obj, and id='admin.E019'. RESULT refer_to_missing_field(field=field_name, option=label, obj=obj, id='admin.E019')]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The field is retrieved but field.many_to_many is False.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of must_be with message 'a many-to-many field', option=label, obj=obj, and id='admin.E020'. RESULT must_be('a many-to-many field', option=label, obj=obj, id='admin.E020')]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.radio_fields is a dictionary, returning a validation error if it is not, otherwise checking every key and value and returning the flattened list of validation results." _check_radio_fields]
+    [INPUTS]
+        <REF> obj </REF>: object "The object whose radio_fields attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or validation error object "A flattened list of validation errors from checking all dictionary entries, or the validation error returned by must_be when radio_fields is not a dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.radio_fields is not an instance of dict; if so, exit through the alternative flow before performing any item checks. RESULT radio_fields_is_dict]
+            [COMMAND For each field_name and val in obj.radio_fields.items(), call self._check_radio_fields_key(obj, field_name, "radio_fields") and self._check_radio_fields_value(obj, val, 'radio_fields["%s"]' % field_name), concatenate the two lists, then flatten via chain.from_iterable and collect into a list. RESULT entry_check_results]
+            [COMMAND Return the flattened list of accumulated validation results. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.radio_fields is not an instance of dict]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a dictionary", option="radio_fields", obj=obj, id="admin.E021"). RESULT validation_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that a radio_fields key names an existing model field and that the field is either a ForeignKey or has a choices definition, returning the appropriate Django admin error otherwise." _check_radio_fields_key]
+    [INPUTS]
+        <REF> self </REF>: object "The model admin instance on which the check is called."
+        <REF> obj </REF>: object "The system check object whose model is used for field lookup."
+        <REF> field_name </REF>: str "The name of the field to validate."
+        <REF> label </REF>: str "The radio_fields option label associated with the field."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of Django check errors, or an empty list if the field is valid."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to retrieve the model field named field_name from obj.model._meta; if retrieval succeeds continue with the else branch, otherwise use the FieldDoesNotExist alternative flow. RESULT field]
+            [COMMAND In the successful retrieval branch, evaluate whether field is an instance of models.ForeignKey or has a truthy choices attribute, using short-circuit OR semantics. RESULT is_valid_field]
+            [COMMAND If is_valid_field is false, return a one-element list containing checks.Error with the message 'The value of '%s' refers to '%s', which is not an instance of ForeignKey, and does not have a 'choices' definition.' formatted with label and field_name, with obj.__class__ as the object and id 'admin.E023'. RESULT result]
+            [COMMAND If is_valid_field is true, return an empty list. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Retrieving field_name from obj.model._meta raises FieldDoesNotExist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of refer_to_missing_field with field=field_name, option=label, obj=obj, and id='admin.E022'. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that a radio_fields value is either admin.HORIZONTAL or admin.VERTICAL and returns a list containing a single checks.Error with id admin.E024 when it is not, otherwise returns an empty list." _check_radio_fields_value]
+    [INPUTS]
+        <REF> self </REF>: object "The ModelAdmin instance on which the validation check is performed."
+        <REF> obj </REF>: object "The object whose class is attached to the checks.Error object."
+        <REF> val </REF>: object "The value from the radio_fields dictionary to validate against HORIZONTAL and VERTICAL."
+        <REF> label </REF>: str "The field label used in the error message."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list when val is valid; otherwise a list containing one checks.Error with id 'admin.E024'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import HORIZONTAL and VERTICAL from django.contrib.admin.options. RESULT HORIZONTAL, VERTICAL]
+            [COMMAND Check whether val is not in (HORIZONTAL, VERTICAL) and store the result as is_invalid. RESULT is_invalid]
+            [COMMAND If is_invalid is false, return an empty list. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_invalid is true, meaning val is neither HORIZONTAL nor VERTICAL]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing one checks.Error with message "The value of '%s' must be either admin.HORIZONTAL or admin.VERTICAL." % label, obj=obj.__class__, and id='admin.E024'. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.view_on_site is either callable or a boolean, returning an admin.E025 error list if it is neither, otherwise returning an empty list." _check_view_on_site_url]
+    [INPUTS]
+        <REF> self </REF>: object "The Django admin class instance on which the check is defined."
+        <REF> obj </REF>: object "The object whose view_on_site attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of Django admin check errors. Contains one checks.Error with id 'admin.E025' when view_on_site is invalid; otherwise contains no items."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether obj.view_on_site is neither callable nor a boolean by evaluating not callable(obj.view_on_site) and not isinstance(obj.view_on_site, bool), applying short-circuit and logic so the isinstance check is skipped when callable(obj.view_on_site) is true. RESULT is_invalid]
+            [COMMAND In the valid case where is_invalid is false, return immediately with an empty list. RESULT validation_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_invalid is true, meaning obj.view_on_site is neither callable nor a boolean]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately with a list containing checks.Error("The value of 'view_on_site' must be a callable or a boolean value.", obj=obj.__class__, id="admin.E025"). RESULT validation_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that obj.prepopulated_fields is a dictionary and, if so, returns a flattened list of validation errors from key and value checks; otherwise returns the must_be error for admin.E026." _check_prepopulated_fields]
+    [INPUTS]
+        <REF> obj </REF>: object "Object whose prepopulated_fields attribute is being validated as a dictionary."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Validation error collection: the result of must_be in the invalid-dict branch, or the flattened list of key and value checker results in the valid-dict branch."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.prepopulated_fields is a dict instance or subclass by evaluating isinstance(obj.prepopulated_fields, dict). RESULT prepopulated_fields_is_dict]
+            [COMMAND If obj.prepopulated_fields is a dictionary, obtain its items in original insertion order using obj.prepopulated_fields.items(). RESULT prepopulated_fields_items]
+            [COMMAND Within the dictionary validation branch, for each field_name and val in prepopulated_fields_items, call self._check_prepopulated_fields_key(obj, field_name, 'prepopulated_fields') and self._check_prepopulated_fields_value(obj, val, 'prepopulated_fields["<field_name>"]'), where <field_name> is replaced by the current key, and concatenate the two returned lists. RESULT per_item_errors]
+            [COMMAND Flatten all per_item_errors using chain.from_iterable and convert the flattened iterator to a list; if there were no items, this produces an empty list. RESULT flattened_errors]
+            [COMMAND Return flattened_errors as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: not isinstance(obj.prepopulated_fields, dict)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a dictionary", option="prepopulated_fields", obj=obj, id="admin.E026"). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that a key in prepopulated_fields refers to an existing model field that is not a DateTimeField, ForeignKey, or ManyToManyField, returning an empty list if valid or a checks.Error otherwise." _check_prepopulated_fields_key]
+    [INPUTS]
+        <REF> obj </REF>: object "The object whose model metadata is inspected; obj.model._meta is used for field lookup."
+        <REF> field_name </REF>: str "The name of the field to look up in obj.model._meta."
+        <REF> label </REF>: str "The option label used in validation error messages to identify the prepopulated_fields entry."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of validation errors. Returns an empty list when the field exists and is not a disallowed field type; otherwise returns a list containing the relevant checks.Error."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the try block, retrieve the model field named field_name by calling obj.model._meta.get_field(field_name). RESULT field]
+            [COMMAND In the else block of the try/except, check whether field is an instance of models.DateTimeField, models.ForeignKey, or models.ManyToManyField. RESULT is_disallowed_type]
+            [COMMAND If is_disallowed_type is true, return a list containing one checks.Error with the message "The value of '%s' refers to '%s', which must not be a DateTimeField, a ForeignKey, a OneToOneField, or a ManyToManyField." formatted with label and field_name, with obj=obj.__class__ and id='admin.E028'. RESULT disallowed_type_error_list]
+            [COMMAND If is_disallowed_type is false, return an empty list. RESULT empty_validation_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: FieldDoesNotExist is raised by obj.model._meta.get_field(field_name) in the try block.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of refer_to_missing_field(field=field_name, option=label, obj=obj, id='admin.E027'). RESULT missing_field_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that a prepopulated_fields value is a list or tuple; if so, validates each subfield through the per-item helper and flattens the results into a list, otherwise returns the admin.E029 error." _check_prepopulated_fields_value]
+    [INPUTS]
+        <REF> obj </REF>: object "The object being checked; used for context in error messages and passed to the per-item validator."
+        <REF> val </REF>: object "The value of a prepopulated_fields entry to validate; expected to be a list or tuple."
+        <REF> label </REF>: str "Label used in error messages and per-subfield labels, e.g. prepopulated_fields['field']."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list containing the flattened validation results collected by chain.from_iterable, or, on invalid input, the error list returned by must_be."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether val is an instance of list or tuple. RESULT is_list_or_tuple]
+            [COMMAND If val is a list or tuple, enumerate val to produce index and subfield_name pairs in original order. RESULT enumerated_pairs]
+            [COMMAND Within the generator over enumerated_pairs, call self._check_prepopulated_fields_value_item(obj, subfield_name, "%s[%r]" % (label, index)) for each pair, flatten the returned iterables with chain.from_iterable, and collect the resulting flattened sequence into a list. RESULT flattened_list]
+            [COMMAND Return flattened_list as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When val is not an instance of list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option=label, obj=obj, id="admin.E029"). RESULT validation_error_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the field referenced by a prepopulated_fields slug option exists on the model, returning an empty list when it exists and a missing-field error when it does not." _check_prepopulated_fields_value_item]
+    [INPUTS]
+        <REF> obj </REF>: object "Model admin instance whose model is inspected; must expose model._meta.get_field()."
+        <REF> field_name </REF>: string "Name of the field to verify on the model."
+        <REF> label </REF>: string "Option label used in the missing-field error message."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "Empty list when the field exists, or the result of refer_to_missing_field() with error id 'admin.E030' when the field does not exist."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Attempt to retrieve field_name from the model's metadata by calling obj.model._meta.get_field(field_name). RESULT field_lookup]
+            [COMMAND Within the try-block's else branch, after a successful field lookup, return an empty list as the validation result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If the field lookup in the try block raises FieldDoesNotExist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of refer_to_missing_field(field=field_name, option=label, obj=obj, id='admin.E030'). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates the ordering attribute on the given object, treating None as valid, rejecting non-list/tuple values with an admin.E031 error, and otherwise returning flattened results from checking each ordering item." _check_ordering]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance of the checker."
+        <REF> obj </REF>: object "The object whose ordering attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> validation_errors </REF>: list "List of collected validation errors; an empty list when ordering is None or no errors are found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the else path where obj.ordering is a non-None list or tuple, iterate over enumerate(obj.ordering) and, for each index and field_name, call self._check_ordering_item(obj, field_name, 'ordering[%d]' % index). RESULT check_results]
+            [COMMAND Flatten check_results using chain.from_iterable, materialize the flattened result into a list, and return it. RESULT validation_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.ordering is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT validation_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.ordering is not None and not isinstance(obj.ordering, (list, tuple))]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="ordering", obj=obj, id="admin.E031"). RESULT validation_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a single entry from a model admin's ordering option by normalizing expression-like values and verifying that ordinary field names exist, returning a list of admin check errors or an empty list." _check_ordering_item]
+    [INPUTS]
+        <REF> obj </REF>: ModelAdmin instance "The model admin object whose ordering option is being validated; supplies obj.ordering, obj.model, and obj.__class__ for error reporting."
+        <REF> field_name </REF>: str, Combinable, or models.OrderBy "A single ordering entry: a field name string, the random marker '?', a lookup expression containing LOOKUP_SEP, or an OrderBy/Combinable expression."
+        <REF> label </REF>: str "The option label used in the missing-field admin error message."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "A list of Django admin system check Error objects; an empty list means the ordering item is valid or was skipped."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Begin validation for one ordering entry, using field_name as the current entry and label for error messages. RESULT field_name]
+            [COMMAND If field_name is an instance of Combinable or models.OrderBy, normalize it: convert a non-OrderBy Combinable to OrderBy by calling asc(), then if the OrderBy expression is an F expression, replace field_name with the F expression's name; otherwise return an empty list immediately. RESULT field_name]
+            [COMMAND After any normalization, evaluate field_name with short-circuit logic: first check whether field_name is '?' and len(obj.ordering) is not 1, then whether it is standalone '?', then whether LOOKUP_SEP is present, and finally treat it as an ordinary string field name. RESULT validation_result]
+            [COMMAND Return validation_result, which is an empty list or a list containing one admin error. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: field_name is an instance of Combinable or models.OrderBy and its OrderBy expression is not an F expression]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately because the ordering expression is not a supported plain field reference. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field_name equals '?' and len(obj.ordering) is not 1, with short-circuit evaluation so len(obj.ordering) is only evaluated when field_name equals '?']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing one checks.Error object with message text "The value of 'ordering' has the random ordering marker '?', but contains other fields as well.", hint 'Either remove the "?", or remove the other fields.', obj set to obj.__class__, and id set to 'admin.E032'. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field_name equals '?' and len(obj.ordering) is exactly 1]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list because the standalone random ordering marker is valid. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: LOOKUP_SEP is present in field_name]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list without validating the field, skipping ordering entries in the format field1__field2. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field_name is an ordinary string not equal to '?' and not containing LOOKUP_SEP]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Remove a leading '-' from field_name using removeprefix('-') to handle descending order; if the resulting field_name equals 'pk', return an empty list. RESULT field_name]
+            [COMMAND If the normalized field_name is not 'pk', attempt to resolve it by calling obj.model._meta.get_field(field_name). RESULT field_lookup_success]
+            [COMMAND If get_field() completes without error, return an empty list; if FieldDoesNotExist is raised, return refer_to_missing_field(field=field_name, option=label, obj=obj, id='admin.E033'). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates obj.readonly_fields by returning an empty list for an empty tuple, returning a must_be() validation error when it is not a list or tuple, and otherwise checking each field name and flattening the resulting errors." _check_readonly_fields]
+    [INPUTS]
+        <REF> self </REF>: object "The current object instance providing the _check_readonly_fields_item method."
+        <REF> obj </REF>: object "An object exposing readonly_fields; typically a Django ModelAdmin instance."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list if readonly_fields is an empty tuple; the value returned by must_be() if readonly_fields is not a list or tuple; otherwise a flattened list of results from _check_readonly_fields_item."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read obj.readonly_fields. RESULT readonly_fields]
+            [COMMAND In the valid list/tuple branch (a list or tuple, including an empty list because it is not equal to ()), create a generator expression that calls self._check_readonly_fields_item(obj, field_name, 'readonly_fields[%d]' % index) for each index and field_name from enumerate(obj.readonly_fields). RESULT generated_checks]
+            [COMMAND In the valid list/tuple branch, flatten generated_checks using chain.from_iterable and collect the flattened results into a list with list(...). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.readonly_fields == ()]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: not isinstance(obj.readonly_fields, (list, tuple))]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of must_be('a list or tuple', option='readonly_fields', obj=obj, id='admin.E034') immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether field_name is a callable, an attribute of obj or obj.model, or a real model field, returning an empty list if valid and a Django admin E035 error list if not." _check_readonly_fields_item]
+    [INPUTS]
+        <REF> self </REF>: object "Bound method receiver; not used directly in the validation logic."
+        <REF> obj </REF>: object "Object whose attributes and model are inspected for field_name."
+        <REF> field_name </REF>: string or callable "Candidate readonly field value to validate."
+        <REF> label </REF>: string "Human-readable label substituted into the error message."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Empty list if field_name is valid, or a list containing one Django admin checks.Error with id admin.E035 if it cannot be resolved."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate callable(field_name) first. If true, return an empty list immediately; otherwise continue to the next check. RESULT empty_list]
+            [COMMAND Evaluate hasattr(obj, field_name). If true, return an empty list immediately; otherwise continue to the next check. RESULT empty_list]
+            [COMMAND Evaluate hasattr(obj.model, field_name). If true, return an empty list immediately; otherwise continue to the final else branch. RESULT empty_list]
+            [COMMAND Within the final else branch, call obj.model._meta.get_field(field_name) only to test whether field_name resolves as a real model field; ignore the returned field object. If the call succeeds, return an empty list. RESULT empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The call to obj.model._meta.get_field(field_name) in the final else branch raises FieldDoesNotExist.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the error message from the template 'The value of '%s' is not a callable, an attribute of '%s', or an attribute of '%s'.' by substituting label, obj.__class__.__name__, and obj.model._meta.label respectively. RESULT error_message]
+            [COMMAND Construct a checks.Error object with the built error message, obj=obj.__class__, and id=admin.E035. RESULT admin_error]
+            [COMMAND Return a list containing the constructed admin_error. RESULT error_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS ModelAdminChecks
+
+[DEFINE_WORKER: "Combines the parent admin check and all internal configuration validation results into a single list of Django system check messages." check]
+    [INPUTS]
+        <REF> admin_obj </REF>: object "The model admin instance being checked; passed to every validation method."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted for API compatibility; they are not used by the implementation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "The concatenated list of Django system check messages produced by super().check(admin_obj) and each internal _check_* method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().check(admin_obj) to obtain the base admin system check messages. RESULT base_checks]
+            [COMMAND Call self._check_save_as(admin_obj) to obtain save_as configuration check messages. RESULT save_as_checks]
+            [COMMAND Call self._check_save_on_top(admin_obj) to obtain save_on_top configuration check messages. RESULT save_on_top_checks]
+            [COMMAND Call self._check_inlines(admin_obj) to obtain inline configuration check messages. RESULT inlines_checks]
+            [COMMAND Call self._check_list_display(admin_obj) to obtain list_display configuration check messages. RESULT list_display_checks]
+            [COMMAND Call self._check_list_display_links(admin_obj) to obtain list_display_links configuration check messages. RESULT list_display_links_checks]
+            [COMMAND Call self._check_list_filter(admin_obj) to obtain list_filter configuration check messages. RESULT list_filter_checks]
+            [COMMAND Call self._check_list_select_related(admin_obj) to obtain list_select_related configuration check messages. RESULT list_select_related_checks]
+            [COMMAND Call self._check_list_per_page(admin_obj) to obtain list_per_page configuration check messages. RESULT list_per_page_checks]
+            [COMMAND Call self._check_list_max_show_all(admin_obj) to obtain list_max_show_all configuration check messages. RESULT list_max_show_all_checks]
+            [COMMAND Call self._check_list_editable(admin_obj) to obtain list_editable configuration check messages. RESULT list_editable_checks]
+            [COMMAND Call self._check_search_fields(admin_obj) to obtain search_fields configuration check messages. RESULT search_fields_checks]
+            [COMMAND Call self._check_date_hierarchy(admin_obj) to obtain date_hierarchy configuration check messages. RESULT date_hierarchy_checks]
+            [COMMAND Call self._check_action_permission_methods(admin_obj) to obtain action permission configuration check messages. RESULT action_permission_methods_checks]
+            [COMMAND Call self._check_actions_uniqueness(admin_obj) to obtain action uniqueness configuration check messages. RESULT actions_uniqueness_checks]
+            [COMMAND Construct and return a list by unpacking base_checks, save_as_checks, save_on_top_checks, inlines_checks, list_display_checks, list_display_links_checks, list_filter_checks, list_select_related_checks, list_per_page_checks, list_max_show_all_checks, list_editable_checks, search_fields_checks, date_hierarchy_checks, action_permission_methods_checks, and actions_uniqueness_checks, in that order. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether obj.save_as is a boolean; if it is not, returns the admin.E101 validation error, otherwise returns an empty list." _check_save_as]
+    [INPUTS]
+        <REF> self </REF>: object "Current instance of the validator class (not used in the validation logic)."
+        <REF> obj </REF>: object "Object whose save_as attribute is being checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Empty list if save_as is a boolean; otherwise the result of must_be('a boolean', option='save_as', obj=obj, id='admin.E101')."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.save_as is not an instance of bool. RESULT not_bool]
+            [COMMAND If not_bool is true, return must_be("a boolean", option="save_as", obj=obj, id="admin.E101"). RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: not_bool is false (obj.save_as is a boolean)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT no_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.save_on_top is a real boolean and returns an admin.E102 validation error if it is not, otherwise returns an empty list." _check_save_on_top]
+    [INPUTS]
+        <REF> obj </REF>: object "Object containing the save_on_top attribute to validate."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> validation_result </REF>: list "Empty list when save_on_top is a boolean; otherwise the list returned by must_be containing the admin.E102 validation error."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the condition `not isinstance(obj.save_on_top, bool)` to determine whether obj.save_on_top is not a Python boolean. RESULT is_not_boolean]
+            [COMMAND If is_not_boolean is False, return an empty list because obj.save_on_top is a valid boolean. RESULT validation_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_not_boolean is True]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately with must_be("a boolean", option="save_on_top", obj=obj, id="admin.E102") to report the admin.E102 validation error. RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that obj.inlines is a list or tuple and, if valid, validates each inline model admin class in obj.inlines, returning the flattened list of validation errors." _check_inlines]
+    [INPUTS]
+        <REF> self </REF>: object "The model admin instance on which the check is invoked."
+        <REF> obj </REF>: object "The object whose inlines attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or validation error "A list of validation errors from checking each inline item, or the error returned by must_be when obj.inlines is not a list or tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether obj.inlines is an instance of list or tuple. RESULT inlines_type_is_valid]
+            [COMMAND If inlines_type_is_valid is true, for each index and item returned by enumerate(obj.inlines), call self._check_inlines_item(obj, item, "inlines[%d]" % index) and collect the returned values. RESULT inline_item_results]
+            [COMMAND Flatten inline_item_results by passing it to chain.from_iterable and converting the result to a list; when obj.inlines is empty, this yields an empty list. RESULT flat_validation_results]
+            [COMMAND Return flat_validation_results. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.inlines is not an instance of list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of must_be("a list or tuple", option="inlines", obj=obj, id="admin.E103") immediately, skipping inline item checks. RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates an inline admin class by ensuring it is a Django InlineModelAdmin subclass, has a model attribute, and its model is a Django Model, returning the appropriate admin check errors or the inline admin instance's check() results." _check_inlines_item]
+    [INPUTS]
+        <REF> self </REF>: object "The ModelAdmin instance on which the check is invoked."
+        <REF> obj </REF>: object "The model admin class or object being checked, used as context for error reporting."
+        <REF> inline </REF>: class "The inline admin class to validate."
+        <REF> label </REF>: string "Label for the inline; not used by this method but preserved for interface compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of Django checks.Error validation errors, or the list returned by the constructed inline admin instance's check() method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute inline_label by concatenating inline.__module__, '.', and inline.__name__. RESULT inline_label]
+            [COMMAND Import InlineModelAdmin from django.contrib.admin.options. RESULT inline_model_admin_class]
+            [COMMAND After all validation guards pass, construct inline(obj.model, obj.admin_site) and return the result of calling its check() method. RESULT inline_check_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Accessing inline.__module__ or inline.__name__ raises AttributeError during inline_label construction.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error("'%s' must inherit from 'InlineModelAdmin'." % obj, obj=obj.__class__, id="admin.E104"). RESULT e104_attr_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: inline_label was constructed successfully and inline is not a subclass of InlineModelAdmin.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error("'%s' must inherit from 'InlineModelAdmin'." % inline_label, obj=obj.__class__, id="admin.E104"). RESULT e104_subclass_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: inline_label was constructed successfully, inline is a subclass of InlineModelAdmin, and inline.model is missing, None, or otherwise falsy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return a list containing checks.Error("'%s' must have a 'model' attribute." % inline_label, obj=obj.__class__, id="admin.E105"). RESULT e105_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: inline_label was constructed successfully, inline is a subclass of InlineModelAdmin, inline.model is truthy, and inline.model is not a subclass of models.Model.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a Model", option="%s.model" % inline_label, obj=obj, id="admin.E106"). RESULT e106_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.list_display is a list or tuple; if it is not, returns a must_be error, otherwise checks every item and returns the flattened list of item-level validation errors." _check_list_display]
+    [INPUTS]
+        <REF> obj </REF>: object "Object whose list_display attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or object "Flattened list of validation errors when list_display is valid; otherwise the result of must_be(...) for an invalid list_display type."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate isinstance(obj.list_display, (list, tuple)) and store the boolean result. RESULT is_valid_type]
+            [COMMAND On the valid-type path (is_valid_type is True), enumerate obj.list_display with zero-based indices from 0 through len(obj.list_display)-1, producing (index, item) pairs. RESULT enumerated_items]
+            [COMMAND For each (index, item) in enumerated_items, call self._check_list_display_item(obj, item, "list_display[%d]" % index) and collect the returned iterable. RESULT per_item_results]
+            [COMMAND Flatten per_item_results using chain.from_iterable, convert the flattened iterator to a list, and return that list. RESULT final_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_valid_type is False (obj.list_display is not a list or tuple)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="list_display", obj=obj, id="admin.E107"). RESULT must_be_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a list_display item is callable, an existing attribute, or a resolvable model field; it returns an empty list for valid items and an admin error list for unresolvable items or unsupported relation fields." _check_list_display_item]
+    [INPUTS]
+        <REF> obj </REF>: object "The object being checked; its model is accessed as obj.model and its class name is used in error messages."
+        <REF> item </REF>: object "The list_display item to validate, normally a string; callable items cause an early empty-list result."
+        <REF> label </REF>: str "The option label used in error messages, usually 'list_display'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list when the item is valid; otherwise a list containing one checks.Error describing the invalid item."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether item is callable. If true, return an empty list immediately and stop the check. RESULT empty_list]
+            [COMMAND Otherwise, since the callable check was false, check whether obj has an attribute named item using hasattr(obj, item). If true, return an empty list immediately and stop the check. RESULT empty_list]
+            [COMMAND If neither guard is true, attempt to resolve the field by evaluating obj.model._meta.get_field(item). RESULT field]
+            [COMMAND If the get_field call raises FieldDoesNotExist, attempt to resolve the field by evaluating getattr(obj.model, item). RESULT field]
+            [COMMAND If the getattr fallback raises AttributeError, construct a list containing one checks.Error with id 'admin.E108', using label, item, obj.__class__.__name__, and obj.model._meta.label in the message, with obj set to obj.__class__, then return it and stop the check. RESULT error_list_admin_E108]
+            [COMMAND After field is resolved, evaluate the relation-guard condition with short-circuit behavior: (getattr(field, 'is_relation', False) and (field.many_to_many or field.one_to_many)) or (getattr(field, 'rel', None) and field.rel.field.many_to_one). If the condition is true, construct a list containing one checks.Error with id 'admin.E109', message "The value of '{label}' must not be a many-to-many field or a reverse foreign key.", and obj set to obj.__class__, then return it and stop the check. RESULT error_list_admin_E109]
+            [COMMAND If none of the previous return conditions is met, return an empty list. RESULT empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validate that the ModelAdmin option list_display_links is either None or a list/tuple of valid field references forming a unique subset of list_display, returning an empty list for unset or overridden get_list_display cases and must_be validation errors for invalid types." _check_list_display_links]
+    [INPUTS]
+        <REF> self </REF>: object "The current checks helper instance used to call _check_list_display_links_item."
+        <REF> obj </REF>: ModelAdmin "The ModelAdmin instance whose list_display_links option is being checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> list_display_links_errors </REF>: list "A list of validation errors; empty when list_display_links is None, when get_list_display is overridden, or when all listed field names are valid."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import ModelAdmin from django.contrib.admin.options. RESULT ModelAdmin]
+            [COMMAND If obj.list_display_links is None, return an empty list [] and skip the remaining checks. RESULT list_display_links_errors]
+            [COMMAND Else if obj.list_display_links is not an instance of list or tuple, return must_be("a list, a tuple, or None", option="list_display_links", obj=obj, id="admin.E110") and skip the remaining checks. RESULT list_display_links_errors]
+            [COMMAND Else if obj.get_list_display.__func__ is ModelAdmin.get_list_display, for each index (starting at 0) and field_name from enumerate(obj.list_display_links), build a generator expression that calls self._check_list_display_links_item(obj, field_name, "list_display_links[%d]" % index), flatten the generated lists with chain.from_iterable, and return list(...) of the flattened results. RESULT list_display_links_errors]
+            [COMMAND Else, meaning obj.list_display_links is a list or tuple and obj.get_list_display.__func__ is not ModelAdmin.get_list_display, return an empty list []. RESULT list_display_links_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether field_name is present in obj.list_display; if it is missing, returns a single admin.E111 validation error, otherwise returns an empty list." _check_list_display_links_item]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is invoked; not referenced by the method body."
+        <REF> obj </REF>: object "The object whose list_display attribute is inspected."
+        <REF> field_name </REF>: str "The field name whose presence in obj.list_display is checked."
+        <REF> label </REF>: str "The label used to build the validation error message."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list containing one checks.Error with id admin.E111 if field_name is not in obj.list_display; otherwise an empty list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether field_name is not present in obj.list_display using the 'not in' membership test. RESULT field_missing]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If field_missing is true, meaning field_name is not in obj.list_display]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the error message by formatting the string "The value of '%s' refers to '%s', which is not defined in 'list_display'." with label and field_name. RESULT error_message]
+            [COMMAND Create a checks.Error with message error_message, obj set to obj.__class__, and id set to "admin.E111". RESULT admin_error]
+            [COMMAND Return a list containing admin_error. RESULT error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If field_missing is false, meaning field_name is in obj.list_display]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT empty_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.list_filter is a list or tuple and, if valid, returns a flattened list of per-item checks; otherwise returns a must_be validation error." _check_list_filter]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance on which the method is invoked."
+        <REF> obj </REF>: object "The object whose list_filter attribute is to be validated and checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list | object "A flattened list of results from _check_list_filter_item if obj.list_filter is a list or tuple, otherwise the result of must_be('a list or tuple', option='list_filter', obj=obj, id='admin.E112')."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.list_filter is an instance of list or tuple. RESULT is_list_or_tuple]
+            [COMMAND In the valid branch, iterate over enumerate(obj.list_filter) to produce 0-based index and item pairs. RESULT enumerated_items]
+            [COMMAND For each index and item, call self._check_list_filter_item(obj, item, 'list_filter[%d]' % index) and collect the results. RESULT item_check_results]
+            [COMMAND Flatten the collected item_check_results one level using chain.from_iterable and convert the flattened iterable to a list. RESULT flattened_results]
+            [COMMAND Return flattened_results. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.list_filter is not an instance of list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be('a list or tuple', option='list_filter', obj=obj, id='admin.E112'). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates one item from Django's list_filter, returning a Django system check error for invalid callable filters, invalid FieldListFilter subclasses, invalid tuple entries, or unresolvable field paths, or an empty list when the item is valid." _check_list_filter_item]
+    [INPUTS]
+        <REF> obj </REF>: object "The object being checked; it must expose a model attribute for field path resolution and is used to identify the checked class in generated errors."
+        <REF> item </REF>: object "A single list_filter entry: a callable filter class, a (field, list_filter_class) tuple/list, or a field name/path."
+        <REF> label </REF>: str "Text label used in option strings and error messages to identify the list_filter entry being checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of Django system check Error objects for invalid entries, or an empty list when the entry is valid."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import FieldListFilter and ListFilter from django.contrib.admin. RESULT admin_filter_classes]
+            [COMMAND If callable(item) is true and item is not an instance of models.Field, validate item as a callable list filter and return the result. RESULT callable_filter_result]
+            [COMMAND Else if item is a tuple or list, validate item as a (field, list_filter_class) pair and return the result. RESULT tuple_filter_result]
+            [COMMAND Else treat item as a field path, validate it against obj.model, and return the result. RESULT field_path_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: item is callable and is not an instance of models.Field]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the callable filter branch, if _issubclass(item, ListFilter) is false, return must_inherit_from(parent='ListFilter', option=label, obj=obj, id='admin.E113'). RESULT error_admin_E113]
+            [COMMAND Within the callable filter branch, after the ListFilter subclass check succeeds, if issubclass(item, FieldListFilter) is true, return a list containing checks.Error with message "The value of '%s' must not inherit from 'FieldListFilter'." formatted with label, obj=obj.__class__, and id='admin.E114'. RESULT error_admin_E114]
+            [COMMAND Within the callable filter branch, after the ListFilter subclass check succeeds, if issubclass(item, FieldListFilter) is false, return an empty list. RESULT empty_callable_valid]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: item is a tuple or list and the previous callable condition was false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the tuple/list branch, unpack item into field and list_filter_class. RESULT field_and_list_filter_class]
+            [COMMAND Within the tuple/list branch, if _issubclass(list_filter_class, FieldListFilter) is false, return must_inherit_from(parent='FieldListFilter', option=label with '[1]' appended, obj=obj, id='admin.E115'). RESULT error_admin_E115]
+            [COMMAND Within the tuple/list branch, if _issubclass(list_filter_class, FieldListFilter) is true, return an empty list. RESULT empty_tuple_valid]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: item is neither callable nor a tuple/list, so it is treated as a field path]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the field path branch, set field = item. RESULT field]
+            [COMMAND Within the field path branch, call get_fields_from_path(obj.model, field); the return value is unused and is only used to trigger validation. RESULT resolved_fields_unused]
+            [COMMAND Within the field path branch, if get_fields_from_path(obj.model, field) returns without raising NotRelationField or FieldDoesNotExist, return an empty list. RESULT empty_field_valid]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the field path branch, get_fields_from_path(obj.model, field) raises NotRelationField or FieldDoesNotExist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In response to NotRelationField or FieldDoesNotExist, return a list containing checks.Error with message "The value of '%s' refers to '%s', which does not refer to a Field." formatted with label and field, obj=obj.__class__, and id='admin.E116'. RESULT error_admin_E116]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.list_select_related is a boolean, list, or tuple; if it is not, returns a validation error via must_be, otherwise returns an empty list." _check_list_select_related]
+    [INPUTS]
+        <REF> obj </REF>: object "Object whose list_select_related attribute is checked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Empty list when list_select_related is valid; otherwise the result of must_be(...)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.list_select_related is not an instance of bool, list, or tuple. RESULT is_invalid_type]
+            [COMMAND If is_invalid_type is true, call must_be with message 'a boolean, tuple or list', option 'list_select_related', obj, and id 'admin.E117', then return its result. RESULT validation_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When obj.list_select_related is an instance of bool, list, or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT []]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that obj.list_per_page is an integer and returns an empty list on success or the result of must_be on failure." _check_list_per_page]
+    [INPUTS]
+        <REF> self </REF>: object "The current class instance."
+        <REF> obj </REF>: object "The object whose list_per_page attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list if obj.list_per_page is an integer; otherwise the validation error list returned by must_be."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether obj.list_per_page is not an integer using not isinstance(obj.list_per_page, int). RESULT is_not_integer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_not_integer is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("an integer", option="list_per_page", obj=obj, id="admin.E118"). RESULT must_be_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: is_not_integer is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT empty_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that obj.list_max_show_all is an integer; if it is not, returns a validation error from must_be, otherwise returns an empty list." _check_list_max_show_all]
+    [INPUTS]
+        <REF> obj </REF>: object "The object containing the list_max_show_all attribute to validate."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list or validation-result "Returns [] when obj.list_max_show_all is an int; otherwise returns must_be('an integer', option='list_max_show_all', obj=obj, id='admin.E119')."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether obj.list_max_show_all is not an instance of int. RESULT is_not_int]
+            [COMMAND If is_not_int is true, return must_be("an integer", option="list_max_show_all", obj=obj, id="admin.E119"). RESULT must_be_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_not_int is false, meaning obj.list_max_show_all is an int]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list to indicate successful validation. RESULT empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that obj.list_editable is a list or tuple and, if valid, returns the flattened validation errors for each item in list_editable; otherwise it returns a Django admin system check error via must_be." _check_list_editable]
+    [INPUTS]
+        <REF> self </REF>: object "The check helper instance on which this method is invoked."
+        <REF> obj </REF>: object "The object whose list_editable attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> validation_result </REF>: list or error object "A list containing the flattened validation errors from _check_list_editable_item, or the error object returned by must_be when list_editable is not a list or tuple."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.list_editable is an instance (including subclasses) of list or tuple; if it is not, take the invalid-type alternative flow and return the must_be error; if it is, continue to item validation. RESULT list_editable_type_check]
+            [COMMAND After confirming that obj.list_editable is a list or tuple, for each index, item from enumerate(obj.list_editable), call self._check_list_editable_item(obj, item, "list_editable[%d]" % index) and collect the returned iterables. RESULT item_validation_errors]
+            [COMMAND Flatten the collected iterables with chain.from_iterable, convert the flattened iterator to a list, and return that list as the final result. RESULT validation_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When obj.list_editable is not an instance (including subclasses) of list or tuple]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a list or tuple", option="list_editable", obj=obj, id="admin.E120") immediately. RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates a field referenced by list_editable by checking whether it exists, appears in list_display, avoids conflicts with list_display_links, satisfies the first-field list_display_links rule, and is editable and not a primary key, returning Django check errors or an empty list." _check_list_editable_item]
+    [INPUTS]
+        <REF> self </REF>: object "Django system check method receiver instance."
+        <REF> obj </REF>: ModelAdmin "Model admin class whose list_editable value is being checked."
+        <REF> field_name </REF>: str "Name of the field referenced by list_editable."
+        <REF> label </REF>: str "Label used in the admin option to refer to the field."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of Django system check Error objects, or an empty list if the field passes all list_editable validation rules."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Try to retrieve field by calling obj.model._meta.get_field(field_name). RESULT field]
+            [COMMAND After field is retrieved successfully, if field_name is not in obj.list_display, return a list containing checks.Error with message text `The value of '%s' refers to '%s', which is not contained in 'list_display'.` formatted with label and field_name, obj=obj.__class__, and id='admin.E122'. RESULT admin_E122_errors]
+            [COMMAND After field is retrieved successfully and after the previous condition is false, if obj.list_display_links is truthy and field_name is in obj.list_display_links, return a list containing checks.Error with message text `The value of '%s' cannot be in both 'list_editable' and 'list_display_links'.` formatted with field_name, obj=obj.__class__, and id='admin.E123'. RESULT admin_E123_errors]
+            [COMMAND After field is retrieved successfully and after the previous conditions are false, if obj.list_display[0] equals field_name, obj.list_display_links is falsy, and obj.list_display_links is not None, return a list containing checks.Error with message text `The value of '%s' refers to the first field in 'list_display' ('%s'), which cannot be used unless 'list_display_links' is set.` formatted with label and obj.list_display[0], obj=obj.__class__, and id='admin.E124'. RESULT admin_E124_errors]
+            [COMMAND After field is retrieved successfully and after the previous conditions are false, if the field is not editable or the field is a primary key, return a list containing checks.Error with message text `The value of '%s' refers to '%s', which is not editable through the admin.` formatted with label and field_name, obj=obj.__class__, and id='admin.E125'. RESULT admin_E125_errors]
+            [COMMAND After field is retrieved successfully and after all previous conditions are false, return an empty list. RESULT valid_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: FieldDoesNotExist is raised while attempting to retrieve field_name from obj.model._meta.get_field.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return refer_to_missing_field with field=field_name, option=label, obj=obj, and id='admin.E121'. RESULT missing_field_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that obj.search_fields is a list or tuple, returning a must_be validation error if it is not and an empty list if it is." _check_search_fields]
+    [INPUTS]
+        <REF> obj </REF>: object "Object whose search_fields attribute should be validated as a sequence."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of validation errors from must_be, or an empty list when the check succeeds."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether obj.search_fields is an instance of either list or tuple. RESULT search_fields_is_sequence]
+            [COMMAND If search_fields_is_sequence is false, return the result of must_be with message "a list or tuple", option "search_fields", obj set to obj, and id "admin.E126". RESULT must_be_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: search_fields_is_sequence is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT empty_list_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that the date_hierarchy option, when configured, resolves to a DateField or DateTimeField, returning an empty validation list for valid or unset configurations and an admin check error otherwise." _check_date_hierarchy]
+    [INPUTS]
+        <REF> self </REF>: object "The ModelAdminChecks instance that owns this validation method."
+        <REF> obj </REF>: object "Django ModelAdmin or similar configuration instance exposing 'model' and 'date_hierarchy' attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Empty list if date_hierarchy is None or resolves to a DateField/DateTimeField; otherwise a list containing a single validation error for admin.E127 or admin.E128."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND With obj.date_hierarchy not None, in the try block, assign field = get_fields_from_path(obj.model, obj.date_hierarchy)[-1]. RESULT field]
+            [COMMAND Using the resolved field from the try block's else clause, evaluate whether field is an instance of models.DateField or models.DateTimeField. RESULT is_valid_date_field]
+            [COMMAND If is_valid_date_field is true, return an empty validation list. RESULT success_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When obj.date_hierarchy is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty validation list because date_hierarchy is not configured. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When get_fields_from_path(obj.model, obj.date_hierarchy) raises NotRelationField or FieldDoesNotExist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the validation error list containing checks.Error("The value of 'date_hierarchy' refers to '%s', which does not refer to a Field." % obj.date_hierarchy, obj=obj.__class__, id="admin.E127"). RESULT invalid_path_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When the resolved field is not an instance of models.DateField or models.DateTimeField]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("a DateField or DateTimeField", option="date_hierarchy", obj=obj, id="admin.E128"). RESULT wrong_type_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates every action returned by obj._get_base_actions() by requiring obj to define a has_<permission>_permission method for each permission in the action's allowed_permissions, and returns any resulting admin.E129 errors." _check_action_permission_methods]
+    [INPUTS]
+        <REF> self </REF>: ModelAdmin "Unused method receiver; present because this method is defined on a model admin class."
+        <REF> obj </REF>: ModelAdmin "ModelAdmin instance used to obtain base actions and checked for has_<permission>_permission methods."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "List of Django checks.Error objects with id admin.E129 describing each missing permission method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call obj._get_base_actions() and store the returned action tuples in actions. RESULT actions]
+            [COMMAND Initialize errors as a new empty list. RESULT errors]
+            [COMMAND For each tuple (func, name, _) in actions, if func does not have an allowed_permissions attribute, continue to the next tuple; otherwise proceed with the current func. RESULT func]
+            [COMMAND Within the outer loop over actions, for each permission in func.allowed_permissions, compute method_name as 'has_%s_permission' % permission. RESULT method_name]
+            [COMMAND Within the outer loop over actions and the inner loop over func.allowed_permissions, if obj does not have an attribute or method named method_name, construct checks.Error with the message '%s must define a %s() method for the %s action.' % (obj.__class__.__name__, method_name, func.__name__), keyword arguments obj=obj.__class__ and id='admin.E129', and append it to errors. RESULT errors]
+            [COMMAND Return the errors list. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: During the outer loop over actions, the current func does not have an allowed_permissions attribute.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the current action and continue to the next tuple in actions. RESULT actions]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that every action exposed by obj has a unique __name__, and returns admin.E130 validation errors for any duplicated names." _check_actions_uniqueness]
+    [INPUTS]
+        <REF> obj </REF>: object "The object whose base actions are checked; it must provide _get_base_actions()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "A list of checks.Error instances, one for each duplicated action name; empty if all names are unique."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize errors to an empty list. RESULT errors]
+            [COMMAND Call obj._get_base_actions(), unpack each returned triple as (_, name, _), and build a collections.Counter of name frequencies; assign the counter to names. RESULT names]
+            [COMMAND For each name, count pair in names.items(), where count is the number of occurrences of name. RESULT name_count_pair]
+            [COMMAND Within the for loop over names.items(), if count is greater than 1, append a checks.Error object to errors whose message is formatted as '__name__ attributes of actions defined in %s must be unique. Name %r is not unique.' with obj.__class__.__name__ and name, whose obj argument is obj.__class__, and whose id is 'admin.E130'. If count is 1 or less, append nothing. RESULT errors]
+            [COMMAND Return the errors list. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS InlineModelAdminChecks
+
+[DEFINE_WORKER: "Checks an inline admin object by combining the base check with relation, exclude-of-parent-model, extra, max_num, min_num, and formset validation checks and returning the accumulated list of errors." check]
+    [INPUTS]
+        <REF> inline_obj </REF>: object "The inline admin object to validate."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted for compatibility; not used by this method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "Combined list of validation errors in the order: base errors, relation errors, exclude-of-parent-model errors, extra errors, max_num errors, min_num errors, formset errors."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign inline_obj.parent_model to parent_model. RESULT parent_model]
+            [COMMAND Call super().check(inline_obj) and store the returned iterable as base_errors. RESULT base_errors]
+            [COMMAND Call self._check_relation(inline_obj, parent_model) and store the returned iterable as relation_errors. RESULT relation_errors]
+            [COMMAND Call self._check_exclude_of_parent_model(inline_obj, parent_model) and store the returned iterable as exclude_parent_model_errors. RESULT exclude_parent_model_errors]
+            [COMMAND Call self._check_extra(inline_obj) and store the returned iterable as extra_errors. RESULT extra_errors]
+            [COMMAND Call self._check_max_num(inline_obj) and store the returned iterable as max_num_errors. RESULT max_num_errors]
+            [COMMAND Call self._check_min_num(inline_obj) and store the returned iterable as min_num_errors. RESULT min_num_errors]
+            [COMMAND Call self._check_formset(inline_obj) and store the returned iterable as formset_errors. RESULT formset_errors]
+            [COMMAND Return the combined list built by spreading base_errors, relation_errors, exclude_parent_model_errors, extra_errors, max_num_errors, min_num_errors, and formset_errors in that exact order. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a parent-model foreign key is present in the admin field exclusion list, returning an admin.E201 validation error if it is and an empty list otherwise, while skipping the check when base validation errors, an invalid relation, or a None exclude list are present." _check_exclude_of_parent_model]
+    [INPUTS]
+        <REF> obj </REF>: object "The check/field object being validated; provides model, fk_name, exclude, and __class__."
+        <REF> parent_model </REF>: object "The parent model class; provides _meta.label and is used to resolve the foreign key."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list containing one checks.Error with id admin.E201 if the foreign key is excluded; otherwise an empty list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super()._check_exclude(obj) and assign the returned list to errors. RESULT errors]
+            [COMMAND If errors is truthy, return an empty list and stop. RESULT empty_list]
+            [COMMAND Call self._check_relation(obj, parent_model) and assign the returned value to relation_check. RESULT relation_check]
+            [COMMAND If relation_check is truthy, return an empty list and stop. RESULT empty_list]
+            [COMMAND If obj.exclude is None, return an empty list and stop. RESULT empty_list]
+            [COMMAND Resolve the foreign key by calling _get_foreign_key(parent_model, obj.model, fk_name=obj.fk_name) and assign it to fk. RESULT fk]
+            [COMMAND If fk.name is in obj.exclude, return a list containing one checks.Error with the message "Cannot exclude the field '%s', because it is the foreign key to the parent model '%s'." formatted with fk.name and parent_model._meta.label, with obj=obj.__class__ and id='admin.E201'. RESULT error_list]
+            [COMMAND Otherwise, return an empty list. RESULT empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that the model referenced by obj's foreign key is a valid relation to parent_model, returning a validation error if the relation is invalid and an empty list otherwise." _check_relation]
+    [INPUTS]
+        <REF> obj </REF>: object "The object representing the relation to check, with model and fk_name attributes."
+        <REF> parent_model </REF>: model class "The parent model to which the relation is expected to point."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return </REF>: list "An empty list when the relation is valid, or a list containing a checks.Error when a ValueError occurs."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the try block, call _get_foreign_key(parent_model, obj.model, fk_name=obj.fk_name) to validate the foreign key relation. RESULT foreign_key_validation_result]
+            [COMMAND In the else block after a successful validation, return an empty list. RESULT normal_validation_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If _get_foreign_key raises ValueError as e during the validation call]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the except ValueError block, return a list containing a checks.Error with message e.args[0], obj=obj.__class__, and id='admin.E202'. RESULT error_validation_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether obj.extra is an integer and returns a validation error if it is not, otherwise returns an empty list." _check_extra]
+    [INPUTS]
+        <REF> obj </REF>: object "The object whose extra attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list when obj.extra is an integer; otherwise the validation error list produced by must_be(...) with id admin.E203."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether obj.extra is an integer using isinstance(obj.extra, int). RESULT is_integer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If obj.extra is not an integer]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the validation error from must_be("an integer", option="extra", obj=obj, id="admin.E203"). RESULT validation_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: If obj.extra is an integer]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT no_errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.max_num is either None or an integer, returning an empty list for both valid cases and the result of must_be for non-integer values." _check_max_num]
+    [INPUTS]
+        <REF> obj </REF>: object "Object whose max_num attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "Empty list when max_num is None or an integer; otherwise the result of must_be('an integer', option='max_num', obj=obj, id='admin.E204')."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate obj.max_num to determine which validation branch applies. RESULT max_num_case]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.max_num is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT none_empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.max_num is not None and not isinstance(obj.max_num, int)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call must_be("an integer", option="max_num", obj=obj, id="admin.E204") and return its result. RESULT must_be_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.max_num is not None and isinstance(obj.max_num, int)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list. RESULT int_empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that obj.min_num is either None or an integer, returning an empty list for valid cases and a must_be validation error for non-integer values." _check_min_num]
+    [INPUTS]
+        <REF> obj </REF>: object "The object whose min_num attribute is being validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "An empty list if min_num is None or an int; otherwise the result of must_be('an integer', option='min_num', obj=obj, id='admin.E205')."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate obj.min_num and select the validation branch based on whether it is None, an int, or a non-int value. RESULT selection]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.min_num is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.min_num is not None and is not an instance of int]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return must_be("an integer", option="min_num", obj=obj, id="admin.E205") immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: obj.min_num is not None and is an instance of int]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that obj.formset is a subclass of BaseModelFormSet and returns an admin.E206 validation error if it is not, otherwise returns an empty list." _check_formset]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance of the class that defines _check_formset."
+        <REF> obj </REF>: object "The object being checked; its formset attribute is validated."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A list of validation errors. Returns an empty list when obj.formset is a subclass of BaseModelFormSet; otherwise returns the admin.E206 error list from must_inherit_from."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether obj.formset is a subclass of BaseModelFormSet, considering the same class as a subclass of itself. RESULT is_subclass]
+            [COMMAND If is_subclass is false, return the result of must_inherit_from(parent="BaseModelFormSet", option="formset", obj=obj, id="admin.E206"). RESULT error_list]
+            [COMMAND If is_subclass is true, return an empty list to indicate that no errors were found. RESULT empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether cls is a subclass of classinfo, returning False instead of raising TypeError when cls is not a class." _issubclass]
+    [INPUTS]
+        <REF> cls </REF>: object "Object to test as a class; if it is not a class, the function returns False."
+        <REF> classinfo </REF>: type or tuple of types "Class, type, or tuple of classes/types to check cls against."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if cls is a subclass of classinfo; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the try block, return the result of calling built-in issubclass(cls, classinfo). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Calling built-in issubclass(cls, classinfo) raises TypeError, which happens when cls is not a class or classinfo is not a class or tuple of classes.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the except TypeError block, return False. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether any dotted class path in candidate_paths resolves to a class that is the same as or a subclass of the class identified by class_path, ignoring candidate paths that cannot be imported." _contains_subclass]
+    [INPUTS]
+        <REF> class_path </REF>: str "Dotted Python path to the base class to compare against."
+        <REF> candidate_paths </REF>: Iterable[str] "Ordered collection of dotted Python paths to candidate classes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if an importable candidate class is the base class or a subclass of it; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve class_path with import_string and assign the resulting class object to cls. RESULT cls]
+            [COMMAND Start a for loop over candidate_paths; for the current path, attempt to import candidate_cls using import_string(path). RESULT candidate_cls]
+            [COMMAND After a successful import in the current loop iteration, if _issubclass(candidate_cls, cls) is true, immediately return True and exit the function. RESULT True]
+            [COMMAND If the loop exhausts all candidate paths without a match, return False. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Inside the loop over candidate_paths, import_string(path) raises ImportError for the current path]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ignore the failed candidate path and continue with the next path in candidate_paths. RESULT continue_loop]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks all registered Django admin sites with the given app configs and returns a combined list of errors." check_admin_app]
+    [INPUTS]
+        <REF> app_configs </REF>: object "App configuration list passed to Django admin site checks; may be None."
+        <REF> kwargs </REF>: object "Additional keyword arguments accepted for compatibility but not used."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "Collected error list from all Django admin sites."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import all_sites from django.contrib.admin.sites. RESULT all_sites]
+            [COMMAND Initialize errors as an empty list. RESULT errors]
+            [COMMAND For each site in all_sites, call site.check(app_configs) and extend errors with the returned list. RESULT errors]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks that the Django admin's required installed apps, DjangoTemplates configuration and context processors, and middleware are correctly configured, returning a list of collected Django system-check errors or warnings." check_dependencies]
+    [INPUTS]
+        <REF> kwargs </REF>: dict "Unused keyword arguments accepted for Django system check compatibility."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> errors </REF>: list "List of django.core.checks.Error and django.core.checks.Warning objects; empty if all admin dependencies are satisfied."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import all_sites from django.contrib.admin.sites. RESULT all_sites]
+            [COMMAND Confirm that apps.is_installed('django.contrib.admin') is true; if it is false, take the alternative early-return flow. RESULT guard_passed]
+            [COMMAND Initialize errors as an empty list and app_dependencies as the tuple (('django.contrib.contenttypes', 401), ('django.contrib.auth', 405), ('django.contrib.messages', 406)). RESULT errors, app_dependencies]
+            [COMMAND For each (app_name, error_code) in app_dependencies, if apps.is_installed(app_name) is false, append to errors a checks.Error with message `'%s' must be in INSTALLED_APPS in order to use the admin application.` formatted with app_name and id `admin.E%d` formatted with error_code. RESULT errors]
+            [COMMAND Iterate over engines.all(); for the first engine that is an instance of DjangoTemplates, set django_templates_instance to engine.engine, then break out of the loop. If the loop completes without finding such an engine, set django_templates_instance to None. RESULT django_templates_instance]
+            [COMMAND If django_templates_instance is falsy, append to errors a checks.Error with id admin.E403 and message `A 'django.template.backends.django.DjangoTemplates' instance must be configured in TEMPLATES in order to use the admin application.`; otherwise, proceed to the template context processor checks inside the truthy django_templates_instance branch. RESULT errors]
+            [COMMAND Within the truthy django_templates_instance branch, if `django.contrib.auth.context_processors.auth` is not in django_templates_instance.context_processors and _contains_subclass('django.contrib.auth.backends.ModelBackend', settings.AUTHENTICATION_BACKENDS) is true as a short-circuited conjunction, append to errors a checks.Error with id admin.E402 and message `'django.contrib.auth.context_processors.auth' must be enabled in DjangoTemplates (TEMPLATES) if using the default auth backend in order to use the admin application.` RESULT errors]
+            [COMMAND Within the truthy django_templates_instance branch, if `django.contrib.messages.context_processors.messages` is not in django_templates_instance.context_processors, append to errors a checks.Error with id admin.E404 and message `'django.contrib.messages.context_processors.messages' must be enabled in DjangoTemplates (TEMPLATES) in order to use the admin application.` RESULT errors]
+            [COMMAND Within the truthy django_templates_instance branch, set sidebar_enabled to any(site.enable_nav_sidebar for site in all_sites), with short-circuit evaluation as soon as any site enables the nav sidebar. RESULT sidebar_enabled]
+            [COMMAND Within the truthy django_templates_instance branch, if sidebar_enabled is true and `django.template.context_processors.request` is not in django_templates_instance.context_processors, append to errors a checks.Warning with id admin.W411 and message `'django.template.context_processors.request' must be enabled in DjangoTemplates (TEMPLATES) in order to use the admin navigation sidebar.` RESULT errors]
+            [COMMAND If _contains_subclass('django.contrib.auth.middleware.AuthenticationMiddleware', settings.MIDDLEWARE) is false, append to errors a checks.Error with id admin.E408 and message `'django.contrib.auth.middleware.AuthenticationMiddleware' must be in MIDDLEWARE in order to use the admin application.` RESULT errors]
+            [COMMAND If _contains_subclass('django.contrib.messages.middleware.MessageMiddleware', settings.MIDDLEWARE) is false, append to errors a checks.Error with id admin.E409 and message `'django.contrib.messages.middleware.MessageMiddleware' must be in MIDDLEWARE in order to use the admin application.` RESULT errors]
+            [COMMAND If _contains_subclass('django.contrib.sessions.middleware.SessionMiddleware', settings.MIDDLEWARE) is false, append to errors a checks.Error with id admin.E410, message `'django.contrib.sessions.middleware.SessionMiddleware' must be in MIDDLEWARE in order to use the admin application.`, and hint `Insert 'django.contrib.sessions.middleware.SessionMiddleware' before 'django.contrib.auth.middleware.AuthenticationMiddleware'.` RESULT errors]
+            [COMMAND Return errors. RESULT errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: apps.is_installed('django.contrib.admin') is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately. RESULT early_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns a list containing a single checks.Error object whose message states that the given option must be the specified type, using obj.__class__ and id as additional error attributes." must_be]
+    [INPUTS]
+        <REF> type </REF>: string "The expected type name or description to include in the validation error message."
+        <REF> option </REF>: string "The option name or label to include in the validation error message."
+        <REF> obj </REF>: any "The object whose class is attached to the error via obj.__class__."
+        <REF> id </REF>: any "An identifier passed through to checks.Error as the id keyword argument."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A single-element list containing the constructed checks.Error instance."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format the error message by substituting option and type into the string "The value of '%s' must be %s." RESULT formatted_message]
+            [COMMAND Evaluate obj.__class__ to obtain the class of obj. RESULT obj_class]
+            [COMMAND Create the error instance by calling checks.Error with formatted_message as the positional argument, obj=obj_class, and id=id as keyword arguments. RESULT error_instance]
+            [COMMAND Return a new list containing error_instance as its only element. RESULT result_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a one-element list containing a checks.Error that reports the given option value must inherit from the specified parent class." must_inherit_from]
+    [INPUTS]
+        <REF> parent </REF>: string "Required parent type or class name used in the error message."
+        <REF> option </REF>: string "Name of the option being validated, used in the error message."
+        <REF> obj </REF>: object "Object whose class is attached to the error as obj."
+        <REF> id </REF>: any "Identifier passed through unchanged to the error object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A one-element list containing a checks.Error instance."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Format the error message by substituting option and parent into "The value of '%s' must inherit from '%s'." RESULT error_message]
+            [COMMAND Construct a checks.Error instance with error_message as the message, obj.__class__ as the obj argument, and id as the id argument. RESULT error_object]
+            [COMMAND Return a list containing the error_object. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs a Django system check Error for an option that refers to a missing field, formatting the message from the option, the missing field, and the object model's label, and returns it as a one-element list." refer_to_missing_field]
+    [INPUTS]
+        <REF> field </REF>: string "The referenced field name whose string representation is used in the error message."
+        <REF> option </REF>: string "The option value that refers to the missing field; its string representation is used in the error message."
+        <REF> obj </REF>: object "The object exposing a model attribute; obj.model._meta.label is used in the message and obj.__class__ is assigned to the generated checks.Error."
+        <REF> id </REF>: string "The system check error identifier, forwarded unchanged to the checks.Error."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list "A one-element list containing the constructed checks.Error with the formatted message, obj=obj.__class__, and id=id."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build the error message with the percent-format operator, using the template "The value of '%s' refers to '%s', which is not a field of '%s'." and substituting option, field, and obj.model._meta.label. RESULT error_message]
+            [COMMAND Construct a checks.Error with the formatted error_message, obj set to obj.__class__, and id set to id. RESULT error]
+            [COMMAND Return a list containing the constructed error. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

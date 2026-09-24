@@ -1,0 +1,499 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Does `(varA,lineA)` have data dependence over `(varB,lineB)`? If so, provide one feasible trace.": 
+   - If data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": true,
+   "Trace": [
+      { "from": ["varA", lineA], "to": ["varX", lineX] },
+      ...
+      { "from": ["varY", lineY], "to": ["varB", lineB] }
+      ]
+   }
+   ```
+
+   -  If no data dependence exists, respond:
+   ```json
+   {
+   "DataDependence": false
+   }
+   ```
+   
+   A **trace** represents a **transitive data flow**, where each item represents a **direct** data dependence edge. The full trace should begin with `(varA,lineA)` and end with `(varB,lineB)`.
+
+   You only need to provide **one** valid chain of data dependence if you conclude a data dependence exists, even if multiple possible chains exist. 
+
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Does `(value,2)` have data dependence over `(step,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["step", 3] },
+    { "from": ["step", 3], "to": ["step", 9] }
+  ]
+}
+```
+
+#### Example Question 1.2 
+Does `(value,2)` have data dependence over `(total,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+Therefore, the answer is yes.
+Only one valid trace is required for the output. 
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["value", 2], "to": ["value", 5] },
+    { "from": ["value", 5], "to": ["total", 7] }
+  ]
+}
+
+```
+
+
+
+#### Example Question 1.3
+Does `(step,3)` have data dependence over `(final_result,10)`? If so, provide a trace.  
+
+**Analysis**:
+Since there is no direct or transitive data dependence between `(step,3)` and `(final_result,10)`, the answer is No.
+
+**Output**:
+```json
+{
+  "DataDependence": false
+}
+```
+
+**Analysis**:
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Does `(x,2)` have data dependence over `(arr,6)`? If so, provide a trace.
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+- Since there is a transitive chain of direct data dependence: `(x,2)->(arr,4)->(arr,6)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["x", 2], "to": ["arr", 4] },
+    { "from": ["arr", 4], "to": ["arr", 6] }
+  ]
+}
+```
+
+
+#### Example Question 2.2:
+Does `(i,5)` have data dependence over `(temp,7)`? If so, provide a trace.
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(temp,7)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["temp", 7] }
+  ]
+}
+```
+
+#### Example Question 2.3:
+Does `(i,5)` have data dependence over `(result,9)`? If so, provide a trace.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+- Line 6: `arr[i] += 1`, meaning `arr[i]` is modified based on the value of `i`.
+- Line 5: `i` iterates over 0 to 3.
+- Since there is a transitive chain of direct data dependence: `(i,5)->(arr,6)->(result,9)`, the answer is yes.
+
+
+**Output**:
+```json
+{
+  "DataDependence": true,
+  "Trace": [
+    { "from": ["i", 5], "to": ["arr", 6] },
+    { "from": ["arr", 6], "to": ["result", 9] }
+  ]
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   import sys, math, os
+2   from fractions import Fraction, gcd
+3   LocaL = "MATE_DESKTOP_SESSION_ID" in os.environ
+4   def mle_assert(x):
+5       if LocaL:
+6           assert x
+7       elif not x:
+8           x = range(10**8)
+9   def tle_assert(x):
+10      if LocaL:
+11          assert x
+12      elif not x:
+13          for i in range(10000):
+14              for j in range(1000):
+15                  for k in range(1000):
+16                      pass
+17  sys.setrecursionlimit(10000)
+18  ssr = sys.stdin.readline
+19  ssw = sys.stdout.write
+20  ssf = sys.stdout.flush
+21  sew = sys.stderr.write
+22  def rdline(): return ssr().strip()
+23  def rdstrs(): return ssr().split()
+24  def rdints(): return map(int, ssr().split())
+25  def rd1int(): return int(rdline())
+26  def do_one_case(cnum):
+27      N = rd1int()
+28      XY = []
+29      for i in range(N):
+30          x, y = rdints()
+31          XY.append((x,y))
+32      XY.sort()
+33      A = {}
+34      for j in xrange(1,N):
+35          x2, y2 = XY[j]
+36          for i in xrange(j):
+37              x1, y1 = XY[i]
+38              a = x2-x1
+39              b = y2-y1
+40              g = gcd(a,b)
+41              a /= g
+42              b /= g
+43              if (a,b) in A:
+44                  A[(a,b)].append((i,j))
+45                  A[(-a,-b)].append((j,i))
+46              else:
+47                  A[(a,b)] = [ (i,j) ]
+48                  A[(-a,-b)] = [ (j,i) ]
+49      m = 1
+50      for a,b in A:
+51          E = A[(a,b)]
+52          I = {}
+53          O = {}
+54          for i,j in E:
+55              if i in O:
+56                  O[i].append(j)
+57              else:
+58                  O[i] = [j]
+59              if j in I:
+60                  I[j].append(i)
+61              else:
+62                  I[j] = [i]
+63          NI = set(range(N)) - set(I)
+64          C = []
+65          for x in NI:
+66              if x in O:
+67                  Q = [ (0,x)] + [(len(I[y]),y) for y in O[x] ]
+68                  Q.sort()
+69                  C.append([y for x,y in Q])
+70              else:
+71                  C.append([x])
+72          C1 = [ q for q in C if len(q)==1 ]
+73          C2 = [ q for q in C if len(q)&1==0 ]
+74          C3 = [ q for q in C if len(q)>1 and len(q)&1==1 ]
+75          while len(C3)>1:
+76              C2.append(C3[-2]+C3[-1])
+77              del C3[-2:]
+78          C3 = (C3 + C1)[:2]
+79          l2 = sum(len(q) for q in C2)
+80          l3 = sum(len(q) for q in C3)
+81          if l3:
+82              l = l2 + l3
+83          elif len(C2)>1:
+84              l = l2-1
+85          else:
+86              l = l2
+87          m = max(m, l)
+88      print "Case #%d: %d" % (cnum, m)
+89  def main():
+90      T = rd1int()
+91      for i in range(T):
+92          do_one_case(i+1)
+93          sys.stdout.flush()
+94  if __name__ == "__main__":
+95      main()
+```
+
+
+**Question**: Does `(i,36)` have data dependence over `(l2,79)` in function `do_one_case`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: data dependence
+Primary source owner: do_one_case
+Target source anchor: variable=l2, line=79
+Trace source anchor: variable=i, line=36
+Attached SPL owners: do_one_case
+Role of the SPL cards: an auto-generated semantic description of what the code does — evidence, not ground truth.
+They are bound to the source and describe its intended behavior, but they are NOT guaranteed correct: they can be wrong, incomplete, or describe intended behavior where the source actually has a bug.
+The numbered source code is the ground truth. When an SPL description and the source disagree, trust the source.
+Never treat a dependency as real merely because an SPL COMMAND mentions two variables together
+(for example, an SPL line describing a loop as 'for j from 0 to n-1' does NOT make n a data source for j; the source's def-use chain decides).
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use the SPL cards to locate the relevant function and understand its intended behavior; then verify every dependency against the numbered source, and where the SPL and the source disagree, trust the source.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, trace value flow backward from the target: a variable instance is a source only if its value is read, directly or through a chain of reads, to compute the target. Recursively enqueue the identifiers that each reaching definition itself reads.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+Data-dependence precision rules (source-anchored; the SPL prose does not override these):
+- A variable instance is a source if its value is read, directly or transitively, to compute the target's value. Walk the def-use chain backward from the target line in the numbered source, and report every variable instance on that chain (declarations, parameters, allocations, and later writes alike) exactly as the official definition requires.
+- LOOP RULE (syntax-aware): in a C/Java-style counter loop 'for (init; cond; incr)' or 'while (cond)', the condition variables (e.g. n in 'k < n') are read only to decide when to stop, so they are CONTROL dependence, not DATA dependence of the iterator — do NOT report them as the iterator's data sources, even if the SPL prose says the loop goes 'from 0 to n-1'. In contrast, in a Python-style 'for x in expr' / 'for x in iterable', the iterable expression expr is actually evaluated to produce x's values, so expr and every variable in its def-use chain ARE data sources of x.
+- A variable updated by an explicit read-modify-write ('k++', 'i += 1', 'i = i + 1') is its own source (loop-carried). A variable freshly bound by 'for x in range(...)' / 'for x in iterable' has no loop-carried self-dependence; its sources are the iterable expression's chain.
+- A variable mentioned in an SPL COMMAND near the target is only a source if the numbered source itself reads its value to compute the target. SPL prose never adds a source by itself.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Within the current direction loop, compute l2 = sum of the lengths of all chains in C2 and l3 = sum of the lengths of all chains in C3. RESULT l2_l3]
+- [COMMAND Within the current direction loop, if l3 is nonzero, set l = l2 + l3; else if len(C2) > 1, set l = l2 - 1; else set l = l2. RESULT l]
+- [COMMAND Within the current direction loop, for each x in NI in the iteration order of the Python set produced by set(range(N)) - set(I), if x is present in O, build Q = [(0, x)] + [(len(I[y]), y) for y in O[x]], sort Q, and append the node sequence [y for _, y in Q] to C; otherwise append the singleton [x] to C. RESULT C]
+- [COMMAND Within the current direction loop, while len(C3) > 1, append the concatenation of the last two chains in C3 to C2 and delete those two chains from C3. RESULT C2_C3]
+- [COMMAND Sort XY in ascending lexicographic order. RESULT XY]
+- [COMMAND For each j from 1 to N-1 inclusive, for each i from 0 to j-1 inclusive, read XY[j] as (x2, y2) and XY[i] as (x1, y1), compute dx = x2 - x1, dy = y2 - y1, g = gcd(dx, dy), and normalize the direction to (a, b) = (dx / g, dy / g) using integer division. If (a, b) is already a key in A, append (i, j) to A[(a, b)] and (j, i) to A[(-a, -b)]; otherwise initialize A[(a, b)] with [(i, j)] and A[(-a, -b)] with [(j, i)]. RESULT A]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 64: C = []
+- line 72: C1 = [ q for q in C if len(q)==1 ]
+- line 73: C2 = [ q for q in C if len(q)&1==0 ]
+- line 74: C3 = [ q for q in C if len(q)>1 and len(q)&1==1 ]
+- line 78: C3 = (C3 + C1)[:2]
+- line 79: l2 = sum(len(q) for q in C2)
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 64, "position": "before_target", "reason": "C", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["C"]}
+- {"definitions": ["q"], "disposition": "inspect_against_official_dependence_definition", "line": 72, "position": "before_target", "reason": "q", "relevant_identifiers": ["len", "q", "in"], "roles": ["definition", "use"], "source_identifiers": ["C", "C1", "for", "if", "in", "len", "q"]}
+- {"definitions": ["q", "C2"], "disposition": "inspect_against_official_dependence_definition", "line": 73, "position": "before_target", "reason": "q", "relevant_identifiers": ["len", "q", "in", "C2"], "roles": ["definition", "use"], "source_identifiers": ["C", "C2", "for", "if", "in", "len", "q"]}
+- {"definitions": ["q"], "disposition": "inspect_against_official_dependence_definition", "line": 74, "position": "before_target", "reason": "q", "relevant_identifiers": ["len", "q", "in"], "roles": ["definition", "use"], "source_identifiers": ["C", "C3", "and", "for", "if", "in", "len", "q"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 78, "position": "before_target", "reason": "C3", "relevant_identifiers": [], "roles": ["candidate"], "source_identifiers": ["C1", "C3"]}
+- {"definitions": ["l2", "q"], "disposition": "inspect_against_official_dependence_definition", "line": 79, "position": "target", "reason": "l2", "relevant_identifiers": ["l2", "sum", "len", "q", "in", "C2"], "roles": ["definition", "use"], "source_identifiers": ["C2", "for", "in", "l2", "len", "q", "sum"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `do_one_case`
+- source lines: 26-88
+- source signature: `def do_one_case(cnum):`
+- source content hash: `d6c64a8b817bd8628ed2cdd41c48caa1030d29dfbc957ec78b1b18b376fac1d7`
+- binding rule: the SPL below is a semantic description bound to the numbered source above; it is evidence but auto-generated and not guaranteed correct, and the source is the ground truth when they disagree
+
+#### Function source (authoritative)
+```python
+  26  def do_one_case(cnum):
+  27      N = rd1int()
+  28      XY = []
+  29      for i in range(N):
+  30          x, y = rdints()
+  31          XY.append((x,y))
+  32      XY.sort()
+  33      A = {}
+  34      for j in xrange(1,N):
+  35          x2, y2 = XY[j]
+  36          for i in xrange(j):
+  37              x1, y1 = XY[i]
+  38              a = x2-x1
+  39              b = y2-y1
+  40              g = gcd(a,b)
+  41              a /= g
+  42              b /= g
+  43              if (a,b) in A:
+  44                  A[(a,b)].append((i,j))
+  45                  A[(-a,-b)].append((j,i))
+  46              else:
+  47                  A[(a,b)] = [ (i,j) ]
+  48                  A[(-a,-b)] = [ (j,i) ]
+  49      m = 1
+  50      for a,b in A:
+  51          E = A[(a,b)]
+  52          I = {}
+  53          O = {}
+  54          for i,j in E:
+  55              if i in O:
+  56                  O[i].append(j)
+  57              else:
+  58                  O[i] = [j]
+  59              if j in I:
+  60                  I[j].append(i)
+  61              else:
+  62                  I[j] = [i]
+  63          NI = set(range(N)) - set(I)
+  64          C = []
+  65          for x in NI:
+  66              if x in O:
+  67                  Q = [ (0,x)] + [(len(I[y]),y) for y in O[x] ]
+  68                  Q.sort()
+  69                  C.append([y for x,y in Q])
+  70              else:
+  71                  C.append([x])
+  72          C1 = [ q for q in C if len(q)==1 ]
+  73          C2 = [ q for q in C if len(q)&1==0 ]
+  74          C3 = [ q for q in C if len(q)>1 and len(q)&1==1 ]
+  75          while len(C3)>1:
+  76              C2.append(C3[-2]+C3[-1])
+  77              del C3[-2:]
+  78          C3 = (C3 + C1)[:2]
+  79          l2 = sum(len(q) for q in C2)
+  80          l3 = sum(len(q) for q in C3)
+  81          if l3:
+  82              l = l2 + l3
+  83          elif len(C2)>1:
+  84              l = l2-1
+  85          else:
+  86              l = l2
+  87          m = max(m, l)
+  88      print "Case #%d: %d" % (cnum, m)
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads N points, groups every pair by normalized direction, then for each direction computes the maximum chain length from directed adjacency lists and prints the best result as Case #cnum." do_one_case]
+    [INPUTS]
+        <REF> cnum </REF>: integer "Current test case number used in the output line."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> printed_output </REF>: string "Formatted line 'Case #%d: %d' written to standard output, where the first placeholder is cnum and the second is the computed maximum m."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read one integer from input using rd1int() and assign it to N. RESULT N]
+            [COMMAND Initialize XY as an empty list. RESULT XY]
+            [COMMAND For i from 0 to N-1 inclusive, read two integers via rdints(), unpack them into x and y, and append the tuple (x, y) to XY. RESULT XY]
+            [COMMAND Sort XY in ascending lexicographic order. RESULT XY]
+            [COMMAND Initialize A as an empty dictionary. RESULT A]
+            [COMMAND For each j from 1 to N-1 inclusive, for each i from 0 to j-1 inclusive, read XY[j] as (x2, y2) and XY[i] as (x1, y1), compute dx = x2 - x1, dy = y2 - y1, g = gcd(dx, dy), and normalize the direction to (a, b) = (dx / g, dy / g) using integer division. If (a, b) is already a key in A, append (i, j) to A[(a, b)] and (j, i) to A[(-a, -b)]; otherwise initialize A[(a, b)] with [(i, j)] and A[(-a, -b)] with [(j, i)]. RESULT A]
+            [COMMAND Initialize m to 1. RESULT m]
+            [COMMAND For each key (a, b) in A in dict iteration order, retrieve E = A[(a, b)] and initialize I and O as empty dictionaries. RESULT E]
+            [COMMAND Within the current direction loop, for each edge (i, j) in E, append j to O[i], creating O[i] = [j] if i is not already in O, and append i to I[j], creating I[j] = [i] if j is not already in I. RESULT O_and_I]
+            [COMMAND Within the current direction loop, compute NI = set(range(N)) - set(I), the set of all node indices from 0 to N-1 that have no incoming edge. RESULT NI]
+            [COMMAND Within the current direction loop, initialize C as an empty list. RESULT C]
+            [COMMAND Within the current direction loop, for each x in NI in the iteration order of the Python set produced by set(range(N)) - set(I), if x is present in O, build Q = [(0, x)] + [(len(I[y]), y) for y in O[x]], sort Q, and append the node sequence [y for _, y in Q] to C; otherwise append the singleton [x] to C. RESULT C]
+            [COMMAND Within the current direction loop, partition C into C1 = chains of length exactly 1, C2 = chains of even length, and C3 = chains of odd length greater than 1. RESULT C1_C2_C3]
+            [COMMAND Within the current direction loop, while len(C3) > 1, append the concatenation of the last two chains in C3 to C2 and delete those two chains from C3. RESULT C2_C3]
+            [COMMAND Within the current direction loop, set C3 = (C3 + C1)[:2], keeping at most two chains from the remaining odd chains and singleton chains. RESULT C3]
+            [COMMAND Within the current direction loop, compute l2 = sum of the lengths of all chains in C2 and l3 = sum of the lengths of all chains in C3. RESULT l2_l3]
+            [COMMAND Within the current direction loop, if l3 is nonzero, set l = l2 + l3; else if len(C2) > 1, set l = l2 - 1; else set l = l2. RESULT l]
+            [COMMAND Within the current direction loop, set m = max(m, l). RESULT m]
+            [COMMAND Print the line 'Case #%d: %d' formatted with cnum and m. RESULT printed_output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. The SPL cards are an
+auto-generated semantic description of the code and are evidence for its
+intended behavior, but they are not guaranteed correct; when an SPL description
+and the numbered source disagree, the source is the ground truth. Derive every
+reported variable instance and line number from the numbered source code.
+For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

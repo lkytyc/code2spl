@@ -1,0 +1,126 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: RegexUtils
+# Calls: extract_email→generate_email_pattern, extract_email→findall, validate_phone_number→generate_phone_number_pattern, validate_phone_number→match
+
+## extract_email(text: string) → list
+Summary: Generates an email-matching regex pattern via a helper method and returns all matches found within the given text.
+#   text: string — The input text to search for email addresses
+#   → result: list — A list of all email address strings found in the input text, as returned by findall
+1. Call self.generate_email_pattern() and assign its return value to pattern; the value is opaque at this site and depends entirely on the internal logic and instance state of generate_email_pattern() → pattern
+2. Call self.findall(pattern, text) using the pattern obtained in the previous step and the input text, then return the result directly to the caller → return_value
+   ! log: "pattern is never initialized; any subsequent reference to pattern would raise a NameError, but control never reaches that point because the exception propagates to the caller"
+   ! raise: PropagatedExceptionFromGenerateEmailPattern "Any exception raised inside generate_email_pattern() propagates uncaught through extract_email to its caller"
+
+## findall(pattern: string, text: string) → list
+Summary: Searches the given text for all non-overlapping occurrences of a regular expression pattern and returns them as a list.
+#   pattern: string — Regular expression pattern to search for
+#   text: string — Input text to search within
+#   → result: list — List of all non-overlapping matches found in text
+1. Call re.findall with pattern and text to find all non-overlapping regex matches in text and return the resulting list → matches
+
+## generate_email_pattern() → string
+Summary: Returns a compiled-ready raw regex string that matches email addresses in the format local-part@domain.tld, where the TLD segment is matched by [A-Z|a-z]{2,} (note: the pipe character inside the character class is treated as a literal and is likely unintentional).
+#   → pattern: string — A raw regex string for matching email addresses, bounded by word-boundary anchors, with a local-part allowing alphanumerics and special characters, an @ separator, a domain segment, a literal dot, and a TLD of two or more letters (character class [A-Z|a-z] contains a literal pipe, likely a bug)
+1. Assign the raw string literal r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b' to the local variable pattern; the value is a compile-time constant with no dependencies on parameters, instance state, or runtime data → pattern
+2. Return pattern to the caller → return_value
+
+## generate_phone_number_pattern(self: object) → string
+Summary: Returns a compiled-ready regex string that matches a 10-digit North American phone number in NXX-NXX-XXXX format, bounded by word boundaries to prevent partial matches.
+#   self: object — Instance reference; carries no data used by this method
+#   → pattern: string — Raw regex string matching exactly three digits, a hyphen, three digits, a hyphen, and four digits, enclosed in word boundary anchors
+1. Assign the raw string literal '\b\d{3}-\d{3}-\d{4}\b' to variable pattern; the r-prefix ensures all backslashes are passed verbatim to the regex engine with no Python-level escape processing; the \b anchors enforce word boundaries at both ends; \d{3} matches exactly three decimal digits; the literal hyphens delimit the three digit groups; \d{4} matches exactly four decimal digits for the final segment → pattern
+2. Return pattern to the caller → return_value
+
+## generate_split_sentences_pattern(self: object) → string
+Summary: Returns a compiled-ready regular expression pattern string that matches sentence boundaries defined by a punctuation character followed by one or two whitespace characters immediately preceding an uppercase letter.
+#   self: object — Instance reference; carries no data used by this method
+#   → pattern: string — Raw regex string '[.!?][\s]{1,2}(?=[A-Z])' for detecting sentence split points; the lookahead leaves the uppercase letter unconsumed
+1. Assign local variable 'pattern' to the raw string literal '[.!?][\s]{1,2}(?=[A-Z])'; this is a pure compile-time constant with no runtime computation and no dependencies on any other variable or input → pattern
+2. Return 'pattern' to the caller → return_value
+
+## match(text: str) → bool
+Summary: Checks whether the given text starts with a substring that matches the given pattern, returning True if it does and False otherwise.
+#   text: str — The string to search; re.match is applied only at its beginning, not across the full string.
+#   → result: bool — True if text begins with a substring conforming to pattern, False if it does not.
+1. Call re.match with pattern and text, storing the result (an re.Match object if the beginning of text conforms to pattern, or None if it does not) in ans. → ans
+2. Evaluate ans as a boolean: if ans is truthy (i.e., an re.Match object was returned), return True; otherwise return False. → result
+   ? Return False immediately, ending the method.
+   ! log: "re.match raises re.error before the assignment to ans completes; ans is left undefined or retains any prior value."
+   ! raise: re.error "Raised by re.match when the pattern cannot be compiled; propagates uncaught out of this method."
+   ! log: "re.match raises TypeError before the assignment to ans completes."
+   ! raise: TypeError "Raised by re.match when either argument is of an unsupported type; propagates uncaught out of this method."
+
+## split(pattern: string, text: string) → list
+Summary: Splits the input text into a list of substrings by applying the given regular expression pattern as a delimiter.
+#   pattern: string — Regular expression pattern used as the delimiter for splitting
+#   text: string — The source string to be split
+#   → result: list — List of substrings produced by splitting text on every occurrence of pattern
+1. Call re.split with pattern and text to split the input string on all occurrences of the regular expression and return the resulting list of substrings → result
+
+## split_sentences(text: string) → list
+Summary: Splits the input text into a list of sentences by generating a splitting pattern and applying it via a regex-based split operation.
+#   text: string — The raw text to be split into individual sentences
+#   → result: list — A list of sentence strings produced by splitting the input text on the generated pattern
+1. Call generate_split_sentences_pattern on self to produce the regex or delimiter pattern used to identify sentence boundaries → pattern
+2. Call self.split with pattern and text as arguments to divide the text into segments at each match of the pattern, then return the resulting list → sentences
+
+## sub(text: str) → str
+Summary: Applies a regex substitution to the input text using the provided pattern and replacement, returning the resulting string.
+#   text: str — The subject string to scan; if empty, re.sub returns an empty string regardless of the pattern.
+#   → result: str — A new string with all non-overlapping matches of pattern replaced by replacement, or the original text if no matches occur.
+1. Call re.sub with pattern, replacement, and text to scan text left-to-right for non-overlapping matches and replace each match with replacement (or the string returned by replacement if it is callable), producing a new string without mutating text. → substituted_string
+2. Return substituted_string immediately as the function's return value with no intermediate variable assignment. → return_value
+   ? Return text unchanged because re.sub produces an identity result when there are no matches.
+   ? Return an empty string immediately, since re.sub always yields "" when text is "" regardless of pattern or replacement.
+   ? For each match site, invoke replacement with the re.Match object and use its return value as the substitution string at that position.
+   ? Return the fully substituted string.
+   ! log: "re.sub raises re.error because the referenced group does not exist in the match object."
+   ! raise: re.error "Raised by the re module when a backreference in replacement names a capturing group that pattern does not define."
+   ! log: "re.sub raises ValueError because flags cannot be supplied separately when the pattern is already compiled with its own flags."
+   ! raise: ValueError "Raised by the re module when flags are provided alongside a pre-compiled pattern object."
+
+## validate_phone_number(phone_number: string) → boolean or match object or None
+Summary: Validates a phone number string by generating the appropriate pattern via an instance method and returning the result of matching that pattern against the input.
+#   phone_number: string — The phone number string to be validated
+#   → result: boolean or match object or None — The result of matching the generated pattern against phone_number; truthy if the phone number matches the pattern, falsy or None otherwise
+1. Call self.generate_phone_number_pattern() with no explicit arguments and assign the return value to pattern; the returned value is a regex pattern string or compiled pattern object determined entirely by the internal logic of generate_phone_number_pattern, which may depend on instance attributes such as country code, format flags, or locale → pattern
+2. Call self.match(pattern, phone_number) passing the pattern obtained in the previous step and the input phone_number, then return the result directly to the caller without any further transformation or guard check → match_result
+   ? pattern holds None or an empty string; self.match receives that value as its first argument, which will either raise an exception inside match or silently match nothing, depending on match's own defensive logic; no guard or fallback exists at this call site
+

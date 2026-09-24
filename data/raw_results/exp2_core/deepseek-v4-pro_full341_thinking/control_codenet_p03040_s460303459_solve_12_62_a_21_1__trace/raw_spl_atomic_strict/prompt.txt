@@ -1,0 +1,514 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Your task is to statically analyze the control dependence of a given code snippet. 
+
+## 1. Control Dependence Definition
+  Control dependence captures the influence of control-flow decisions on the execution of statements.
+
+  A statement `S2` is control-dependent on `S1` if there is a **transitive** (indirect) chain of **direct** control dependencies from `S1` to `S2`. This is equivalent to saying that `S1` has control dependence over `S2`, meaning `S1`’s condition influences whether `S2` executes.
+
+
+  **Direct Control Dependence**:
+  A statement `S2` is **directly** control-dependent on a statement `S1` if:
+  
+  1.	`S1` is a conditional control statement (e.g., an `if`, `while`, `for`, `switch`, etc.).
+  
+  2.	`S1` directly determines whether `S2` executes. That is, `S1` has multiple successor branches, 
+
+  - there exists **at least one branch** in which `S2` **always executes**, and
+  - there exists **at least one other branch** in which `S2` does **not necessarily execute**.
+
+    “Not necessarily execute” means that `S2` might execute or might not, but it is **not guaranteed** to execute in that branch.
+
+  `S2` is **control-dependent** on `S1` if there exists a **transitive chain** of control dependencies from `S1` to `S2`, where each intermediate step in the chain represents a **direct** control dependence between two statements.
+
+
+
+## 2. Output Format
+When asked, “Does line `S1` have control dependence over line `S2`? If so, provide a trace.” You should respond in JSON format as follows:
+
+- If there is a control dependence:
+
+```json
+{
+  "ControlDependence": true,
+  "Trace": [S1, ..., S2]
+}
+```
+
+- If there is no control dependence:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+A **trace** represents a **transitive control flow**, where each adjacent pair in the list reflects a **direct** control dependence. The trace must starts with `S1` and ends with `S2`.
+
+
+    
+
+## 3. Interprocedural Control Dependence
+  All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1  if x > 0:
+2      y = 10       # this line is directly control-dependent on line 1 (x>0)
+3      if y > 5:
+4          z = 20   # this line is directly control-dependent on line 3 (y>5)
+5          w = 30   # this line is directly control-dependent on line 3 (y>5)
+6  v = 40           # this line is NOT control-dependent on any line
+```
+
+
+**Analysis**:
+- Line 2 is directly control-dependent on line 1 (`x>0`)
+- Lines 4 and 5 are directly control-dependent on line 3 (`y>5`).
+- Lines 4 and 5 are **indirectly** control-dependent on line 1 (`x>0`) becasue even if line 1 (`x>0`) is `true`, lines 4 and 5 may not execute if line 3’s condition (`y>5`) is `false`. However, since control dependence is transitive, lines 4 and 5 are **indirectly** control-dependent on line 1. 
+- Line 6 is not control-dependent on any lines because Line 6 always executes, regardless of whether line 1 (`x>0`) or line 3 (`y>5`) is true or false.
+
+
+
+#### Example Question 1.1: 
+Does line `1` have control dependence over line `5`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": true,
+  "Trace": [1, 3, 5]
+}
+```
+
+#### Example Question 1.2:
+Does line `3` have control dependence over line `6`? If so, provide a trace.
+
+**Output**: 
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+### Example 2
+
+```python
+1  count = 0
+2  if count < 5:
+3      count += 1
+4  print("Step 1 done")
+5  while count < 10:
+6      if count == 7:
+7          break
+8      if count % 2 == 0:
+9          continue
+10     count += 2
+11     if count > 9:
+12         count = 9
+13     print("Iteration done")
+14 print("End of program")
+```
+
+#### Example Question 2.1: 
+Does line `5` have control dependence over line `13`? If so, provide a trace.
+
+**Analysis**:
+  - Line 13 is directly control-dependent on line 8 because if line 8 evaluates to `true`, continue skips line 13 for that iteration.
+  - Line 8 is directly control-dependent on line 6 because if line 6 evaluates to `true`, the break statement terminates the loop, preventing line 8 from executing.
+  - Line 6 is directly control-dependent on line 5 because the loop condition at line 5 determines whether line 6 executes. If line 5 evaluates to `false`, execution skips the loop entirely.
+
+
+Since control dependence is transitive, line 5 indirectly controls line 13 through lines 6 and 8. The trace is `5->6->8->13`.
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [5, 6, 8, 13]
+}
+```
+
+#### Example Question 2.2: 
+Does line `8` have control dependence over line `10`? If so, provide a trace.
+
+
+**Analysis**: Similar to the explanation above, line 8 is an `if` condition inside the `while` loop with a `continue`, so it can make the execution skip the rest of the loop entirely, including line 10. Therefore, line 10 directly control-dependent on 8.
+
+
+
+**Output**:
+```json
+{
+  "ControlDependence": true,
+  "Trace": [8, 10]
+}
+```
+
+#### Example Question 2.3: 
+Does line `5` have control dependence over line `14`? If so, provide a trace.
+
+**Analysis**: Line 5 doesn't affect whether line 14 is reached. Line 14 is outside the while loop (lines 5 -- 13) and will be executed regardless of the condition. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+
+#### Example Question 2.4: 
+Does line `2` have control dependence over line `12`? If so, provide a trace.
+
+**Analysis**: Line 2 doesn't affect whether line 12 is reached. The condition in line 2 only controls whether line 3 is executed. Line 12 is in while loop (line 5 -- 13) and will or will not be executed regardless of the condition in line 2. 
+
+**Output**:
+```json
+{
+  "ControlDependence": false
+}
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Java
+1   import java.io.IOException;
+2   import java.io.InputStream;
+3   import java.io.PrintWriter;
+4   import java.util.Arrays;
+5   import java.util.Collections;
+6   import java.util.InputMismatchException;
+7   import java.util.NoSuchElementException;
+8   import java.util.PriorityQueue;
+9   public class Main {
+10  	static PrintWriter out;
+11  	static InputReader ir;
+12  	static void solve() {
+13  		int Q = ir.nextInt();
+14  		PriorityQueue<Long> f = new PriorityQueue<>(Collections.reverseOrder());
+15  		PriorityQueue<Long> l = new PriorityQueue<>();
+16  		long fsum = 0, lsum = 0;
+17  		long B = 0;
+18  		while (Q-- > 0) {
+19  			int com = ir.nextInt();
+20  			if (com == 1) {
+21  				long a = ir.nextLong();
+22  				if (f.size() == l.size()) {
+23  					if (l.size() == 0) {
+24  						f.add(a);
+25  						fsum += a;
+26  					} else {
+27  						long x = l.peek();
+28  						if (x < a) {
+29  							lsum += a - x;
+30  							fsum += x;
+31  							l.poll();
+32  							l.add(a);
+33  							f.add(x);
+34  						} else {
+35  							fsum += a;
+36  							f.add(a);
+37  						}
+38  					}
+39  				} else {
+40  					long x = f.peek();
+41  					if (x <= a) {
+42  						lsum += a;
+43  						l.add(a);
+44  					} else {
+45  						lsum += x;
+46  						fsum += a - x;
+47  						f.poll();
+48  						f.add(a);
+49  						l.add(x);
+50  					}
+51  				}
+52  				B += ir.nextLong();
+53  			} else {
+54  				long x = f.peek();
+55  				if (f.size() == l.size()) {
+56  					out.println(x + " " + (lsum - fsum + B));
+57  				} else {
+58  					out.println(x + " " + (lsum - fsum + x + B));
+59  				}
+60  			}
+61  		}
+62  	}
+63  	public static void main(String[] args) {
+64  		ir = new InputReader(System.in);
+65  		out = new PrintWriter(System.out);
+66  		solve();
+67  		out.flush();
+68  	}
+69  	static class InputReader {
+70  		private InputStream in;
+71  		private byte[] buffer = new byte[1024];
+72  		private int curbuf;
+73  		private int lenbuf;
+74  		public InputReader(InputStream in) {
+75  			this.in = in;
+76  			this.curbuf = this.lenbuf = 0;
+77  		}
+78  		public boolean hasNextByte() {
+79  			if (curbuf >= lenbuf) {
+80  				curbuf = 0;
+81  				try {
+82  					lenbuf = in.read(buffer);
+83  				} catch (IOException e) {
+84  					throw new InputMismatchException();
+85  				}
+86  				if (lenbuf <= 0)
+87  					return false;
+88  			}
+89  			return true;
+90  		}
+91  		private int readByte() {
+92  			if (hasNextByte())
+93  				return buffer[curbuf++];
+94  			else
+95  				return -1;
+96  		}
+97  		private boolean isSpaceChar(int c) {
+98  			return !(c >= 33 && c <= 126);
+99  		}
+100  		private void skip() {
+101  			while (hasNextByte() && isSpaceChar(buffer[curbuf]))
+102  				curbuf++;
+103  		}
+104  		public boolean hasNext() {
+105  			skip();
+106  			return hasNextByte();
+107  		}
+108  		public String next() {
+109  			if (!hasNext())
+110  				throw new NoSuchElementException();
+111  			StringBuilder sb = new StringBuilder();
+112  			int b = readByte();
+113  			while (!isSpaceChar(b)) {
+114  				sb.appendCodePoint(b);
+115  				b = readByte();
+116  			}
+117  			return sb.toString();
+118  		}
+119  		public int nextInt() {
+120  			if (!hasNext())
+121  				throw new NoSuchElementException();
+122  			int c = readByte();
+123  			while (isSpaceChar(c))
+124  				c = readByte();
+125  			boolean minus = false;
+126  			if (c == '-') {
+127  				minus = true;
+128  				c = readByte();
+129  			}
+130  			int res = 0;
+131  			do {
+132  				if (c < '0' || c > '9')
+133  					throw new InputMismatchException();
+134  				res = res * 10 + c - '0';
+135  				c = readByte();
+136  			} while (!isSpaceChar(c));
+137  			return (minus) ? -res : res;
+138  		}
+139  		public long nextLong() {
+140  			if (!hasNext())
+141  				throw new NoSuchElementException();
+142  			int c = readByte();
+143  			while (isSpaceChar(c))
+144  				c = readByte();
+145  			boolean minus = false;
+146  			if (c == '-') {
+147  				minus = true;
+148  				c = readByte();
+149  			}
+150  			long res = 0;
+151  			do {
+152  				if (c < '0' || c > '9')
+153  					throw new InputMismatchException();
+154  				res = res * 10 + c - '0';
+155  				c = readByte();
+156  			} while (!isSpaceChar(c));
+157  			return (minus) ? -res : res;
+158  		}
+159  		public double nextDouble() {
+160  			return Double.parseDouble(next());
+161  		}
+162  		public int[] nextIntArray(int n) {
+163  			int[] a = new int[n];
+164  			for (int i = 0; i < n; i++)
+165  				a[i] = nextInt();
+166  			return a;
+167  		}
+168  		public long[] nextLongArray(int n) {
+169  			long[] a = new long[n];
+170  			for (int i = 0; i < n; i++)
+171  				a[i] = nextLong();
+172  			return a;
+173  		}
+174  		public char[][] nextCharMap(int n, int m) {
+175  			char[][] map = new char[n][m];
+176  			for (int i = 0; i < n; i++)
+177  				map[i] = next().toCharArray();
+178  			return map;
+179  		}
+180  	}
+181  	static void tr(Object... o) {
+182  		out.println(Arrays.deepToString(o));
+183  		out.flush();
+184  	}
+185  }
+```
+
+
+**Question**: Does line `20` have control dependence over line `21` in function `solve`? If so, provide a trace.
+
+**Output**:
+
+
+## SPL source-bound analysis control
+
+SPL availability: available
+Question kind: control dependence
+Primary source owner: solve
+Target source anchor: variable=<none>, line=20
+Trace source anchor: variable=<none>, line=<none>
+Attached SPL owners: solve
+Required route:
+1. Start at the exact target line/variable in the authoritative numbered source.
+2. Use SPL only as a completeness checklist for CONDITION, loop, branch, and enclosing control region.
+3. Use a worklist, not a single backward scan. Add every newly discovered definition/guard and continue until one full pass adds nothing.
+4. For data dependence, count declarations, allocations, parameters, loop iterators, and loop-carried assignments as definitions when they reach the target; recursively enqueue identifiers used by each reaching definition.
+5. For control dependence inside a loop, inspect the complete loop body, including conditions after the target that can break, return, continue, throw, or gate such an exit and therefore control a later iteration of the target.
+6. Map every reported line or variable instance back to the numbered source; SPL text and candidate-ledger entries are never automatically answer items.
+7. Stop only at a fixed point: every retained node has been source-verified and no unprocessed predecessor remains.
+8. Before answering, disposition every source-derived candidate as included or excluded against the official definition. Do not silently omit a candidate that occurs after the target when it can affect a later loop iteration.
+9. If the target line is itself a loop header, explicitly decide whether its condition controls a later execution of that same header; do not exclude the target line merely because source and target line numbers are equal.
+10. Reserve enough output budget to emit the exact official JSON. Once the candidate ledger is closed, output the JSON immediately; an empty response is never a valid answer.
+SPL-derived checkpoints (hints only; verify each against source):
+- [COMMAND Loop exactly Q times using while (Q-- > 0); inside the loop read the next integer command com. RESULT com]
+- [COMMAND If com == 1, read the next long a as the value to insert. When f.size() == l.size() and l.size() == 0, add a to f and add a to fsum. RESULT a]
+Source-derived closure candidates (inspect for reachability; this is not the answer):
+- line 18: while (Q-- > 0) {
+- line 20: if (com == 1) {
+- line 22: if (f.size() == l.size()) {
+- line 23: if (l.size() == 0) {
+- line 28: if (x < a) {
+- line 41: if (x <= a) {
+- line 55: if (f.size() == l.size()) {
+Source/SPL dependency evidence ledger (every row requires include/exclude disposition):
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 18, "position": "before_target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["Q", "while"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 20, "position": "target", "reason": "pre-target/enclosing candidate", "relevant_identifiers": ["com"], "roles": ["use", "control"], "source_identifiers": ["com", "if"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 22, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["f", "if", "l", "size"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 23, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["if", "l", "size"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 28, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["a", "if", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 41, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["a", "if", "x"]}
+- {"definitions": [], "disposition": "inspect_against_official_dependence_definition", "line": 55, "position": "after_target", "reason": "after-target cycle/exit candidate", "relevant_identifiers": [], "roles": ["control"], "source_identifiers": ["f", "if", "l", "size"]}
+
+## Atomic function source + SPL cards
+
+### Source-bound owner: `solve`
+- source lines: 12-62
+- source signature: `static void solve() {`
+- source content hash: `4dc7eba3bb769917bc594b7db5f581ef4228b3235dea870ce7ef147541436ab9`
+- binding rule: the source and SPL below are one indivisible evidence unit
+
+#### Function source (authoritative)
+```java
+  12   static void solve() {
+  13    int Q = ir.nextInt();
+  14    PriorityQueue<Long> f = new PriorityQueue<>(Collections.reverseOrder());
+  15    PriorityQueue<Long> l = new PriorityQueue<>();
+  16    long fsum = 0, lsum = 0;
+  17    long B = 0;
+  18    while (Q-- > 0) {
+  19     int com = ir.nextInt();
+  20     if (com == 1) {
+  21      long a = ir.nextLong();
+  22      if (f.size() == l.size()) {
+  23       if (l.size() == 0) {
+  24        f.add(a);
+  25        fsum += a;
+  26       } else {
+  27        long x = l.peek();
+  28        if (x < a) {
+  29         lsum += a - x;
+  30         fsum += x;
+  31         l.poll();
+  32         l.add(a);
+  33         f.add(x);
+  34        } else {
+  35         fsum += a;
+  36         f.add(a);
+  37        }
+  38       }
+  39      } else {
+  40       long x = f.peek();
+  41       if (x <= a) {
+  42        lsum += a;
+  43        l.add(a);
+  44       } else {
+  45        lsum += x;
+  46        fsum += a - x;
+  47        f.poll();
+  48        f.add(a);
+  49        l.add(x);
+  50       }
+  51      }
+  52      B += ir.nextLong();
+  53     } else {
+  54      long x = f.peek();
+  55      if (f.size() == l.size()) {
+  56       out.println(x + " " + (lsum - fsum + B));
+  57      } else {
+  58       out.println(x + " " + (lsum - fsum + x + B));
+  59      }
+  60     }
+  61    }
+  62   }
+```
+
+#### SPL semantics (bound to the function above)
+```spl
+[DEFINE_WORKER: "Reads commands that insert values into a two-heap median-maintenance structure and, for queries, outputs the current median along with an accumulated expression based on the two heap sums and B." solve]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read integer Q from the input and initialize max-heap f using Collections.reverseOrder(), min-heap l, long accumulators fsum=0, lsum=0, and long B=0. RESULT Q]
+            [COMMAND Loop exactly Q times using while (Q-- > 0); inside the loop read the next integer command com. RESULT com]
+            [COMMAND If com == 1, read the next long a as the value to insert. When f.size() == l.size() and l.size() == 0, add a to f and add a to fsum. RESULT a]
+            [COMMAND In the same insertion case with f.size() == l.size() and l.size() > 0, set x = l.peek(); if x < a, remove x from l, add a to l, add x to f, update lsum += a - x and fsum += x; otherwise add a to f and update fsum += a. RESULT x]
+            [COMMAND In the insertion case when f.size() != l.size(), set x = f.peek(); if x <= a, add a to l and update lsum += a; otherwise remove x from f, add a to f, add x to l, update fsum += a - x and lsum += x. RESULT x]
+            [COMMAND After the insertion logic for com == 1, read an additional long from the input and add it to B. RESULT B]
+            [COMMAND If com != 1, set x = f.peek() as the current median; if f.size() == l.size(), print x followed by (lsum - fsum + B); otherwise print x followed by (lsum - fsum + x + B). RESULT output]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+```
+
+Follow the official dependence definition exactly. Treat each card as one
+indivisible evidence unit, but derive every reported variable instance or line
+from authoritative numbered source. For information flow, compute the complete
+bidirectional dependence component around the queried instance. Do not report a
+query instance unless that numbered line defines or updates it, and do not
+report an object used only as a method-call receiver unless the object's value
+itself participates in the computed flow. A receiver initialized from another
+object's data-returning call carries that returned value and must remain in the
+flow; a root I/O handle initialized only from an external stream does not.
+Return only the exact JSON object
+required by the official prompt, with no prose or markdown.

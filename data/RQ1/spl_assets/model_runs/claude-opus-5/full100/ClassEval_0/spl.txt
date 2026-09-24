@@ -1,0 +1,163 @@
+# CLASS AccessGatewayFilter
+
+# JSON_PARSE_ERROR: No JSON object/array found in LLM output
+# RAW_LLM_OUTPUT:
+Understood. Ready to convert methods to JSON templates using the MethodToTemplateConverter schema. Send me a method and I'll get started.
+
+[DEFINE_WORKER: "Determines whether an incoming request is permitted by checking if the URI matches an allow-list prefix, then validating a JWT token and requiring the authenticated user's level to be strictly greater than 2." filter]
+    [INPUTS]
+        <REF> request </REF>: dict "Incoming request mapping containing at least 'path' (the request URI) and 'method' (the HTTP method)"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the request is allowed, False if authentication fails or an exception is raised"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Extract request['path'] into request_uri and request['method'] into method RESULT request_uri, method]
+            [COMMAND Call self.is_start_with(request_uri); if it returns True, return True immediately (early return, bypassing all authentication) RESULT early_return_true]
+            [COMMAND Call self.get_jwt_user(request) and assign the result to token RESULT token]
+            [COMMAND Extract token['user'] into user RESULT user]
+            [COMMAND Check whether user['level'] is strictly greater than 2 (exclusive lower bound: level must be > 2, not >= 2) RESULT level_check]
+            [COMMAND If level_check is True, call self.set_current_user_info_and_log(user), then return True RESULT return_true]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: user['level'] is 2 or below (i.e., not strictly greater than 2)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not call set_current_user_info_and_log; fall through the try block without returning, reaching the implicit end — however, since the try block has no further statements, execution exits the try and the method returns None implicitly (effectively a non-True result) RESULT implicit_none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Any exception is raised within the try block (e.g., JWT validation failure in get_jwt_user, missing key in token or user dict, or any other runtime error)]
+        [LOG "Exception is silently swallowed by a bare except clause with no logging or re-raise"]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the given request URI begins with any of the predefined prefixes ('/api' or '/login'), returning True on the first match or False if none match." is_start_with]
+    [INPUTS]
+        <REF> request_uri </REF>: string "The incoming request URI string to test against the prefix list"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if request_uri starts with any prefix in the list, False otherwise"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize local list variable start_with with two string literals: '/api' and '/login' RESULT start_with]
+            [COMMAND Iterate over each element s in start_with; for each s, test whether request_uri starts with s using a case-sensitive, position-zero prefix match RESULT match_check]
+            [COMMAND Within the loop, if request_uri.startswith(s) is True for the current s, immediately return True and exit the method without evaluating any remaining prefixes (early-exit short-circuit) RESULT early_return_true]
+            [COMMAND After the loop completes with no match found across all prefixes, return False explicitly RESULT return_false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: start_with list is empty (no prefixes defined)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND The for loop body never executes; fall through to the explicit return False at the end of the method RESULT return_false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: request_uri matches the first prefix '/api' on the very first iteration]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return True immediately on the first iteration without evaluating '/login' or any further elements (best-case O(1) path) RESULT early_return_true]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Extracts a token from the request's Authorization header, checks whether the token's embedded JWT string starts with the associated username, and returns None if the token is 3 or more days old, otherwise returns the token." get_jwt_user]
+    [INPUTS]
+        <REF> request </REF>: dict "Incoming request object containing a 'headers' dict with an 'Authorization' key whose value is expected to be a pre-parsed token dict"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> token </REF>: dict or None "The token dict extracted from the Authorization header, or None if the token is determined to be expired (3 or more days old)"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read request['headers']['Authorization'] and assign it to token; token is expected to be a pre-parsed dict containing at minimum 'jwt' and 'user' keys RESULT token]
+            [COMMAND Read token['user'] and assign it to user; user is expected to be a dict containing at minimum a 'name' key RESULT user]
+            [COMMAND Check whether token['jwt'] starts with user['name']; if true, enter the expiry-check block, otherwise skip it entirely and proceed to return token RESULT jwt_starts_with_name]
+            [COMMAND Within the jwt_starts_with_name branch: split token['jwt'] on the delimiter user['name'] and take the element at index 1 to obtain the date substring RESULT jwt_str_date]
+            [COMMAND Within the jwt_starts_with_name branch: parse jwt_str_date using the format '%Y-%m-%d' with datetime.datetime.strptime to produce a datetime object RESULT jwt_date]
+            [COMMAND Within the jwt_starts_with_name branch: compute the difference between datetime.datetime.today() (local time) and jwt_date; if the difference is greater than or equal to datetime.timedelta(days=3) (inclusive boundary at exactly 3 days), return None immediately to signal an expired or invalid token RESULT expiry_check_return]
+            [COMMAND After the conditional block (jwt does not start with username, or token age is less than 3 days): return token to the caller RESULT return_token]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: token['jwt'] does not start with user['name'] — the outer if condition is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the entire expiry-check block without performing any date parsing or age comparison, and fall through directly to return token RESULT token]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: token['jwt'] starts with user['name'] but the token age is less than 3 days (inner if condition is False)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not return None; fall through silently past the inner if block and proceed to return token RESULT token]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: request['headers'] is absent or None, or the 'Authorization' key does not exist in the headers dict]
+        [LOG "Accessing request['headers']['Authorization'] raises KeyError if the key is missing or TypeError if 'headers' is None; no default or guard is applied"]
+        [THROW KeyError / TypeError "Raised when the headers mapping or the Authorization key is absent; the method performs no null check before this access"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: token is None, not a subscriptable mapping, or does not contain the 'user' key]
+        [LOG "Accessing token['user'] raises TypeError if token is None or not subscriptable, or KeyError if the 'user' key is absent"]
+        [THROW KeyError / TypeError "Raised when the token value extracted from the Authorization header cannot be subscripted or lacks the expected 'user' key"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: token['jwt'].split(user['name']) produces a list with fewer than 2 elements (the name does not appear as a delimiter)]
+        [LOG "Accessing index [1] on the split result raises IndexError when the JWT string does not contain user['name'] as a separating substring despite startswith returning True"]
+        [THROW IndexError "Raised when split on user['name'] yields only one segment, meaning the name appears at the very end or the string equals the name exactly"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: jwt_str_date does not match the expected format '%Y-%m-%d']
+        [LOG "datetime.datetime.strptime raises ValueError when the extracted date substring cannot be parsed according to the format string '%Y-%m-%d'"]
+        [THROW ValueError "Raised when the date portion of the JWT string is malformed or does not conform to the YYYY-MM-DD pattern"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Extracts the user's address into a local variable and writes a concatenated log entry combining the user's name, address, and current timestamp at log level 1." set_current_user_info_and_log]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which this method is called; not directly used in the method body."
+        <REF> user </REF>: dict "A mapping that must contain at minimum the keys 'address' (string or scalar) and 'name' (string); absence of either key raises a KeyError, and a None or non-subscriptable value raises a TypeError."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read user['address'] and assign its value to the local variable host; this is a direct key lookup with no transformation and no fallback — if 'address' is absent a KeyError is raised, if user is None or non-subscriptable a TypeError is raised. RESULT host]
+            [COMMAND Call logging.log with keyword argument level=1 and keyword argument msg formed by concatenating user['name'], host, and the string representation of datetime.datetime.now() in that order with no separator; the concatenation requires user['name'] to be a string — a non-string name raises a TypeError — and str(datetime.datetime.now()) captures the current local timestamp at call time. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: user is None or is not a subscriptable mapping]
+        [LOG "Accessing user['address'] or user['name'] raises TypeError because user does not support key lookup."]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: user does not contain the key 'address']
+        [LOG "The key lookup user['address'] raises KeyError; no default or fallback is provided."]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: user does not contain the key 'name']
+        [LOG "The key lookup user['name'] inside the msg concatenation raises KeyError; no default or fallback is provided."]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: user['name'] is not a string]
+        [LOG "String concatenation of user['name'] + host raises TypeError because the + operator requires both operands to be strings."]
+        [THROW ExceptionName "Exception description"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

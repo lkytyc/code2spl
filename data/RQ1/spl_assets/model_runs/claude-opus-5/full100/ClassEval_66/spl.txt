@@ -1,0 +1,87 @@
+# CLASS NumericEntityUnescaper
+
+# JSON_PARSE_ERROR: No JSON object/array found in LLM output
+# RAW_LLM_OUTPUT:
+Got it. Ready to convert methods to JSON templates. Paste the method code you'd like me to convert.
+
+[DEFINE_WORKER: "Decodes numeric HTML character references (both decimal and hexadecimal) in a string, emitting each valid entity as its Unicode character and passing through all other characters unchanged." replace]
+    [INPUTS]
+        <REF> string </REF>: text "The input string potentially containing numeric HTML entities in the form &#N; or &#xN;"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: text "The transformed string with valid numeric HTML entities replaced by their corresponding Unicode characters; may be a partial result if a malformed codepoint is encountered mid-string"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list 'out' to accumulate output characters, set integer 'pos' to 0, and set integer 'length' to the length of 'string' RESULT out, pos, length]
+            [COMMAND Enter a while loop that continues while pos is strictly less than length minus 2, ensuring at least 3 characters remain and that string[pos+1] is always a safe index within the loop RESULT loop_active]
+            [COMMAND Within the outer while loop, check whether string[pos] equals '&' AND string[pos+1] equals '#'; if true, a potential numeric HTML entity has been detected and entity-parsing logic is entered RESULT entity_detected]
+            [COMMAND Within the entity-detected branch, set 'start' to pos+2, set boolean 'is_hex' to False, and read 'first_char' as string[start] RESULT start, is_hex, first_char]
+            [COMMAND Within the entity-detected branch, if first_char equals 'x' or 'X', increment start by 1 and set is_hex to True, consuming the hexadecimal prefix RESULT start, is_hex]
+            [COMMAND Within the entity-detected branch, if start equals length (string is exhausted immediately after the entity prefix '&#' or '&#x'), return the joined contents of 'out' as an early exit RESULT early_return_truncated]
+            [COMMAND Within the entity-detected branch, set 'end' to start, then advance 'end' forward through consecutive valid hex/decimal digit characters using self.is_hex_char, stopping when end reaches length or a non-digit character is found RESULT end]
+            [COMMAND Within the entity-detected branch, if end is less than length AND string[end] equals ';', the entity is properly terminated; attempt to parse string[start:end] as an integer using base 16 when is_hex is True or base 10 when is_hex is False, storing the result in 'entity_value' RESULT entity_value]
+            [COMMAND Within the entity-detected and semicolon-confirmed branch, append chr(entity_value) to 'out', advance pos to end+1, and execute continue to restart the outer while loop, skipping the fallthrough character append RESULT out, pos]
+            [COMMAND Within the outer while loop, when string[pos] is not '&#' or the entity is malformed (missing semicolon), append string[pos] to 'out' as a literal character and increment pos by 1 RESULT out, pos]
+            [COMMAND After the outer while loop exits (pos has reached length minus 2), return the joined contents of 'out' as the final decoded string RESULT final_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: string[pos] is '&' and string[pos+1] is '#', but the digit sequence is not followed by a semicolon (end equals length or string[end] is not ';')]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fall through to the non-entity path: append string[pos] as a literal character to 'out' and increment pos by 1, treating the malformed entity start as an ordinary character RESULT out, pos]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: start equals length immediately after consuming the entity prefix '&#' or '&#x', meaning the string is truncated with no digits following]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the joined contents of 'out' immediately as a partial result without processing any further characters RESULT early_return_truncated]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: int(string[start:end], base) raises an exception because the digit sequence between '&#' (or '&#x') and ';' cannot be parsed as a valid integer]
+        [LOG "Malformed codepoint value in numeric HTML entity; int() conversion failed for the digit range"]
+        [THROW EarlyReturnOnParseError "The method catches the exception and immediately returns the joined contents of 'out' accumulated so far, discarding the remainder of the input string"]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a single character is a valid hexadecimal digit (0–9, a–f, or A–F) by checking if it is a decimal digit or falls within the lowercase hex letter range." is_hex_char]
+    [INPUTS]
+        <REF> char </REF>: string "A single character to test for hexadecimal validity; assumed non-null by the caller."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if char is a decimal digit (0–9) or a hex letter (a–f / A–F); False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether char is a decimal digit by calling char.isdigit(); if True, short-circuit and return True immediately without evaluating the second condition. RESULT digit_check]
+            [COMMAND If digit_check is False, derive a lowercase version of char by calling char.lower(), producing a new string without mutating char. RESULT lower_char]
+            [COMMAND Evaluate the chained comparison 'a' <= lower_char <= 'f' to test whether lower_char falls within the inclusive hex-letter range [a, f], covering both lowercase a–f and uppercase A–F inputs. RESULT hex_letter_check]
+            [COMMAND Return the boolean result of digit_check OR hex_letter_check, where the OR is short-circuit: if digit_check was True the return value was already determined in the first step. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: char.isdigit() returns True (char is one of 0–9, or a Unicode decimal digit form that satisfies isdigit())]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Short-circuit the OR expression and return True immediately; char.lower() and the range comparison are never evaluated. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: char is an uppercase hex letter A–F]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND char.isdigit() returns False; char.lower() maps the uppercase letter to its lowercase equivalent (e.g., 'F' -> 'f'); the range check 'a' <= lower_char <= 'f' evaluates to True and is returned. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: char is outside all hex ranges (e.g., 'g', 'G', 'z', or a non-hex symbol)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND char.isdigit() returns False; char.lower() produces a value outside [a, f]; the range check evaluates to False; return False. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

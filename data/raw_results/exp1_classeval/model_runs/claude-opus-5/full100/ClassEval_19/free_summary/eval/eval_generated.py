@@ -1,0 +1,101 @@
+import math
+
+
+class ChandrasekharSieve:
+    """Finds all prime numbers up to n using the Sieve of Eratosthenes."""
+
+    def __init__(self, n: int):
+        self.primes = self._run_sieve(n)
+
+    def _run_sieve(self, n: int) -> list[int]:
+        if n < 2:
+            return []
+
+        is_prime = [True] * (n + 1)
+        is_prime[0] = False
+        is_prime[1] = False
+
+        p = 2
+        while p <= math.isqrt(n):
+            if is_prime[p]:
+                for multiple in range(p * p, n + 1, p):
+                    is_prime[multiple] = False
+            p += 1
+
+        return [i for i, prime in enumerate(is_prime) if prime]
+
+    def get_primes(self) -> list[int]:
+        return self.primes
+
+import unittest
+
+
+class ChandrasekharSieveTestGeneratePrimes(unittest.TestCase):
+    def test_generate_primes_1(self):
+        cs = ChandrasekharSieve(20)
+        res = cs.generate_primes()
+        self.assertEqual(res, [2, 3, 5, 7, 11, 13, 17, 19])
+
+    def test_generate_primes_2(self):
+        cs = ChandrasekharSieve(18)
+        res = cs.generate_primes()
+        self.assertEqual(res, [2, 3, 5, 7, 11, 13, 17])
+
+    def test_generate_primes_3(self):
+        cs = ChandrasekharSieve(15)
+        res = cs.generate_primes()
+        self.assertEqual(res, [2, 3, 5, 7, 11, 13])
+
+    def test_generate_primes_4(self):
+        cs = ChandrasekharSieve(10)
+        res = cs.generate_primes()
+        self.assertEqual(res, [2, 3, 5, 7])
+
+    def test_generate_primes_5(self):
+        cs = ChandrasekharSieve(1)
+        res = cs.generate_primes()
+        self.assertEqual(res, [])
+
+
+class ChandrasekharSieveTestGetPrimes(unittest.TestCase):
+    def test_get_primes_1(self):
+        cs = ChandrasekharSieve(20)
+        cs.generate_primes()
+        res = cs.get_primes()
+        self.assertEqual(res, [2, 3, 5, 7, 11, 13, 17, 19])
+
+    def test_get_primes_2(self):
+        cs = ChandrasekharSieve(18)
+        cs.generate_primes()
+        res = cs.get_primes()
+        self.assertEqual(res, [2, 3, 5, 7, 11, 13, 17])
+
+    def test_get_primes_3(self):
+        cs = ChandrasekharSieve(15)
+        cs.generate_primes()
+        res = cs.get_primes()
+        self.assertEqual(res, [2, 3, 5, 7, 11, 13])
+
+    def test_get_primes_4(self):
+        cs = ChandrasekharSieve(10)
+        cs.generate_primes()
+        res = cs.get_primes()
+        self.assertEqual(res, [2, 3, 5, 7])
+
+    def test_get_primes_5(self):
+        cs = ChandrasekharSieve(1)
+        res = cs.get_primes()
+        self.assertEqual(res, [])
+
+
+class ChandrasekharSieveTest(unittest.TestCase):
+    def test_chandrasekharsieve(self):
+        cs = ChandrasekharSieve(20)
+        res = cs.generate_primes()
+        self.assertEqual(res, [2, 3, 5, 7, 11, 13, 17, 19])
+        res = cs.get_primes()
+        self.assertEqual(res, [2, 3, 5, 7, 11, 13, 17, 19])
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

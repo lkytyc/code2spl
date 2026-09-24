@@ -1,0 +1,72 @@
+# FILE: django/db/backends/mysql/operations.py
+This code defines a MySQL-specific implementation of Django’s database operations layer, used by Django’s ORM to generate SQL and adapt data values when working with a MySQL database. It inherits from Django’s base `DatabaseOperations` and customizes many operations to match MySQL’s syntax and behavior.
+
+Key responsibilities include:
+
+- Defining MySQL-specific integer field ranges (for positive integer fields) and casting rules for data types such as auto fields, character fields, decimal fields, and integer fields.
+- Providing SQL snippets for extracting and truncating date/time components (e.g., year, month, week, quarter) from date, datetime, and time fields, including special handling for MySQL functions like `DAYOFWEEK`, `WEEK`, `YEARWEEK`, `DATE_FORMAT`, and `MAKEDATE`.
+- Converting datetime fields to and from the database timezone, and ensuring timezone-aware values are made naive before storage or made aware again when read, with checks that MySQL does not support timezone-aware values when timezone support is disabled.
+- Adapting Python datetime, time, and UUID values into formats acceptable by MySQL, and converting MySQL query results back into Python booleans, datetimes, and UUIDs.
+- Generating MySQL-specific SQL for flushing tables using `TRUNCATE`, wrapped with foreign key check disabling/re-enabling.
+- Handling SQL quoting with backticks, limiting identifier names to 64 characters, and providing MySQL’s maximum limit value for no-limit queries.
+- Supporting expression combination operators peculiar to MySQL, such as power and bitwise operations, with appropriate casting to signed integers.
+- Providing MySQL-specific placeholder handling for binary data, bulk insert syntax, and time subtraction using functions like `TIME_TO_SEC` and `TIMESTAMPDIFF`.
+- Producing `EXPLAIN` query prefixes with MySQL-specific options like `FORMAT` and `EXTENDED`.
+- Implementing regular expression lookups compatible with different MySQL/MariaDB versions.
+- Returning a custom “no ordering” SQL (`ORDER BY NULL`) to prevent implicit grouping order.
+- Retrieving the exact last executed SQL from a MySQL cursor’s undocumented `_executed` attribute.
+
+Overall, this class bridges Django’s database-agnostic ORM operations with MySQL’s particular SQL dialect and data handling conventions.
+
+# FILE: django/db/backends/oracle/operations.py
+This code defines the Oracle-specific implementation of Django's database operations. It translates Django ORM operations into Oracle-compatible SQL, handles data type conversions, and implements database-specific behaviors.
+
+Key responsibilities:
+- Generates SQL fragments for date/time extraction, truncation, and timezone conversion using Oracle functions like `TO_CHAR`, `EXTRACT`, `TRUNC`, and `FROM_TZ`.
+- Provides converters that transform values retrieved from Oracle columns into Python types (e.g., LOB fields are read, Oracle timestamps become Django-aware datetimes, numbers become UUIDs or booleans, and Oracle `NULL` becomes `''` or `b''` where the model permits empty strings).
+- Handles identifier quoting, uppercasing, and truncation to Oracle's 30-character limit.
+- Builds SQL for limits/offsets, random functions, regex lookups, and deferred constraints.
+- Manages primary key returning (`RETURNING ... INTO`), sequence lookup, and sequence reset PL/SQL blocks.
+- Implements flushing of tables by disabling foreign key constraints, truncating tables (optionally including dependent tables via recursive constraint discovery), re-enabling constraints, and resetting sequences.
+- Adapts Python values for insertion, including converting timezone-aware datetimes to naive datetimes in the connection timezone and rejecting aware values when `USE_TZ` is disabled.
+- Provides bulk insert SQL using `SELECT ... FROM DUAL` combined with `UNION ALL`, wrapped in a subquery to avoid issues with Oracle identity columns, and computes batch sizes based on Oracle's query parameter limit.
+- Maps arithmetic/bitwise operators to Oracle functions such as `MOD`, `BITAND`, and `POWER`.
+
+The class interacts closely with Django's database connection, field metadata, and cursor objects, and relies on Oracle-specific utilities and types (`Database`, `BulkInsertMapper`, `InsertIdVar`, `Oracle_datetime`) from the same backend package.
+
+# FILE: django/db/backends/sqlite3/base.py
+This module is Django’s SQLite database backend. It defines a `DatabaseWrapper` class that adapts SQLite to Django’s ORM, along with helper functions and custom SQLite functions.
+
+It first checks that the installed SQLite version is at least 3.8.3. It registers custom type converters so SQLite values are parsed as Python booleans, dates, times, and datetimes, and it registers an adapter to store `Decimal` values as strings.
+
+The `DatabaseWrapper` class declares how Django field types map to SQLite column types, sets up SQL operators for lookups, and assigns supporting classes for client operations, schema creation, database features, introspection, schema editing, and SQL operations.
+
+When opening a connection, it builds connection parameters, forcing thread sharing to be handled at Django’s level and enabling URI mode. New connections get many custom SQL functions registered, including date/time extraction and truncation functions, date and time difference functions, regular expression matching, common math functions, string functions like `LPAD`/`RPAD`/`REVERSE`, hashing functions, and aggregate functions for standard deviation and variance. Foreign key enforcement is also enabled via `PRAGMA foreign_keys = ON`.
+
+The wrapper overrides connection behavior to:
+- Use a custom cursor class that converts Django’s `%s` placeholders to SQLite’s `?` placeholders.
+- Skip closing in-memory databases to preserve their data.
+- Control autocommit and savepoints around SQLite’s transaction behavior.
+- Temporarily disable and re-enable foreign key checks.
+- Check for invalid foreign key references using SQLite pragmas or fallback queries, raising an integrity error if any are found.
+
+The module also contains helper functions that implement the custom SQLite functions, handling date/time parsing, truncation, extraction, and conversion, with timezone awareness where relevant. These functions operate on SQLite date/time values and return formatted strings or numeric components.
+
+# FILE: django/db/backends/sqlite3/operations.py
+This class customizes Django’s SQLite database backend by inheriting from `BaseDatabaseOperations`. It adjusts SQL generation, value adaptation, and result conversion to match SQLite’s behavior and limitations.
+
+It sets bulk insert batch sizes based on SQLite’s limits: one field supports up to 500 rows, while multiple fields are limited by dividing the maximum query parameters by the number of fields. It rejects unsupported expressions, such as sum/average/variance/standard deviation over date/time fields and distinct aggregates with multiple arguments.
+
+Date and time handling is done through custom SQLite functions registered elsewhere. The class generates SQL for extracting date parts, truncating dates/times, casting datetimes to dates/times, and extracting time parts, with optional timezone-aware conversion controlled by Django settings. Duration arithmetic and time differences also rely on custom SQLite functions.
+
+For logging or inspecting executed queries, it replaces parameter placeholders with quoted literal values. It does this by running a SQL query using SQLite’s `QUOTE` function, batching parameters in groups of 999 to respect SQLite limits, and then substituting the quoted values into the SQL string.
+
+Identifiers are quoted with double quotes unless already quoted. The class uses `-1` to represent “no limit,” matching SQLite’s lack of enforced row limits.
+
+Flush behavior is customized: when cascade flushing is requested, the class recursively finds all tables that reference the tables being flushed and includes them in the generated `DELETE FROM` statements. The reference graph is built with a recursive SQL query and cached.
+
+Value adaptation ensures datetimes and times are stored as strings. Aware datetimes are made naive when timezone support is enabled, and an error is raised otherwise. Expressions are passed through without modification.
+
+Result converters interpret stored strings back into Python objects: datetimes, dates, times, UUIDs, booleans, and decimals. Decimal conversion limits precision to 15 significant digits and quantizes results to the field’s decimal places when appropriate.
+
+Bulk inserts are built using `UNION ALL SELECT` statements. Exponentiation is represented using SQLite’s `POWER` function. Timedelta addition and subtraction use a custom duration formatting function, with invalid connectors rejected. Integer fields are not constrained by the database. Finally, insert statements can be generated as `INSERT OR IGNORE` when conflict ignoring is requested.

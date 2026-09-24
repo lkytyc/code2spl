@@ -1,0 +1,1076 @@
+# FILE: django/forms/boundfield.py
+# CLASS BoundField
+
+[DEFINE_WORKER: "Initializes the bound field instance by storing the form, field, and name, computing prefixed HTML names and initial id, selecting the display label from the field or a prettified name, and defaulting help text to an empty string." __init__]
+    [INPUTS]
+        <REF> form </REF>: object "The parent form used to compute prefixed HTML field names."
+        <REF> field </REF>: object "The form field providing label and help text metadata."
+        <REF> name </REF>: string "The field name used to build HTML name and label values."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the incoming form object as self.form. RESULT self.form]
+            [COMMAND Store the incoming field object as self.field. RESULT self.field]
+            [COMMAND Store the incoming field name as self.name. RESULT self.name]
+            [COMMAND Call form.add_prefix(name) and store the returned HTML name in self.html_name. RESULT self.html_name]
+            [COMMAND Call form.add_initial_prefix(name) and store the returned initial HTML name in self.html_initial_name. RESULT self.html_initial_name]
+            [COMMAND Read self.auto_id, call form.add_initial_prefix(self.auto_id), and store the returned initial HTML id in self.html_initial_id. RESULT self.html_initial_id]
+            [COMMAND If self.field.label is None, assign pretty_name(name) to self.label; otherwise assign self.field.label to self.label. RESULT self.label]
+            [COMMAND Evaluate field.help_text or '' using short-circuit truthiness and assign the result to self.help_text, so falsy help text becomes an empty string. RESULT self.help_text]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns the cached list of BoundWidget instances for each subwidget produced by the field widget, computing attrs from an id value with fallback to auto_id." subwidgets]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list[BoundWidget] "A list of BoundWidget objects, one per subwidget returned by self.field.widget.subwidgets."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set id_ to self.field.widget.attrs.get('id') if it is truthy; otherwise set id_ to self.auto_id. RESULT id_]
+            [COMMAND Set attrs to {'id': id_} when id_ is truthy, otherwise set attrs to an empty dictionary. RESULT attrs]
+            [COMMAND Set attrs to the return value of self.build_widget_attrs(attrs). RESULT attrs]
+            [COMMAND Call self.field.widget.subwidgets(self.html_name, self.value(), attrs=attrs) and store the returned iterable. RESULT subwidgets_iterable]
+            [COMMAND For each widget in subwidgets_iterable, construct BoundWidget(self.field.widget, widget, self.form.renderer) and collect the constructed instances into a list. RESULT bound_widgets]
+            [COMMAND Return bound_widgets as the result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the ErrorList containing validation errors for this field, or a fresh empty ErrorList from the form's error class if the field has no errors." errors]
+    [INPUTS]
+        <REF> self </REF>: object "Bound form field instance that provides self.form, self.name, and self.form.error_class()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ErrorList "The ErrorList for the field, or a new empty error container produced by self.form.error_class() if the field name is absent."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.form.errors to obtain the ErrorDict for the current form. RESULT errors_dict]
+            [COMMAND Evaluate self.name to obtain the field name key. RESULT field_name]
+            [COMMAND Evaluate self.form.error_class() eagerly to create a fresh default error container, before checking whether field_name exists in errors_dict. RESULT default_error_container]
+            [COMMAND Check whether field_name is present as a key in errors_dict. RESULT key_exists]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: field_name is present as a key in errors_dict]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the existing error list stored in errors_dict under field_name. RESULT field_errors]
+            [COMMAND Return field_errors. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: field_name is not present as a key in errors_dict]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Use default_error_container as the empty error list for the missing field. RESULT field_errors]
+            [COMMAND Return field_errors. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders the field by resolving the widget and attrs, optionally localizing the widget, adding an implicit id when appropriate, and returning widget.render with the computed name, value, attrs, and renderer." as_widget]
+    [INPUTS]
+        <REF> self </REF>: object "The field instance exposing field, form, auto_id, html_initial_name, html_name, and related configuration."
+        <REF> widget </REF>: object "Optional widget to render; if falsy, self.field.widget is used."
+        <REF> attrs </REF>: dict "Optional HTML attributes; if falsy, a new empty dict is used and then augmented by build_widget_attrs."
+        <REF> only_initial </REF>: bool "When truthy, uses the initial HTML name and id for rendering."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> render_result </REF>: string "The result of widget.render(...) with the resolved name, value, attrs, and renderer."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the widget to render by assigning widget = widget if widget is truthy, otherwise self.field.widget. RESULT widget]
+            [COMMAND If self.field.localize is truthy, set widget.is_localized to True. RESULT widget]
+            [COMMAND Normalize attrs by assigning attrs = attrs if attrs is truthy, otherwise a new empty dict. RESULT attrs]
+            [COMMAND Invoke self.build_widget_attrs(attrs, widget) and assign the returned dictionary to attrs. RESULT attrs]
+            [COMMAND If self.auto_id is truthy and 'id' is not present in widget.attrs, call attrs.setdefault('id', self.html_initial_id if only_initial is truthy else self.auto_id) to set a default id. RESULT attrs]
+            [COMMAND Return widget.render(name=self.html_initial_name if only_initial is truthy else self.html_name, value=self.value(), attrs=attrs, renderer=self.form.renderer). RESULT render_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns an HTML string for representing this object as an <input type='text'> by forwarding a new TextInput widget, attrs, and kwargs to self.as_widget." as_text]
+    [INPUTS]
+        <REF> self </REF>: object "The bound object whose as_widget method configures and renders the input element."
+        <REF> attrs </REF>: dict or None "Optional dictionary of HTML attributes forwarded to the widget rendering method."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to as_widget."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The HTML string produced by rendering a TextInput widget."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new TextInput widget instance to represent this field as an HTML text input. RESULT text_input_widget]
+            [COMMAND Call self.as_widget with text_input_widget as the first positional argument, attrs as the second positional argument, and kwargs expanded as keyword arguments. RESULT rendered_html]
+            [COMMAND Return rendered_html as the final result of as_text. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders the bound field as an HTML textarea element by creating a Textarea widget and calling as_widget with the supplied attrs and forwarded keyword arguments." as_textarea]
+    [INPUTS]
+        <REF> self </REF>: BoundField "The bound field instance that provides the field name, current value, form configuration, and widget context for rendering."
+        <REF> attrs </REF>: dict or None "Optional HTML attributes to apply to the textarea; defaults to None and is passed through to as_widget."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to as_widget, such as only_initial."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The rendered HTML string for the textarea widget."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new Textarea widget instance to use as the explicit widget for rendering. RESULT textarea_widget]
+            [COMMAND Call self.as_widget with textarea_widget as the widget, attrs passed directly as the HTML attributes (None is normalized by as_widget), and kwargs forwarded so options such as only_initial can affect the rendered value. RESULT rendered_html]
+            [COMMAND Return the rendered_html string as the method's result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders the bound field as a hidden HTML input by delegating to as_widget with the field's hidden widget and any supplied attributes or keyword arguments." as_hidden]
+    [INPUTS]
+        <REF> attrs </REF>: dict or None "Optional dictionary of HTML attributes to apply to the hidden input."
+        <REF> kwargs </REF>: dict "Additional keyword arguments forwarded to as_widget for rendering."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "HTML string representing this field as <input type='hidden'>."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call hidden_widget() on self.field to obtain the hidden widget instance. RESULT hidden_widget]
+            [COMMAND Call self.as_widget(hidden_widget, attrs, **kwargs) to render the hidden input HTML. RESULT rendered_html]
+            [COMMAND Return rendered_html as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the data value for this bound field by delegating to the form's _field_data_value method using the field and html_name." data]
+    [INPUTS]
+        <REF> self </REF>: BoundField "The bound field instance whose data is requested; uses form, field, and html_name attributes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "The field data value returned by form._field_data_value, or None if no data was given."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.form._field_data_value with self.field and self.html_name as arguments and store the returned value. RESULT data_value]
+            [COMMAND Return data_value to the caller. RESULT _return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Return the value for this bound field by starting with its initial value and, if the form is bound, replacing it with the field's bound data before preparing the final value." value]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The prepared value of the bound field."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set data to self.initial. RESULT data]
+            [COMMAND If self.form.is_bound is true, set data to self.field.bound_data(self.data, data). RESULT data]
+            [COMMAND Return self.field.prepare_value(data). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders a bound field label as an HTML <label> element with an optional suffix, for attribute, and required CSS class, falling back to escaped label text when no usable ID exists." label_tag]
+    [INPUTS]
+        <REF> contents </REF>: str or None "Optional preescaped label content. If falsey, self.label is used."
+        <REF> attrs </REF>: dict or None "Optional HTML attributes for the generated label tag."
+        <REF> label_suffix </REF>: str or None "Optional suffix to append to the label unless the label already ends in one of ':', '?', '.', or '!'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: SafeString "The rendered label HTML when an ID is available, otherwise the conditionally escaped label contents, marked safe."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set contents to the supplied contents only if it is truthy; otherwise, using short-circuit or-evaluation, set contents to self.label. RESULT contents]
+            [COMMAND Resolve label_suffix: if label_suffix is exactly None, set it to self.field.label_suffix when self.field.label_suffix is not None, otherwise set it to self.form.label_suffix; if label_suffix is already non-None, keep it unchanged. An empty string for self.field.label_suffix is a valid non-None value. RESULT label_suffix]
+            [COMMAND Append the suffix to contents only if label_suffix is truthy, contents is truthy, and the last character of contents is not one of ':', '?', '.', '!'. Use short-circuit evaluation so the last-character check runs only after the first two checks pass. If any condition fails, keep contents unchanged. When appending, set contents to format_html('{}{}', contents, label_suffix). RESULT contents]
+            [COMMAND Set widget to self.field.widget. RESULT widget]
+            [COMMAND Set id_ to widget.attrs.get('id') if that value is truthy; otherwise set id_ to self.auto_id. RESULT id_]
+            [COMMAND In the truthy id_ branch only, set id_for_label by calling widget.id_for_label(id_). RESULT id_for_label]
+            [COMMAND In the truthy id_ branch, if id_for_label is truthy, set attrs to {**(attrs or {}), 'for': id_for_label}; otherwise leave attrs unchanged. RESULT attrs]
+            [COMMAND In the truthy id_ branch, if self.field.required is true and hasattr(self.form, 'required_css_class') is true, set attrs to attrs or {}; then if 'class' is a key in attrs, append ' ' and self.form.required_css_class to attrs['class'], otherwise set attrs['class'] to self.form.required_css_class. Only evaluate hasattr after the required check because of short-circuit and-evaluation. RESULT attrs]
+            [COMMAND In the truthy id_ branch, set attrs to flatatt(attrs) if attrs is truthy; otherwise set attrs to an empty string. RESULT attrs]
+            [COMMAND In the truthy id_ branch, set contents to format_html('<label{}>{}</label>', attrs, contents). RESULT contents]
+            [COMMAND When id_ is falsey, do not execute any truthy id_ branch steps; instead set contents to conditional_escape(contents). RESULT contents]
+            [COMMAND Return mark_safe(contents). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a string of space-separated CSS classes for this field, combining optional extra classes with the form's error and required CSS classes when those conditions apply." css_classes]
+    [INPUTS]
+        <REF> self </REF>: object "The field instance providing errors, the containing form, and field metadata."
+        <REF> extra_classes </REF>: object "Optional extra CSS classes; string-like values are split on whitespace, falsy values are treated as empty, and other iterables are used directly."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "A single string of space-separated CSS classes, or an empty string when no classes are present."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If extra_classes has a split attribute, split it into a list of whitespace-separated tokens and assign the list back to extra_classes. RESULT extra_classes]
+            [COMMAND Convert extra_classes to a set: if extra_classes is falsy use an empty list, otherwise use extra_classes itself; pass the chosen iterable to set() to remove duplicates. RESULT extra_classes]
+            [COMMAND If self.errors is truthy and self.form has an error_css_class attribute, add self.form.error_css_class to extra_classes. RESULT extra_classes]
+            [COMMAND If self.field.required is truthy and self.form has a required_css_class attribute, add self.form.required_css_class to extra_classes. RESULT extra_classes]
+            [COMMAND Join all elements of extra_classes with a single space using ' '.join(extra_classes) and return the resulting string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the underlying widget of this bound field is hidden." is_hidden]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> is_hidden </REF>: boolean "True if the field's widget is hidden, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of self.field.widget.is_hidden. RESULT is_hidden]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the BoundField's id attribute by using the form's auto_id setting: formats auto_id with html_name if it contains a %s placeholder, returns html_name if auto_id is truthy without a placeholder, and returns an empty string otherwise." auto_id]
+    [INPUTS]
+        <REF> self </REF>: BoundField "BoundField instance exposing form.auto_id and html_name."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "Generated id attribute, or empty string when auto_id is falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.form.auto_id into the local variable auto_id. RESULT auto_id]
+            [COMMAND Evaluate first_condition: auto_id is truthy and '%s' is contained in str(auto_id), using short-circuit evaluation so str(auto_id) is only computed when auto_id is truthy. RESULT first_condition]
+            [COMMAND Evaluate second_condition only if first_condition is false: auto_id is truthy. RESULT second_condition]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: first_condition is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return auto_id formatted with self.html_name by replacing the %s placeholder. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: first_condition is false and second_condition is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.html_name. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: first_condition is false and second_condition is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return empty string ''. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Wrapper around the field widget's id_for_label method that resolves the id from either the widget's id attribute or self.auto_id, then returns widget.id_for_label(id_)." id_for_label]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The label id returned by widget.id_for_label(id_)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the widget from self.field.widget and assign it to widget. RESULT widget]
+            [COMMAND Look up the 'id' attribute from widget.attrs using widget.attrs.get('id') and assign the candidate value to candidate_id. RESULT candidate_id]
+            [COMMAND Apply the short-circuit OR: if candidate_id is truthy, assign it to id_; otherwise assign self.auto_id to id_. RESULT id_]
+            [COMMAND Call widget.id_for_label(id_) and return the resulting value. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the initial value for the bound form field and normalizes datetime/time values by removing microseconds if the field widget does not support them." initial]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The resolved initial value, with microseconds removed when data was a datetime/time value and the widget does not support microseconds."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign to data the result of calling self.form.get_initial_for_field(self.field, self.name). RESULT data]
+            [COMMAND If data is an instance of datetime.datetime or datetime.time (short-circuit: check the type first) and self.field.widget.supports_microseconds is False, replace the microsecond component of data with 0 using data.replace(microsecond=0) and assign the resulting new object back to data. RESULT data]
+            [COMMAND Return the current value of data. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If data is neither datetime.datetime nor datetime.time, or if self.field.widget.supports_microseconds is True, the conditional block is skipped and data remains unchanged.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Leave data unchanged and continue to the return statement. RESULT data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns a copied widget attribute dictionary, adding required and disabled flags based on widget, field, and form conditions." build_widget_attrs]
+    [INPUTS]
+        <REF> attrs </REF>: dict "Dictionary of attributes to copy and augment."
+        <REF> widget </REF>: object or None "Optional widget; defaults to self.field.widget when falsy."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> attrs </REF>: dict "New dictionary with optional 'required' and 'disabled' flags."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Using short-circuit or, resolve widget to self.field.widget only when widget is falsy; otherwise keep widget unchanged. RESULT widget]
+            [COMMAND Create a shallow copy of attrs as a new dict to avoid mutating the caller's original dict. RESULT attrs]
+            [COMMAND If widget.use_required_attribute(self.initial) is true and self.field.required is true and self.form.use_required_attribute is true, set attrs['required'] to True. RESULT attrs]
+            [COMMAND If self.field.disabled is true, set attrs['disabled'] to True. RESULT attrs]
+            [COMMAND Return attrs. RESULT attrs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the lowercased widget class name with a trailing 'widget' or 'input' suffix removed." widget_type]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Lowercased widget class name with a trailing 'widget' or 'input' suffix removed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the widget object stored on the field as self.field.widget. RESULT widget_obj]
+            [COMMAND Retrieve the widget's class via widget_obj.__class__. RESULT widget_class]
+            [COMMAND Get the class name string using widget_class.__name__. RESULT widget_class_name]
+            [COMMAND Convert the class name to lowercase with widget_class_name.lower(). RESULT lowered_widget_name]
+            [COMMAND Apply re.sub(r'widget$|input$', '', lowered_widget_name), removing only a trailing 'widget' or 'input' suffix if present and otherwise leaving the lowercased name unchanged. RESULT final_name]
+            [COMMAND Return final_name as the method result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS BoundWidget
+
+[DEFINE_WORKER: "Initializes a new instance by storing the supplied parent widget, data, and renderer as corresponding instance attributes." __init__]
+    [INPUTS]
+        <REF> parent_widget </REF>: object "The parent widget to be associated with this instance."
+        <REF> data </REF>: object "The data to be stored on this instance."
+        <REF> renderer </REF>: object "The renderer to be stored on this instance."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the parent_widget parameter to the instance attribute self.parent_widget. RESULT self.parent_widget]
+            [COMMAND Assign the data parameter to the instance attribute self.data. RESULT self.data]
+            [COMMAND Assign the renderer parameter to the instance attribute self.renderer. RESULT self.renderer]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders the widget's template with a context containing a shallow copy of the widget data augmented by the wrap_label flag." tag]
+    [INPUTS]
+        <REF> wrap_label </REF>: bool "Flag indicating whether the widget label should be wrapped; defaults to False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> render_result </REF>: object "The result returned by self.parent_widget._render for the rendered widget output."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Copy self.data into a new dictionary, then set its 'wrap_label' key to the value of wrap_label. RESULT widget_data]
+            [COMMAND Wrap widget_data as the 'widget' value in a new outer dictionary and assign it to context. RESULT context]
+            [COMMAND Return the result of calling self.parent_widget._render with self.template_name, context, and self.renderer. RESULT render_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the template name from self.data if that key exists, otherwise falls back to the template_name attribute of self.parent_widget." template_name]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> template_name </REF>: string "The template name from self.data if present; otherwise the template name from self.parent_widget."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the string 'template_name' is present as a key in self.data. RESULT has_template_name]
+            [COMMAND If has_template_name is true, return the value associated with 'template_name' in self.data. RESULT template_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If has_template_name is false, meaning 'template_name' is not present in self.data.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of self.parent_widget.template_name. RESULT template_name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds and returns an identifier string of the form id_<name>_<index> by formatting the object's data name and index values." id_for_label]
+    [INPUTS]
+        <REF> self </REF>: object "The object containing a data attribute with 'name' and 'index' keys."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "The identifier string formatted as id_<name>_<index>."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.data from the object. RESULT data]
+            [COMMAND Extract the 'name' and 'index' values from data. RESULT data_values]
+            [COMMAND Format data_values into the string 'id_%s_%s' using old-style percent formatting. RESULT formatted_id]
+            [COMMAND Return formatted_id to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.data does not contain the key 'name' or 'index']
+        [LOG "KeyError raised while accessing 'name' or 'index' in self.data during identifier generation."]
+        [THROW KeyError "The required 'name' or 'index' key is missing from self.data."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: self.data is missing on the object]
+        [LOG "AttributeError raised while accessing self.data during identifier generation."]
+        [THROW AttributeError "The object does not have a data attribute."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the value stored under the 'label' key in the instance's data attribute." choice_label]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> label_value </REF>: any "The value associated with the 'label' key in self.data, returned to the caller."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the data attribute from self. RESULT data]
+            [COMMAND Look up the key 'label' in data. RESULT label_value]
+            [COMMAND Return label_value as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# FILE: django/forms/forms.py
+# CLASS DeclarativeFieldsMetaclass
+
+# CLASS BaseForm
+
+[DEFINE_WORKER: "Rearranges self.fields into the order specified by field_order, moving listed fields to the front, keeping remaining fields in their original order, and leaving self.fields unchanged when field_order is None." order_fields]
+    [INPUTS]
+        <REF> field_order </REF>: Optional[list[str]] "List of field names that defines the desired order for the fields; keys not included are appended in their original order. If None, no reordering is performed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "The method returns None; it mutates self.fields in place to the reordered dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty dictionary for the reordered fields. RESULT fields]
+            [COMMAND Within the for loop over field_order, for each key, try to pop the entry for key from self.fields and place it into fields; if a KeyError occurs because the key is missing, ignore that key and continue with the next key. RESULT fields]
+            [COMMAND Update fields with every remaining entry still in self.fields, preserving their existing original order; if field_order was empty, this copies all entries in their original order. RESULT fields]
+            [COMMAND Assign fields to self.fields as the new ordered fields dictionary. RESULT self.fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: field_order is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately without modifying self.fields. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the form's error dictionary, lazily invoking full_clean() if the cached _errors attribute has not been initialized." errors]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self._errors </REF>: ErrorDict "The form's validation error dictionary."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If self._errors is exactly None, call self.full_clean() to compute and cache the validation errors; otherwise keep the existing self._errors. RESULT self._errors]
+            [COMMAND Return self._errors as the form's error dictionary. RESULT self._errors]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the form is bound and has no errors, otherwise False." is_valid]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True when self.is_bound is truthy and self.errors is falsy; False when self.is_bound is truthy and self.errors is truthy; when self.is_bound is falsy, the actual falsy value of self.is_bound is returned."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the expression self.is_bound and not self.errors using Python short-circuit semantics: if self.is_bound is falsy, return self.is_bound immediately without reading self.errors; if self.is_bound is truthy, access self.errors and return not self.errors as a boolean. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the field name with the form's prefix prepended and separated by a hyphen when the prefix is set, otherwise returns the field name unchanged." add_prefix]
+    [INPUTS]
+        <REF> field_name </REF>: string "The field name to which the prefix is conditionally prepended."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "The prefixed field name if self.prefix is truthy, otherwise the original field_name."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the truthiness of self.prefix; None and empty string are falsy, while any non-empty value, including '0' or whitespace, is truthy. RESULT prefix_is_truthy]
+            [COMMAND If self.prefix is truthy, return the formatted result of '%s-%s' % (self.prefix, field_name), equivalent to str(self.prefix) + '-' + str(field_name). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If self.prefix is falsy (None or empty string)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return field_name unchanged. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prepends the literal string 'initial-' to the string form of self.add_prefix(field_name) and returns the combined result." add_initial_prefix]
+    [INPUTS]
+        <REF> field_name </REF>: str "The field name passed to add_prefix to compute the prefixed value."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "The string 'initial-' followed by the string form of self.add_prefix(field_name)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.add_prefix(field_name) to compute the intermediate prefixed value. RESULT raw_prefix]
+            [COMMAND Convert raw_prefix to its string representation using %s formatting. RESULT stringified_prefix]
+            [COMMAND Prepend the constant string 'initial-' to stringified_prefix; if stringified_prefix is empty, the result is exactly 'initial-'. RESULT final_value]
+            [COMMAND Return final_value as the result of add_initial_prefix. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the value for an HTML field name by delegating to the widget's value_from_datadict() method using the form data and uploaded files from self." _widget_data_value]
+    [INPUTS]
+        <REF> self </REF>: object "Bound form instance whose data and files attributes are passed to the widget lookup."
+        <REF> widget </REF>: object "Widget object that provides a value_from_datadict(data, files, name) method and knows how to extract its own value from the data dictionaries."
+        <REF> html_name </REF>: string "HTML field name used as the lookup key in the data or files dictionaries."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: any "Direct return value of widget.value_from_datadict(self.data, self.files, html_name); typically the field value, possibly None if absent, a list for multi-value widgets, or an uploaded file value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return immediately the direct result of widget.value_from_datadict(self.data, self.files, html_name) without storing or modifying it. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the field data value by delegating to _widget_data_value with the field's widget and HTML name." _field_data_value]
+    [INPUTS]
+        <REF> self </REF>: object "The current form/widget instance."
+        <REF> field </REF>: object "The form field object whose widget is used to extract the data value."
+        <REF> html_name </REF>: str "The rendered HTML name for the field."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The value produced by self._widget_data_value(field.widget, html_name)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._widget_data_value with field.widget and html_name, and return its result directly. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders a Django-like form as HTML by separating hidden and visible fields, prepending non-field errors, splicing hidden fields into the final row, and returning a marked-safe newline-joined HTML string." _html_output]
+    [INPUTS]
+        <REF> normal_row </REF>: str "HTML row template with % placeholders for errors, label, field, help_text, html_class_attr, css_classes, and field_name."
+        <REF> error_row </REF>: str "HTML row template with a %s placeholder for an error collection."
+        <REF> row_ender </REF>: str "Suffix string marking the end of a rendered HTML row, used when splicing hidden fields into the last row."
+        <REF> help_text_html </REF>: str "HTML template with a %s placeholder for the field help text."
+        <REF> errors_on_separate_row </REF>: bool "When true, visible field errors are rendered in a separate error row before the normal field row."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: SafeString "Marked-safe HTML string produced by joining all output rows with newline characters."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize top_errors as self.non_field_errors().copy(), and initialize output and hidden_fields as empty lists. RESULT initialized_state]
+            [COMMAND For each name and field in self.fields.items(), set html_class_attr to empty string, bf to self[name], and bf_errors to self.error_class(bf.errors). RESULT field_loop_iteration]
+            [COMMAND Within the field loop, if bf.is_hidden is true: if bf_errors is truthy, extend top_errors with the localized string '(Hidden field %(name)s) %(error)s' formatted with name and str(e) for each error e in bf_errors; then append str(bf) to hidden_fields regardless of bf_errors. RESULT hidden_field_handled]
+            [COMMAND Within the field loop, for a visible field where bf.is_hidden is false, compute css_classes as bf.css_classes(); if css_classes is truthy, set html_class_attr to ' class="%s"' % css_classes; otherwise leave it empty. RESULT visible_field_css_state]
+            [COMMAND Within the field loop, for a visible field, if errors_on_separate_row is true and bf_errors is truthy, append error_row % str(bf_errors) to output. RESULT visible_field_separate_error_output]
+            [COMMAND Within the field loop, for a visible field, if bf.label is truthy, set label to conditional_escape(bf.label) and then to bf.label_tag(label) or ''; otherwise set label to empty string. RESULT visible_field_label]
+            [COMMAND Within the field loop, for a visible field, if field.help_text is truthy, set help_text to help_text_html % field.help_text; otherwise set help_text to empty string. RESULT visible_field_help_text]
+            [COMMAND Within the field loop, for a visible field, append normal_row % { 'errors': bf_errors, 'label': label, 'field': bf, 'help_text': help_text, 'html_class_attr': html_class_attr, 'css_classes': css_classes, 'field_name': bf.html_name } to output. RESULT visible_field_row_output]
+            [COMMAND After processing all fields, if top_errors is truthy, insert error_row % top_errors at the beginning of output. RESULT top_errors_inserted]
+            [COMMAND If hidden_fields is truthy, join hidden_fields into str_hidden with no separator. RESULT hidden_fields_str]
+            [COMMAND If hidden_fields is truthy and output is empty, append str_hidden directly to output. RESULT standalone_hidden_output]
+            [COMMAND If hidden_fields is truthy and output is non-empty, retrieve the last output row as last_row. RESULT last_row_value]
+            [COMMAND Within the hidden-field insertion block, if last_row does not end with row_ender, construct a new empty normal_row with errors, label, field, help_text, css_classes, and field_name all empty and html_class_attr set to the current html_class_attr, append it to output, and set last_row to that new row. RESULT replacement_row_value]
+            [COMMAND Within the hidden-field insertion block, replace output[-1] with last_row without its trailing row_ender suffix, plus str_hidden, plus row_ender. RESULT spliced_last_row]
+            [COMMAND Return mark_safe(output joined with newline characters). RESULT final_html]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the form rendered as HTML <tr> elements, excluding the surrounding <table> tags, by delegating to _html_output with preconfigured row, error, help-text templates and errors rendered inline in the normal row." as_table]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rendered_html </REF>: string "The rendered form as HTML <tr> elements, excluding the <table> tags."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._html_output with normal_row set to '<tr%(html_class_attr)s><th>%(label)s</th><td>%(errors)s%(field)s%(help_text)s</td></tr>', error_row set to '<tr><td colspan="2">%s</td></tr>', row_ender set to '</td></tr>', help_text_html set to '<br><span class="helptext">%s</span>', and errors_on_separate_row set to False; return the rendered HTML string produced by the call. RESULT rendered_html]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns this form rendered as HTML <li> rows, excluding the enclosing <ul> tags, by delegating to _html_output with list-item formatting templates." as_ul]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: string "HTML string containing the rendered <li> rows for the form without the surrounding <ul> element."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the result of calling self._html_output with normal_row set to '<li%(html_class_attr)s>%(errors)s%(label)s %(field)s%(help_text)s</li>', error_row set to '<li>%s</li>', row_ender set to '</li>', help_text_html set to ' <span class="helptext">%s</span>', and errors_on_separate_row set to False. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Renders this form as HTML wrapped in <p> elements by invoking _html_output with fixed paragraph formatting templates and separate error rows." as_p]
+    [INPUTS]
+        <REF> self </REF>: object "The form instance providing _html_output and field rendering data."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> rendered_html </REF>: string "The form rendered as HTML paragraph elements."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._html_output with normal_row set to '<p%(html_class_attr)s>%(label)s %(field)s%(help_text)s</p>', error_row set to '%s', row_ender set to '</p>', help_text_html set to ' <span class="helptext">%s</span>', and errors_on_separate_row set to True, then return the resulting rendered HTML string. RESULT rendered_html]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the form's existing non-field validation errors, or a newly created empty non-field error list if no such errors are present." non_field_errors]
+    [INPUTS]
+        <REF> self </REF>: object "Form instance exposing an errors dictionary and an error_class callable."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ErrorList "The error list associated with NON_FIELD_ERRORS if present; otherwise a new empty error list created with error_class='nonfield'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.errors to obtain the form's error dictionary. RESULT errors_dict]
+            [COMMAND Create a new empty error list by calling self.error_class(error_class='nonfield') as the default fallback, evaluating it before the dictionary lookup. RESULT default_error_list]
+            [COMMAND Call errors_dict.get(NON_FIELD_ERRORS, default_error_list) to retrieve the non-field errors, using default_error_list if the key is missing. RESULT non_field_errors_result]
+            [COMMAND Return non_field_errors_result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Adds one or more validation errors to self._errors for a specified field or for non-field errors, normalizing the error argument and removing matching cleaned_data." add_error]
+    [INPUTS]
+        <REF> self </REF>: object "The form instance whose _errors, errors, fields, cleaned_data, and error_class are used and mutated."
+        <REF> field </REF>: str or None "The field name under which to add the error. Must be None when error contains a multi-field error_dict. For the single-field wrapper, a falsy field (None, empty string, etc.) falls back to NON_FIELD_ERRORS, while the TypeError guard treats only None as no explicit field."
+        <REF> error </REF>: str, list, dict, or ValidationError "The error to add. It may be a simple string, list of strings, dict mapping field names to error lists, or a ValidationError with error_list or error_dict."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None. The method mutates self._errors in place by appending error messages, and deletes entries from self.cleaned_data for fields that have errors."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Start adding an error to the form using the supplied field and error arguments. RESULT _method_started]
+            [COMMAND Normalize error to a ValidationError: if error is not an instance of ValidationError, assign ValidationError(error) to error; otherwise leave error unchanged. RESULT _normalized_error]
+            [COMMAND If error has an error_dict attribute and field is not None, stop and raise TypeError; if error has an error_dict attribute and field is None, assign error.error_dict to error; otherwise assign to error a new dictionary whose key is field if field is truthy, else NON_FIELD_ERRORS, and whose value is error.error_list. RESULT _error_mapping]
+            [COMMAND Iterate over each field, error_list pair in error.items(), where error is now a dictionary mapping field names to error lists. RESULT _loop_entry]
+            [COMMAND Within the loop over error.items(), if field is not already in self.errors, validate the field name: if field is not NON_FIELD_ERRORS and field is not in self.fields, raise ValueError; otherwise initialize self._errors[field] with self.error_class(error_class='nonfield') when field equals NON_FIELD_ERRORS, or with self.error_class() for a normal field. RESULT _error_slot_initialized]
+            [COMMAND Within the loop over error.items(), after the error slot exists, extend self._errors[field] with error_list. RESULT _error_list_extended]
+            [COMMAND Within the loop over error.items(), if field is present in self.cleaned_data, delete self.cleaned_data[field]. RESULT _cleaned_data_cleared]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: error has an error_dict attribute and field is not None]
+        [LOG "The argument `field` must be `None` when the `error` argument contains errors for multiple fields."]
+        [THROW TypeError "Raised when a single field argument is supplied together with a multi-field error container."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the loop, field is not already in self.errors, field is not NON_FIELD_ERRORS, and field is not in self.fields]
+        [LOG "The error mapping contains a field name that is neither the non-field sentinel nor a defined field on the form."]
+        [THROW ValueError "Raised when an error key is not the special NON_FIELD_ERRORS sentinel and does not correspond to a field in self.fields."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the given field has validation errors, optionally checking whether any of those errors has a specific code." has_error]
+    [INPUTS]
+        <REF> field </REF>: string "The error field name to check in the errors mapping."
+        <REF> code </REF>: string or None "Optional error code used to filter individual errors; if None, any error for the field satisfies the check."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if the field has errors and, when code is provided, at least one error has the given code; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether field is a key in self.errors and store the result. RESULT field_present]
+            [COMMAND If field_present is false, short-circuit the expression and return False. RESULT has_error_result]
+            [COMMAND If field_present is true and code is None, short-circuit the expression and return True. RESULT has_error_result]
+            [COMMAND If field_present is true and code is not None, call self.errors.as_data(), index it with field, and store the resulting list of errors. RESULT field_errors]
+            [COMMAND Within the conditional path where field_present is true and code is not None, examine field_errors and check whether any error object has error.code equal to code, stopping at the first match. RESULT code_match_found]
+            [COMMAND Return code_match_found as the final boolean result. RESULT has_error_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Cleans all of self.data by resetting the error dictionary and cleaned data, short-circuiting when the form is unbound or empty and unchanged, and then running field, form, and post-clean validation." full_clean]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize self._errors as a new ErrorDict instance. RESULT self._errors]
+            [COMMAND If self.is_bound is false, follow the unbound-form alternative flow. RESULT _]
+            [COMMAND Initialize self.cleaned_data as a new empty dictionary. RESULT self.cleaned_data]
+            [COMMAND If self.empty_permitted is true, call self.has_changed(); if it returns false, follow the empty-unchanged alternative flow. RESULT _]
+            [COMMAND Call self._clean_fields() to clean all individual fields. RESULT _]
+            [COMMAND Call self._clean_form() to perform form-level validation. RESULT _]
+            [COMMAND Call self._post_clean() to perform any post-validation processing. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.is_bound is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return from full_clean immediately and stop further processing. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: self.empty_permitted is true and self.has_changed() is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return from full_clean immediately and skip field, form, and post-clean validation. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over all form fields, resolves raw values from initial data for disabled fields or submitted data otherwise, cleans each value with FileField-aware handling and optional custom clean_<field> overrides, records results in cleaned_data, and catches ValidationError by adding per-field errors while continuing the loop." _clean_fields]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each (name, field) pair from self.fields.items() in field order, processing all fields independently without early exit. RESULT current_field_pair]
+            [COMMAND For the current field pair, compute raw_value using the field.disabled condition: if field.disabled is true, call self.get_initial_for_field(field, name); otherwise call self._field_data_value(field, self.add_prefix(name)). RESULT raw_value]
+            [COMMAND Within a try block for the current field, perform the initial clean using the isinstance(field, FileField) condition: if true, set initial to self.get_initial_for_field(field, name) and set cleaned_value to field.clean(raw_value, initial); otherwise set cleaned_value to field.clean(raw_value). RESULT cleaned_value]
+            [COMMAND Within the same try block, assign cleaned_value to self.cleaned_data[name]. RESULT cleaned_data]
+            [COMMAND Within the same try block, if hasattr(self, 'clean_' + name), call getattr(self, 'clean_' + name)() and overwrite self.cleaned_data[name] with the returned value. RESULT cleaned_data]
+            [COMMAND If a ValidationError is raised anywhere inside the try block for this field, catch it as e and call self.add_error(name, e); if the failure occurred before self.cleaned_data[name] was assigned, no cleaned-data entry is set, otherwise any previously assigned cleaned value remains; continue to the next field. RESULT error_recorded]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Runs the form's clean method, stores the cleaned data when validation succeeds, and registers a caught ValidationError on the form when validation fails." _clean_form]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.clean() within the try block and assign the returned value to cleaned_data. RESULT cleaned_data]
+            [COMMAND In the else block, which runs only if self.clean() did not raise ValidationError, check whether cleaned_data is not None. RESULT cleaned_data is not None]
+            [COMMAND If cleaned_data is not None, assign cleaned_data to self.cleaned_data. RESULT self.cleaned_data]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If self.clean() raises a ValidationError, caught as e, the else block is skipped.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.add_error(None, e) to associate the caught validation error with the form. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Performs additional cleaning after form cleaning is complete; this implementation is an empty hook for model validation in model forms." _post_clean]
+    [INPUTS]
+        <REF> self </REF>: object "The form instance whose post-cleaning hook is invoked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Execute the pass statement, performing no operation and implicitly returning None. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the cleaned form data after all field-level and form-wide validation has been performed, reading it from self.cleaned_data." clean]
+    [INPUTS]
+        <REF> self </REF>: object "The form instance whose cleaned_data attribute holds the validated form data."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The value of self.cleaned_data, typically a dictionary of validated field values."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the cleaned_data attribute from self, which contains the validated form data after cleaning and validation. RESULT cleaned_data]
+            [COMMAND Return cleaned_data to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the instance attribute self.changed_data is truthy, indicating that the data differs from its initial state." has_changed]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> has_changed_result </REF>: boolean "True if self.changed_data is truthy, False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current value of the instance attribute self.changed_data. RESULT changed_data]
+            [COMMAND Convert the truthiness of changed_data to a boolean using the built-in bool() constructor. RESULT has_changed_result]
+            [COMMAND Return has_changed_result to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates over the form's fields and returns the names of fields whose submitted value differs from the initial value, treating a validation error while resolving a hidden initial value as a changed field." changed_data]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> data </REF>: list "List of field names that have changed, including fields whose hidden initial value processing raised ValidationError."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize data as an empty list. RESULT data]
+            [COMMAND For each name, field in self.fields.items(), compute data_value = self._field_data_value(field, self.add_prefix(name)). RESULT data_value]
+            [COMMAND Within the loop over self.fields.items(), if not field.show_hidden_initial, set initial_value = self[name].initial. RESULT initial_value]
+            [COMMAND Within the loop over self.fields.items(), if field.show_hidden_initial is true, compute initial_prefixed_name = self.add_initial_prefix(name). RESULT initial_prefixed_name]
+            [COMMAND Within the loop over self.fields.items(), if field.show_hidden_initial is true, get hidden_widget = field.hidden_widget(). RESULT hidden_widget]
+            [COMMAND Within the loop over self.fields.items(), if field.show_hidden_initial is true, try to set initial_value = field.to_python(self._widget_data_value(hidden_widget, initial_prefixed_name)). RESULT initial_value]
+            [COMMAND Within the loop over self.fields.items(), after initial_value is determined, if field.has_changed(initial_value, data_value) is true, append name to data. RESULT data]
+            [COMMAND Return data. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the loop over self.fields.items(), in the if field.show_hidden_initial branch, field.to_python(self._widget_data_value(hidden_widget, initial_prefixed_name)) raises ValidationError.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append name to data because the field is assumed to have changed. RESULT data]
+            [COMMAND Continue to the next field, skipping the field.has_changed(initial_value, data_value) check. RESULT next_iteration]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the combined widget media required to render all fields on the form by merging the media of each field's widget." media]
+    [INPUTS]
+        <REF> self </REF>: object "The form instance whose fields values are iterated to collect widget media."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> media </REF>: Media "The combined Media object containing all widget media required for the form."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize media to a new empty Media() instance. RESULT media]
+            [COMMAND For each field in self.fields.values(), reassign media to the result of media + field.widget.media, thereby merging the field's widget media into the accumulated media. RESULT media]
+            [COMMAND Return the accumulated media. RESULT media]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if at least one field widget in the form requires multipart form encoding, otherwise False." is_multipart]
+    [INPUTS]
+        <REF> self </REF>: object "The form instance whose fields collection is inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if any field's widget.needs_multipart_form is true; False if no fields exist or all such flags are false."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize result to False. RESULT result]
+            [COMMAND For each field in self.fields.values(), if field.widget.needs_multipart_form is truthy, set result to True and stop iterating immediately (short-circuit any()). RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a list of all BoundField objects in self whose is_hidden attribute evaluates to True, preserving their original iteration order." hidden_fields]
+    [INPUTS]
+        <REF> self </REF>: iterable of BoundField objects "The iterable form or container to scan for hidden fields."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> hidden_fields </REF>: list "List containing references to the original BoundField objects for which is_hidden is truthy, in iteration order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize an empty list to collect hidden fields. RESULT hidden_fields]
+            [COMMAND For each field in self, in natural iteration order, evaluate field.is_hidden in a boolean context. RESULT field]
+            [COMMAND If field.is_hidden is truthy, append the original field object to the hidden fields list. RESULT hidden_fields]
+            [COMMAND If self is empty, skip the iteration and leave the hidden fields list empty. RESULT hidden_fields]
+            [COMMAND Return the collected hidden fields list. RESULT hidden_fields]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a new list of BoundField objects from self whose is_hidden attribute is falsy, preserving iteration order." visible_fields]
+    [INPUTS]
+        <REF> self </REF>: iterable of BoundField "The object to iterate over; each element must have an is_hidden attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: list of BoundField "The newly created list of visible fields from self, in their original iteration order."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create an empty result list to collect the visible fields. RESULT result_list]
+            [COMMAND Iterate over each element in self, binding the current element to field. RESULT field]
+            [COMMAND Within the iteration over self, evaluate field.is_hidden and check whether not field.is_hidden is true. RESULT condition_met]
+            [COMMAND Within the iteration over self, if condition_met is true, append field to result_list; if field.is_hidden is truthy, skip field. RESULT result_list]
+            [COMMAND After the iteration completes, return result_list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Return initial data for a form field by preferring form-level initial data over field.initial and evaluating any callable initial value." get_initial_for_field]
+    [INPUTS]
+        <REF> field </REF>: object "The form field whose initial attribute is used as the fallback when field_name is absent from self.initial."
+        <REF> field_name </REF>: string "The key used to retrieve form-level initial data from self.initial."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> value </REF>: object "The resolved initial value for the field, with callable initial values already evaluated."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the initial value by looking up field_name in self.initial; if field_name exists, use its value even if None, otherwise use field.initial. Assign this value to value. RESULT value]
+            [COMMAND If value is callable, call value with no arguments and assign the returned result to value. RESULT value]
+            [COMMAND Return value as the resolved initial data for the field. RESULT value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Form

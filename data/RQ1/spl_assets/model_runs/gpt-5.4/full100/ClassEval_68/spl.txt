@@ -1,0 +1,113 @@
+# CLASS PageUtil
+
+[DEFINE_WORKER: "Initializes pagination state from the provided data and page size, then computes total item and page counts using ceiling division." __init__]
+    [INPUTS]
+        <REF> data </REF>: collection "Source data to store and count."
+        <REF> page_size </REF>: integer "Number of items per page."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the incoming data reference in self.data. RESULT self.data]
+            [COMMAND Store the provided page_size value in self.page_size. RESULT self.page_size]
+            [COMMAND Compute self.total_items as the length of data. RESULT self.total_items]
+            [COMMAND Compute self.total_pages as (self.total_items + page_size - 1) // page_size to round up to the next page when there is a remainder. RESULT self.total_pages]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: page_size is 0, causing integer division by zero in the page count formula.]
+        [LOG "Division by zero occurs while computing total_pages."]
+        [THROW ZeroDivisionError "Raised when page_size is zero."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the requested page of data when the page number is within range, otherwise returns an empty list." get_page]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing total_pages, page_size, and data."
+        <REF> page_number </REF>: integer "One-based page index to retrieve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: list "A slice of data for the requested page, or an empty list if the page number is out of range."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether page_number is less than 1 or greater than self.total_pages. RESULT page_number_valid]
+            [COMMAND If page_number is out of range, return an empty list immediately. RESULT []]
+            [COMMAND Compute start_index as (page_number - 1) * self.page_size to get the zero-based offset for the requested page. RESULT start_index]
+            [COMMAND Compute end_index as start_index + self.page_size to form the exclusive upper bound of the page slice. RESULT end_index]
+            [COMMAND Return the slice self.data[start_index:end_index]. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Return pagination metadata and the sliced data for a valid page number, or return an empty dictionary when the page number is outside the inclusive range from 1 to total_pages." get_page_info]
+    [INPUTS]
+        <REF> page_number </REF>: integer "The requested page number to retrieve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> page_info </REF>: dictionary "A dictionary containing pagination metadata and page data for a valid page, or an empty dictionary for an invalid page number."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether page_number is within the inclusive valid range from 1 to self.total_pages. RESULT page_number_valid]
+            [COMMAND If page_number is valid, compute start_index as (page_number - 1) * self.page_size. RESULT start_index]
+            [COMMAND If page_number is valid, compute end_index as the smaller of start_index + self.page_size and self.total_items. RESULT end_index]
+            [COMMAND If page_number is valid, slice self.data from start_index inclusive to end_index exclusive to obtain the page data. RESULT page_data]
+            [COMMAND If page_number is valid, construct a dictionary with current_page set to page_number, per_page set to self.page_size, total_pages set to self.total_pages, total_items set to self.total_items, has_previous set to whether page_number > 1, has_next set to whether page_number < self.total_pages, and data set to page_data. RESULT page_info]
+            [COMMAND Return the constructed page_info dictionary. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: page_number is less than 1 or page_number is greater than self.total_pages]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty dictionary immediately without computing indices or slicing data. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Filter self.data to items whose string form contains the keyword, compute result count and page count, and return these values in a summary dictionary." search]
+    [INPUTS]
+        <REF> keyword </REF>: any "Search term used as a substring against the string form of each item in self.data."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> search_info </REF>: dictionary "Dictionary containing the original keyword, total matching results, total page count, and the matching results list."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Filter self.data into a new list named results by iterating each item and including it only when keyword is a substring of str(item). RESULT results]
+            [COMMAND Compute num_results as len(results). RESULT num_results]
+            [COMMAND Compute num_pages as ceiling division of num_results by self.page_size using the exact formula (num_results + self.page_size - 1) // self.page_size. RESULT num_pages]
+            [COMMAND Construct a dictionary named search_info with keys 'keyword', 'total_results', 'total_pages', and 'results' mapped respectively to keyword, num_results, num_pages, and results. RESULT search_info]
+            [COMMAND Return search_info. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: self.data is empty, or no item in self.data satisfies keyword in str(item).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Produce an empty results list from the filtering step. RESULT results]
+            [COMMAND Compute num_results as 0. RESULT num_results]
+            [COMMAND Assuming self.page_size is positive, compute num_pages as 0 from the same ceiling-division formula. RESULT num_pages]
+            [COMMAND Return search_info with the original keyword, total_results 0, total_pages 0, and results as an empty list. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: keyword is an empty string.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Because an empty string is typically a substring of every str(item), include every item from self.data in results in original iteration order. RESULT results]
+            [COMMAND Continue with count, page calculation, dictionary construction, and return using the standard flow. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]

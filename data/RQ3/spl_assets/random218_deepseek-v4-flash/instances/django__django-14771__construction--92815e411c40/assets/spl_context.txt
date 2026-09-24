@@ -1,0 +1,1162 @@
+# FILE: django/utils/autoreload.py
+# CLASS BaseReloader
+
+[DEFINE_WORKER: "Initializes the instance by creating an empty set for extra_files, a defaultdict of sets for directory_globs, and a cleared threading.Event for stop-condition signaling." __init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new empty set and assign it to self.extra_files. RESULT self.extra_files]
+            [COMMAND Create a new defaultdict whose default factory is set and assign it to self.directory_globs. RESULT self.directory_globs]
+            [COMMAND Create a new threading.Event in its cleared state and assign it to self._stop_condition. RESULT self._stop_condition]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves a target path to an absolute Path and registers a glob pattern for it, returning early if the path cannot be resolved." watch_dir]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance exposing directory_globs and using logger."
+        <REF> path </REF>: str or Path-like "File system path to watch, resolved to an absolute Path."
+        <REF> glob </REF>: str "Glob pattern to add to the directory's watch set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: None "The method always returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the input path to a Path object. RESULT path]
+            [COMMAND In the try block that catches FileNotFoundError, resolve path to its absolute form. RESULT path]
+            [COMMAND Log a debug message 'Watching dir %s with glob %s.' using the resolved path and glob. RESULT None]
+            [COMMAND Add glob to self.directory_globs[path]. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When path.absolute() raises FileNotFoundError]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log a debug message 'Unable to watch directory %s as it cannot be resolved.' with the path and exc_info=True. RESULT None]
+            [COMMAND Return from watch_dir without registering the glob. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Yields all file paths that need to be watched by delegating to Python module file iteration and extra files, then optionally expanding directory glob patterns." watched_files]
+    [INPUTS]
+        <REF> self </REF>: object "The object providing extra_files and directory_globs attributes."
+        <REF> include_globs </REF>: bool "Defaults to True; if truthy, yields files matched by all configured directory glob patterns."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> watched_file </REF>: generator of file paths "Yields file paths from all Python module files, extra files, and optionally glob-matched files."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Yield from iter_all_python_module_files() to produce all Python module file paths that need to be watched. RESULT module_file_path]
+            [COMMAND Yield each file path contained in self.extra_files. RESULT extra_file_path]
+            [COMMAND If include_globs is truthy, iterate over each directory and patterns pair from self.directory_globs.items(), and for each pattern in those patterns, yield from directory.glob(pattern). RESULT glob_matched_file_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: include_globs is false or otherwise falsey]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip directory glob expansion and produce no glob-matched file paths. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Waits until Django reports that apps are loaded or the main Django thread has terminated, returning True if readiness is signaled and False if the thread dies first." wait_for_apps_ready]
+    [INPUTS]
+        <REF> self </REF>: object "The current method instance."
+        <REF> app_reg </REF>: object "Application registry object exposing ready_event, an event that is set when Django apps are loaded."
+        <REF> django_main_thread </REF>: threading.Thread "The main Django thread whose liveness is used as the while-loop condition."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if app_reg.ready_event is set while django_main_thread is alive; False if django_main_thread terminates before the event is set."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the while condition django_main_thread.is_alive(). If it is False initially, skip the loop body and execute the while-else block. RESULT while_condition_evaluated]
+            [COMMAND While django_main_thread.is_alive() is True, call app_reg.ready_event.wait(timeout=0.1) and store whether the ready event was set. RESULT ready_flag]
+            [COMMAND If ready_flag is True, return True immediately; the while-else block is not executed because the loop is exited by return. RESULT return_true]
+            [COMMAND If ready_flag is False, do not return; continue the while loop, re-checking django_main_thread.is_alive() and polling every 0.1 seconds. RESULT poll_again]
+            [COMMAND When the while condition django_main_thread.is_alive() is False, either initially or after a later iteration, execute the while-else block. RESULT thread_terminated]
+            [COMMAND In the while-else block, log the debug message 'Main Django thread has terminated before apps are ready.' RESULT debug_logged]
+            [COMMAND In the while-else block, return False. RESULT return_false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Waits for Django apps to become ready, forces URLconf loading to avoid a reloader race condition, sends the autoreload_started signal, and starts the autoreload run loop." run]
+    [INPUTS]
+        <REF> django_main_thread </REF>: Thread "The thread object representing the main Django thread that is waited on until apps are ready."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log debug message 'Waiting for apps ready_event.' RESULT result]
+            [COMMAND Call self.wait_for_apps_ready(apps, django_main_thread) to wait until Django apps are ready for the main thread. RESULT result]
+            [COMMAND Import get_resolver from django.urls. RESULT result]
+            [COMMAND In the try block, access get_resolver().urlconf_module to force URL module loading and prevent a race condition when the reloader starts. RESULT result]
+            [COMMAND After the try/except block, log debug message 'Apps ready_event triggered. Sending autoreload_started signal.' RESULT result]
+            [COMMAND Send the autoreload_started signal with sender=self. RESULT result]
+            [COMMAND Call self.run_loop() to start the autoreload loop. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Accessing get_resolver().urlconf_module raises an exception while the reloader is starting.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the exception, ignore it, and continue execution after the try block. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates through the ticker source, discarding each value until should_stop becomes true or the ticker is exhausted, then calls stop." run_loop]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a ticker by calling self.tick() and assign the iterator to ticker. RESULT ticker]
+            [COMMAND Enter a while loop that continues as long as self.should_stop is false. RESULT loop_condition]
+            [COMMAND Within the while loop, inside the try block, advance the ticker by calling next(ticker) and discard the returned value. RESULT discarded_item]
+            [COMMAND Within the while loop, if next(ticker) raises StopIteration, catch it and break out of the while loop; any other exception is not caught and propagates. RESULT loop_break]
+            [COMMAND After the while loop exits, either because self.should_stop became true or because StopIteration triggered the break, call self.stop(). RESULT stop_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Defines the abstract tick generator contract, raising NotImplementedError to require subclasses to implement the periodic work that run_loop can call." tick]
+    [INPUTS]
+        <REF> self </REF>: object "The reloader instance on which the tick method is invoked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'subclasses must implement tick().' RESULT not_implemented_error]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The tick method is called without an overriding implementation in a subclass.]
+        [LOG "NotImplementedError: subclasses must implement tick()."]
+        [THROW NotImplementedError "Indicates that subclasses must implement the tick generator method."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises NotImplementedError to require subclasses to implement the availability check method." check_availability]
+    [INPUTS]
+        <REF> cls </REF>: type "The class on which the availability check is invoked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Raise NotImplementedError with the message 'subclasses must implement check_availability().' RESULT exception]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: check_availability is invoked without a subclass override]
+        [LOG "subclasses must implement check_availability()."]
+        [THROW NotImplementedError "Indicates that the method must be implemented by a subclass."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sends a file_changed signal for the given path, logs the dispatch results, and triggers a reload when no receiver confirms the change." notify_file_changed]
+    [INPUTS]
+        <REF> self </REF>: object "The sender object passed to the file_changed signal."
+        <REF> path </REF>: str "Filesystem path of the changed file; passed as file_path to the signal."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Send the file_changed signal with sender=self and file_path=path, and store the returned list of (receiver, response) tuples in results. RESULT results]
+            [COMMAND Log a debug message containing path and results using logger.debug. RESULT logger.debug]
+            [COMMAND Evaluate any(res[1] for res in results) with short-circuit semantics to determine whether any receiver response is truthy, and store the boolean outcome in any_response_truthy. RESULT any_response_truthy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: any_response_truthy is false, meaning no receiver returned a truthy response for the file_changed signal.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call trigger_reload(path) to reload the changed file. RESULT trigger_reload]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: A receiver connected to file_changed raises an exception while file_changed.send(sender=self, file_path=path) is executing, so results is never assigned and the exception propagates.]
+        [LOG "File change notification failed because a receiver raised an exception during signal dispatch for path."]
+        [THROW Exception "The exception raised by the connected receiver, propagated by file_changed.send."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the current boolean state of the stop condition by delegating to self._stop_condition.is_set()." should_stop]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if the stop condition is set, otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the internal flag of self._stop_condition by calling is_set() and immediately return the boolean result to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Stops the object by signaling its stop condition." stop]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set the stop condition to signaled by calling set() on self._stop_condition. RESULT self._stop_condition]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS StatReloader
+
+[DEFINE_WORKER: "Continuously polls file snapshot mtimes, logs first-seen and changed files, calls notify_file_changed for mtime increases, sleeps between cycles, and yields control after each full poll cycle as a generator." tick]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize `mtimes` to an empty dictionary to track the latest mtime for each file. RESULT mtimes]
+            [COMMAND Within the outer `while True` loop, iterate over each `(filepath, mtime)` pair returned by `self.snapshot_files()`. RESULT filepath, mtime]
+            [COMMAND For each `(filepath, mtime)` pair, look up the previous mtime using `mtimes.get(filepath)` and store it in `old_time`. RESULT old_time]
+            [COMMAND For each `(filepath, mtime)` pair, update `mtimes[filepath]` to the current `mtime` immediately. RESULT mtimes]
+            [COMMAND For each `(filepath, mtime)` pair, if `old_time is None`, log a debug message saying the file was first seen and continue to the next file. RESULT debug_first_seen]
+            [COMMAND For each `(filepath, mtime)` pair, elif `mtime > old_time`, log a debug message with the previous and current mtimes and call `self.notify_file_changed(filepath)`. RESULT notify_file_changed]
+            [COMMAND After the `for` loop over all files completes, sleep for `self.SLEEP_TIME` seconds. RESULT sleep_done]
+            [COMMAND After sleeping, yield control back to the caller, producing `None` and suspending the generator until resumed. RESULT yield_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When a filepath is first seen, `old_time is None`]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log debug message indicating the file is first seen with its current mtime. RESULT debug_first_seen]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When a filepath's current mtime is greater than the previous mtime]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log debug message with the previous and current mtimes and call `self.notify_file_changed(filepath)`. RESULT notify_file_changed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Filters duplicate and missing files from watched_files() and yields each unique existing file together with its modification time." snapshot_files]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> generator </REF>: generator of (file, mtime) tuples "Yields each unique file path from watched_files() that can be statted successfully, paired with its modification time. Duplicate paths and paths that raise OSError are silently skipped."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize seen_files as an empty set to track file paths already processed. RESULT seen_files]
+            [COMMAND Iterate over each file returned by self.watched_files(). RESULT file]
+            [COMMAND Within the for loop over watched_files(), if file is in seen_files, skip the rest of this iteration and continue to the next file. RESULT continue_duplicate]
+            [COMMAND Within the for loop over watched_files(), for a file not in seen_files, attempt to read file.stat().st_mtime and assign it to mtime. RESULT mtime]
+            [COMMAND Within the for loop over watched_files(), after mtime is obtained successfully, add file to seen_files. RESULT seen_files]
+            [COMMAND Within the for loop over watched_files(), yield the tuple (file, mtime) as the next generator output. RESULT file_mtime_pair]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over watched_files(), file is already contained in seen_files.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Continue to the next iteration of the for loop, skipping file.stat(), seen_files.add(file), and yield. RESULT next_iteration]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the for loop over watched_files(), file.stat().st_mtime raises OSError (for example, the file does not exist or is inaccessible).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the OSError, do not add file to seen_files, do not yield, and continue to the next file. RESULT next_iteration]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True to indicate that the class or instance is always available." check_availability]
+    [INPUTS]
+        <REF> cls </REF>: type "The class on which the classmethod is invoked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: boolean "Always True, indicating that availability is confirmed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the boolean value True as the availability result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS WatchmanUnavailable
+
+# CLASS WatchmanReloader
+
+[DEFINE_WORKER: "Initializes the instance by setting up a roots defaultdict, a threading.Event for request synchronization, a client timeout from the DJANGO_WATCHMAN_TIMEOUT environment variable, and then invoking the parent class initializer." __init__]
+    [INPUTS]
+        <REF> self </REF>: object "The instance being initialized; assigned attributes persist on this object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize self.roots as a defaultdict whose factory is set, so accessing a missing key automatically creates and stores a new set. RESULT self.roots]
+            [COMMAND Initialize self.processed_request as a threading.Event instance in the unset state to serve as a thread synchronization flag for request completion. RESULT self.processed_request]
+            [COMMAND Read the environment variable DJANGO_WATCHMAN_TIMEOUT; if unset, use the default integer 5; convert the value to int and assign it to self.client_timeout. RESULT self.client_timeout]
+            [COMMAND Call super().__init__() to finish parent-class initialization. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: DJANGO_WATCHMAN_TIMEOUT is set to a non-numeric string or an empty string, causing int() conversion to fail.]
+        [LOG "Invalid DJANGO_WATCHMAN_TIMEOUT value; unable to convert it to an integer."]
+        [THROW ValueError "int() cannot parse the supplied environment variable value as an integer."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns a new pywatchman client configured with self.client_timeout as the timeout value." client]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> client </REF>: pywatchman.client "A new Watchman client initialized with the timeout from self.client_timeout."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the attribute self.client_timeout to obtain the configured timeout value. RESULT timeout_value]
+            [COMMAND Call the pywatchman.client constructor with the timeout keyword argument set to timeout_value. RESULT client_object]
+            [COMMAND Return client_object to the caller. RESULT returned_client]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a possibly missing root directory to an existing parent if possible, queries Watchman for the watch project, logs warnings and debug results, and returns the watch name and optional relative path." _watch_root]
+    [INPUTS]
+        <REF> self </REF>: object "Bound method instance that provides access to the Watchman client."
+        <REF> root </REF>: path-like object "Directory path to watch; if it does not exist and its parent exists, the parent is watched instead."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: tuple "A tuple (watch, relative_path) where watch is the Watchman watch name and relative_path is the optional relative path, which may be None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If root does not exist: if root.parent does not exist, log the warning 'Unable to watch root dir %s as neither it or its parent exist.' with root and return None; otherwise, set root to root.parent. RESULT root]
+            [COMMAND Execute the Watchman query 'watch-project' with str(root.absolute()) by calling self.client.query and assign the returned value to result. RESULT result]
+            [COMMAND If 'warning' is a key in result, log the warning message 'Watchman warning: %s' with result['warning']. RESULT None]
+            [COMMAND Log the debug message 'Watchman watch-project result: %s' with result at debug level. RESULT None]
+            [COMMAND Return a tuple consisting of result['watch'] and result.get('relative_path'). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the clock value produced by querying the client with the provided root context." _get_clock]
+    [INPUTS]
+        <REF> root </REF>: object "Root context passed to the client's query operation."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> clock_value </REF>: object "Value retrieved from the client query result under the key 'clock'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.client.query('clock', root) and store the returned object as query_result. RESULT query_result]
+            [COMMAND Extract the value associated with the key 'clock' from query_result and return it as clock_value. RESULT clock_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a Watchman subscription for the resolved watch root that reports file and symlink changes matching the given expression, includes relative_root when applicable, and sends the 'subscribe' query through the client." _subscribe]
+    [INPUTS]
+        <REF> directory </REF>: str "Watchman directory path used to resolve the watch root and relative path."
+        <REF> name </REF>: str "Name of the Watchman subscription."
+        <REF> expression </REF>: object "Watchman expression appended to the file-type filter to further restrict matched files."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the watch root and relative path by calling self._watch_root(directory) and unpacking the returned tuple into root and rel_path. RESULT root, rel_path]
+            [COMMAND Build only_files_expression as a Watchman expression list: ['allof', ['anyof', ['type', 'f'], ['type', 'l']], expression]. RESULT only_files_expression]
+            [COMMAND Build query as a dictionary with 'expression' set to only_files_expression, 'fields' set to ['name'], 'since' set to the result of self._get_clock(root), and 'dedup_results' set to True. RESULT query]
+            [COMMAND Log the debug message 'Issuing watchman subscription %s, for root %s. Query: %s' with name, root, and query. RESULT None]
+            [COMMAND Send the Watchman subscription by calling self.client.query('subscribe', root, name, query). RESULT subscription_response]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: After building query and before logging, if rel_path is truthy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set query['relative_root'] to rel_path. RESULT query]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Subscribes to the given directory, or watches the parent directory with prefixed filenames when the requested directory is missing but its parent exists, and warns and returns when neither exists." _subscribe_dir]
+    [INPUTS]
+        <REF> directory </REF>: pathlib.Path "Directory path to watch; may not exist, in which case its parent will be watched if available."
+        <REF> filenames </REF>: list[str] "List of filenames to watch under the directory."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set prefix to 'files'. RESULT prefix]
+            [COMMAND Set expression to ['name', filenames]. RESULT expression]
+            [COMMAND Invoke self._subscribe(directory, prefix + ':' + directory, expression). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: directory does not exist and directory.parent does not exist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the warning 'Unable to watch directory %s as neither it or its parent exist.' using directory as the format argument. RESULT None]
+            [COMMAND Return immediately from _subscribe_dir. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: directory does not exist and directory.parent exists]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set prefix to 'files-parent-' + directory.name. RESULT prefix]
+            [COMMAND Transform filenames by replacing each original filename with directory.name + '/' + filename. RESULT filenames]
+            [COMMAND Set directory to directory.parent. RESULT directory]
+            [COMMAND Set expression to ['name', filenames, 'wholename']. RESULT expression]
+            [COMMAND Invoke self._subscribe(directory, prefix + ':' + directory, expression). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Watches a directory for glob pattern matches, falling back to watching the parent directory with adjusted patterns if the requested directory does not exist, and returning without a value after logging a warning when neither the directory nor its parent exists." _watch_glob]
+    [INPUTS]
+        <REF> directory </REF>: Path "Directory to watch; may not exist yet, in which case the nearest existing parent directory is watched instead."
+        <REF> patterns </REF>: List[str] "Glob patterns to match against watched file names; should include all possible expressions because the named subscription is overwritten on later calls."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize prefix to the string 'glob'. RESULT prefix]
+            [COMMAND Check whether directory exists. If it does not exist, apply the matching alternative_flow; if that alternative flow returns from the method, stop. Otherwise continue with the updated directory and patterns. RESULT directory_exists]
+            [COMMAND Initialize expression as a list containing only the string 'anyof'. RESULT expression]
+            [COMMAND For each pattern in patterns, append the list ['match', pattern, 'wholename'] to expression. RESULT expression]
+            [COMMAND Subscribe to the resolved directory using self._subscribe(directory, '%s:%s' % (prefix, directory), expression); this named subscription overwrites any existing subscription with the same key. RESULT subscription]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: directory does not exist and directory.parent does not exist]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the warning 'Unable to watch directory %s as neither it or its parent exist.' with directory. RESULT warning_logged]
+            [COMMAND Return from the method immediately. RESULT return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: directory does not exist and directory.parent exists]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set prefix to 'glob-parent-%s' % directory.name. RESULT prefix]
+            [COMMAND Transform patterns by prepending directory.name to each pattern using '%s/%s' % (directory.name, pattern). RESULT patterns]
+            [COMMAND Reassign directory to directory.parent. RESULT directory]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a frozenset of root directories by combining keys from directory_globs, parent directories of watched files, and system path directories." watched_roots]
+    [INPUTS]
+        <REF> self </REF>: object "Instance providing directory_globs and the method context."
+        <REF> watched_files </REF>: Iterable[Path] "Iterable of path-like objects whose parent directories are included in the result."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> watched_roots_result </REF>: frozenset "Frozenset containing directory glob keys, watched file parent directories, and system path directories."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.directory_globs.keys() into extra_directories, preserving it as a dynamic dict_keys view. RESULT extra_directories]
+            [COMMAND For each f in watched_files, get f.parent and collect the results into watched_file_dirs as a list. RESULT watched_file_dirs]
+            [COMMAND Call sys_path_directories() and materialize its iterable into sys_paths as a list. RESULT sys_paths]
+            [COMMAND Return a new frozenset created by starred unpacking of extra_directories, watched_file_dirs, and sys_paths. RESULT watched_roots_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "This method updates the file watcher set by recomputing watched files and their common roots, logging the results, registering root and directory-glob watchers, and subscribing to each parent directory with the relative paths of its watched files." _update_watches]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the watched files as a list by calling self.watched_files(include_globs=False) and converting the iterable to a list. RESULT watched_files]
+            [COMMAND Compute found_roots by passing watched_files to self.watched_roots and applying common_roots to the result. RESULT found_roots]
+            [COMMAND Log a debug message 'Watching %s files' with the value len(watched_files). RESULT None]
+            [COMMAND Log a debug message 'Found common roots: %s' with the value found_roots. RESULT None]
+            [COMMAND For each root in sorted(found_roots), call self._watch_root(root). RESULT None]
+            [COMMAND For each directory, patterns in self.directory_globs.items(), call self._watch_glob(directory, patterns). RESULT None]
+            [COMMAND Sort watched_files by the parent directory of each file using sorted(watched_files, key=lambda p: p.parent) and assign the resulting new list to sorted_files. RESULT sorted_files]
+            [COMMAND Within the for loop over directory, group produced by itertools.groupby(sorted_files, key=lambda p: p.parent), where sorted_files is already sorted by the same parent key, for each p in group compute str(p.relative_to(directory)) and collect the strings into relative_paths. RESULT relative_paths]
+            [COMMAND Within the same for loop after relative_paths is built, call self._subscribe_dir(directory, relative_paths). RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Attempts to update watches by invoking the internal update method and re-raises the original exception when the server is still available, while suppressing the exception when the server is unavailable." update_watches]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call the internal update watches method self._update_watches() within a try block. RESULT update_watches_call]
+            [COMMAND If the call succeeds, complete update_watches without further action. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: An exception ex is caught from self._update_watches() and self.check_server_status(ex) returns False.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Suppress the caught exception and exit update_watches normally, leaving watches unchanged. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: An exception ex is caught from self._update_watches() and self.check_server_status(ex) returns True.]
+        [LOG "Caught exception ex during watch update; server status check indicates the service is still available, so re-raise the original exception."]
+        [THROW Exception "The original exception ex is re-raised when the server is determined to still be available."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Retrieves a Watchman subscription by name and, when it exists, logs its root directories and notifies file-change callbacks for every file in each subscription result." _check_subscription]
+    [INPUTS]
+        <REF> sub </REF>: string "Watchman subscription name used to retrieve the subscription."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.client.getSubscription(sub) and assign the returned subscription object to variable subscription. RESULT subscription]
+            [COMMAND If subscription is falsy (None or empty), return immediately from _check_subscription; otherwise continue. RESULT None]
+            [COMMAND Log debug message 'Watchman subscription %s has results.' with sub. RESULT None]
+            [COMMAND Enter the outer for loop over subscription, assigning each item to variable result. RESULT result]
+            [COMMAND Within the outer for loop over subscription results, compute root_directory by taking the portion after the first ':' in result['subscription'] and converting it with Path. RESULT root_directory]
+            [COMMAND Within the outer for loop over subscription results, log debug message 'Found root directory %s' with root_directory. RESULT None]
+            [COMMAND Within the outer for loop over subscription results, enter the inner for loop over result.get('files', []), assigning each item to variable file. RESULT file]
+            [COMMAND Within the outer for loop over subscription results and the inner for loop over files, call self.notify_file_changed with the path formed by root_directory / file. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Logs a debug message and sets the processed_request event to signal that the request has been processed." request_processed]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is called; provides the processed_request event."
+        <REF> kwargs </REF>: dict "Additional keyword arguments accepted by the method; unused in the method body."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the debug message 'Request processed. Setting update_watches event.' using logger.debug. RESULT _]
+            [COMMAND Set the processed_request event to signal that the request has been processed. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "The tick method connects the request_finished signal, initializes watches, and runs an infinite generator-based Watchman polling loop that processes pending requests, receives messages, checks subscriptions only on successful receives, yields control, and sleeps to avoid busy looping." tick]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Connect the request_finished signal to self.request_processed. RESULT request_finished_connected]
+            [COMMAND Call self.update_watches() to initialize watches before entering the loop. RESULT watches_initialized]
+            [COMMAND Enter an infinite while True loop. RESULT polling_loop_started]
+            [COMMAND Within the infinite loop, check whether self.processed_request.is_set() returns true. RESULT processed_request_flag]
+            [COMMAND Within the infinite loop, call self.client.receive() and record whether it succeeds, raises pywatchman.SocketTimeout, or raises pywatchman.WatchmanError. RESULT receive_outcome]
+            [COMMAND After the receive attempt and any matching alternative handling, yield control back to the caller and suspend the generator. RESULT yield_point]
+            [COMMAND After the generator is resumed, sleep for 0.1 seconds to prevent busy loops, then continue to the next iteration of the infinite loop. RESULT sleep_completed]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the infinite loop, if self.processed_request.is_set() is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.update_watches() to refresh watch state. RESULT watches_refreshed]
+            [COMMAND Call self.processed_request.clear() to clear the processed request flag. RESULT processed_request_cleared]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the infinite loop, if self.client.receive() raises pywatchman.SocketTimeout.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Ignore the timeout and continue to the yield point. RESULT timeout_ignored]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the infinite loop, if self.client.receive() raises pywatchman.WatchmanError as ex.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log a debug message 'Watchman error: %s, checking server status.' with ex. RESULT watchman_error_logged]
+            [COMMAND Call self.check_server_status(ex) to check the Watchman server status. RESULT server_status_checked]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the infinite loop, if self.client.receive() completes without raising an exception (the else clause of the try statement).]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Take a snapshot of the current subscription keys using list(self.client.subs.keys()). RESULT subscription_keys_snapshot]
+            [COMMAND For each sub in the snapshot, call self._check_subscription(sub). RESULT subscriptions_checked]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Closes the underlying client and then delegates shutdown behavior to the parent class stop method." stop]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call close() on self.client; if this raises an exception, propagate it and do not continue to the parent stop call. RESULT none]
+            [COMMAND Call stop() on the parent class through super().stop(), propagating any exception it raises. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks server availability by querying the server version, returning True if the query succeeds and raising WatchmanUnavailable with the provided exception context if it fails." check_server_status]
+    [INPUTS]
+        <REF> inner_ex </REF>: Exception | None "Optional exception context used as the message and chained cause when WatchmanUnavailable is raised."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if the server is available."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.client.query('version') to check whether the server is available. RESULT query_result]
+            [COMMAND If the query succeeds without raising an exception, return True. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: An exception is raised while executing self.client.query('version')]
+        [LOG "Caught Exception from server query; raising WatchmanUnavailable with str(inner_ex) from inner_ex"]
+        [THROW WatchmanUnavailable "Raised to indicate the server is unavailable, using str(inner_ex) as the message and preserving inner_ex as the exception cause."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether Watchman is installed, reachable, and at least version 4.9, raising WatchmanUnavailable if any requirement is not met." check_availability]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether the pywatchman module is present and truthy; if it is not, take the pywatchman missing exception flow. RESULT None]
+            [COMMAND Create a pywatchman client with a timeout of 0.1 seconds. RESULT client]
+            [COMMAND Call capabilityCheck on the client to obtain the capability result; if it raises any exception, take the connection failure exception flow. RESULT result]
+            [COMMAND Extract the 'version' value from the capability result and convert it to a version tuple using get_version_tuple. RESULT version]
+            [COMMAND Log the parsed Watchman version at debug level using logger.debug. RESULT None]
+            [COMMAND Verify that the parsed version tuple is not less than (4, 9); if it is, take the unsupported Watchman version exception flow. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: The pywatchman module is missing or evaluates to false.]
+        [LOG "pywatchman not installed."]
+        [THROW WatchmanUnavailable "Raises WatchmanUnavailable because the pywatchman module is not available."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: client.capabilityCheck() raises any exception.]
+        [LOG "Cannot connect to the watchman service."]
+        [THROW WatchmanUnavailable "Raises WatchmanUnavailable because the Watchman service cannot be reached."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: The parsed Watchman version tuple is less than (4, 9).]
+        [LOG "Watchman 4.9 or later is required."]
+        [THROW WatchmanUnavailable "Raises WatchmanUnavailable because the installed Watchman version is older than 4.9."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether a module is nested under Django by checking if its __name__ starts with the case-sensitive prefix 'django.'." is_django_module]
+    [INPUTS]
+        <REF> module </REF>: module "Python module object whose __name__ attribute is inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if module.__name__ starts with 'django.', False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the module's __name__ attribute. RESULT module_name]
+            [COMMAND Check whether module_name starts with the case-sensitive prefix 'django.' using startswith. RESULT is_django]
+            [COMMAND Return is_django as the boolean result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the given file path is strictly nested inside the Django package directory by checking whether Django's package parent directory appears among the path's parents." is_django_path]
+    [INPUTS]
+        <REF> path </REF>: str or pathlib.Path "File path to test for nesting under the Django package directory."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "True if the path is strictly inside the Django package directory; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Determine the Django package directory by converting django.__file__ to a Path object and taking its parent. RESULT django_package_dir]
+            [COMMAND Construct a Path object from the input path and access its parents sequence, which lists ancestor directories from immediate parent to filesystem root. RESULT path_parents]
+            [COMMAND Return True if django_package_dir is present in path_parents; otherwise return False. This is a strict containment check, so a path exactly equal to the Django package directory produces False. If django.__file__ is None or path cannot be converted to a Path, an implicit TypeError is raised. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a wrapper around a function that records any exception and the originating source filename in module-level state, then re-raises the original exception." check_errors]
+    [INPUTS]
+        <REF> fn </REF>: Callable "The function to be wrapped and called by the returned wrapper."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> wrapper </REF>: Callable "A function accepting *args and **kwargs that calls fn, records exceptions and filenames in global state, re-raises them, and returns None on success."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Accept the function `fn` as the argument to `check_errors`. RESULT fn]
+            [COMMAND Define the nested function `wrapper(*args, **kwargs)` and apply `@functools.wraps(fn)` so `wrapper` copies metadata from `fn`. RESULT wrapper]
+            [COMMAND Return `wrapper` as the result of `check_errors`. RESULT wrapper]
+            [COMMAND When the returned `wrapper` is later called, declare `global _exception` so the assignment in the exception handler writes to the module-level `_exception`. RESULT _exception]
+            [COMMAND Inside `wrapper`, enter a `try` block and call `fn(*args, **kwargs)`, discarding its return value. RESULT fn_result]
+            [COMMAND If the `try` block completes without an exception, finish the `wrapper` function and return `None`. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: In the exception path of `wrapper`, `getattr(ev, 'filename', None)` is None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set `filename` to `traceback.extract_tb(tb)[-1][0]`, where `tb` is the traceback from `sys.exc_info()`. RESULT filename]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: In the exception path of `wrapper`, `getattr(ev, 'filename', None)` is not None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set `filename` to `ev.filename`. RESULT filename]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: In the exception path of `wrapper`, after `filename` is determined, `filename` is not already in the module-level `_error_files` list.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append `filename` to the module-level `_error_files` list. RESULT _error_files]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Calling `fn(*args, **kwargs)` inside `wrapper` raises an `Exception`.]
+        [LOG "Set module-level `_exception` to `sys.exc_info()`, then unpack it into `et`, `ev`, and `tb`. Determine `filename` using the alternative branches: if `getattr(ev, 'filename', None)` is None, use `traceback.extract_tb(tb)[-1][0]`; otherwise use `ev.filename`. If `filename` is not already in module-level `_error_files`, append it. Record the exception details and the resolved filename."]
+        [THROW Exception "Re-raise the original exception with a bare `raise` statement, preserving the original traceback."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Raises the exception value stored in the global _exception variable if it is not None; otherwise, does nothing." raise_last_exception]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the global variable _exception. RESULT _exception]
+            [COMMAND Check whether _exception is not None. RESULT guard_condition]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: If guard_condition is false, meaning _exception is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do nothing and complete the method without raising an exception. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: If guard_condition is true, meaning _exception is not None]
+        [LOG "Raising the exception object stored at index 1 of _exception."]
+        [THROW Exception "The exception value from _exception[1] is raised; the original traceback is not preserved by this raise statement."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Enables terminal echo on standard input by updating the termios local mode flags, temporarily ignoring SIGTTOU during the update and restoring the previous signal handler afterward." ensure_echo_on]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether termios is falsy or sys.stdin is not an interactive TTY; if either condition is true, return immediately from ensure_echo_on without making any terminal changes. RESULT none]
+            [COMMAND Retrieve the current terminal attributes for sys.stdin by calling termios.tcgetattr(sys.stdin) and bind the returned list to attr_list. RESULT attr_list]
+            [COMMAND Inspect attr_list[3] and test whether the ECHO bit is disabled using bitwise AND with termios.ECHO; if the ECHO bit is already set, skip the remaining steps. RESULT echo_enabled_condition]
+            [COMMAND Within the condition that ECHO is disabled, enable the ECHO bit by computing attr_list[3] |= termios.ECHO and storing the updated value back into attr_list[3]. RESULT attr_list]
+            [COMMAND Within the same disabled-ECHO path, check whether signal has the SIGTTOU attribute; if it does, temporarily set the SIGTTOU handler to SIG_IGN and save the previous handler in old_handler; otherwise set old_handler to None. RESULT old_handler]
+            [COMMAND Apply the modified terminal attributes to sys.stdin via termios.tcsetattr(sys.stdin, termios.TCSANOW, attr_list). RESULT none]
+            [COMMAND If old_handler is not None, restore the original SIGTTOU signal handler by calling signal.signal(signal.SIGTTOU, old_handler). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a stable, sorted tuple of loaded non-proxy module objects from sys.modules and returns the result of iterating module files from that tuple combined with the frozen set of error files." iter_all_python_module_files]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: Iterator "The result of iter_modules_and_files(modules, frozenset(_error_files))."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a sorted snapshot of current module names by calling sorted(sys.modules) and assign it to keys. RESULT keys]
+            [COMMAND Build modules as a tuple by mapping sys.modules.__getitem__ over keys in sorted order and filtering out values that are instances of weakref.ProxyTypes. RESULT modules]
+            [COMMAND Return iter_modules_and_files(modules, frozenset(_error_files)) using the filtered module tuple and a frozen set of error files. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Iterates through modules and extra files, filters out missing or invalid paths, resolves them to absolute paths, and returns a frozenset of the unique existing paths." iter_modules_and_files]
+    [INPUTS]
+        <REF> modules </REF>: iterable of ModuleType "Modules to examine for their source file locations."
+        <REF> extra_files </REF>: iterable of str or path-like "Additional file paths to include in the watched-file set."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: frozenset of pathlib.Path "Resolved absolute file paths from existing module sources and extra files, with duplicates removed."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize sys_file_paths to an empty list. RESULT sys_file_paths]
+            [COMMAND For each module in modules, if module is not an instance of ModuleType, skip it and continue to the next module. RESULT module]
+            [COMMAND For the current module in the loop over modules, if module.__name__ equals '__main__', then if module has __file__, append module.__file__ to sys_file_paths, and continue to the next module regardless of whether __file__ exists; otherwise proceed to the spec checks for the current module. RESULT sys_file_paths]
+            [COMMAND For the current module in the loop over modules, if getattr(module, '__spec__', None) is None, skip this module and continue to the next module. RESULT result]
+            [COMMAND For the current module in the loop over modules, assign spec = module.__spec__. RESULT spec]
+            [COMMAND For the current module in the loop over modules, if spec.has_location is true, compute origin as spec.loader.archive if spec.loader is a zipimporter, otherwise as spec.origin, and append origin to sys_file_paths; if spec.has_location is false, do nothing for this module. RESULT sys_file_paths]
+            [COMMAND Initialize results to an empty set. RESULT results]
+            [COMMAND For each filename in itertools.chain(sys_file_paths, extra_files), if filename is empty, None, or otherwise falsey, skip it and continue to the next filename. RESULT filename]
+            [COMMAND For the current filename in the chained iteration, assign path = Path(filename). RESULT path]
+            [COMMAND For the current filename in the chained iteration, inside a try block, evaluate path.exists(); if it returns false, continue to the next filename; if it raises ValueError, log a debug message in the format logger.debug('"%s" raised when resolving path: "%s"', e, path) and continue to the next filename. RESULT result]
+            [COMMAND For the current filename in the chained iteration, after the try block passes, compute resolved_path = path.resolve().absolute() and add resolved_path to results. RESULT results]
+            [COMMAND Return frozenset(results). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Take an iterable of paths and return a tuple of the minimal directory roots that cover all of them, using a trie built from path components sorted longest-first and a recursive walk over its leaf nodes." common_roots]
+    [INPUTS]
+        <REF> paths </REF>: Iterable[PathLike] "Iterable of path-like objects that expose a .parts attribute, typically pathlib.Path instances."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple of pathlib.Path "Tuple of pathlib.Path objects representing the minimum set of directories to watch."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each item x in the input paths iterable, collect x.parts into a list, then sort that list by len(x.parts) in descending order preserving stable order for equal lengths; if paths is empty, path_parts is empty. RESULT path_parts]
+            [COMMAND Initialize tree as an empty dictionary to represent a trie of path components. RESULT tree]
+            [COMMAND For each chunks in path_parts in the sorted order, set node to the tree root, then for each chunk in chunks traverse or create a nested child dictionary by assigning node = node.setdefault(chunk, {}); after all chunks are processed, clear the terminal node with node.clear() so that it becomes a leaf. RESULT tree]
+            [COMMAND Define recursive generator function _walk(node, path) that iterates over each prefix and child in node.items(), recursively yields from _walk(child, path + (prefix,)), and when node is empty yields Path(*path) for the accumulated path. RESULT _walk]
+            [COMMAND Generate the final result by iterating _walk(tree, ()) and collecting the yielded Path instances into a tuple; if tree is empty, the tuple is empty. RESULT common_roots_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Yields absolute directory paths from sys.path, skipping nonexistent entries and replacing file entries with their parent directories." sys_path_directories]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Generator[Path, None, None] "Lazily yields Path objects from sys.path: nonexistent entries are omitted, file entries are replaced by their parent directory, and all other existing entries are yielded as their resolved absolute path."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Begin a lazy generator, then iterate over each path entry in sys.path in order, preserving duplicate entries. RESULT path_entry]
+            [COMMAND Within the outer for loop over sys.path, convert the current path entry to a Path object and assign it to path. RESULT path]
+            [COMMAND Within the outer for loop over sys.path, if path does not exist, continue to the next path entry. RESULT skip_to_next]
+            [COMMAND Within the outer for loop over sys.path, after passing the existence check, resolve path to an absolute path with symlinks resolved and assign it to resolved_path. RESULT resolved_path]
+            [COMMAND Within the outer for loop over sys.path, if resolved_path is a regular file, yield resolved_path.parent; otherwise yield resolved_path. RESULT yielded_path]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds the command-line argument list for relaunching the current Python process, handling module execution and Windows entry-point fallbacks when the original script is missing." get_child_arguments]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> child_arguments </REF>: list[str] "The complete argument list for the child process: interpreter/entry-point path followed by the original script arguments, with optional -m module flags or Windows fallback entry-point."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the __main__ module and bind it to the name __main__. RESULT __main__]
+            [COMMAND Create py_script as Path(sys.argv[0]). RESULT py_script]
+            [COMMAND Initialize args as [sys.executable] plus, for each warning option o in sys.warnoptions, the formatted string '-W' + o. RESULT args]
+            [COMMAND If getattr(__main__, '__spec__', None) is not None, assign __main__.__spec__ to spec. RESULT spec]
+            [COMMAND Within the __spec__-exists branch, if (spec.name == '__main__' or spec.name.endswith('.__main__')) and spec.parent is truthy, set name to spec.parent; otherwise set name to spec.name. The 'and' condition short-circuits: spec.parent is evaluated only when the name condition is true. RESULT name]
+            [COMMAND Within the __spec__-exists branch, append '-m' and name to args. RESULT args]
+            [COMMAND Within the __spec__-exists branch, append sys.argv[1:] (all command-line arguments after the script name at index 0) to args. RESULT args]
+            [COMMAND Return args as child_arguments after completing the top-level conditional block. RESULT child_arguments]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: getattr(__main__, '__spec__', None) is None AND py_script.exists() is True.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append sys.argv (the complete original command-line arguments list) to args. RESULT args]
+            [COMMAND Return args as child_arguments. RESULT child_arguments]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: getattr(__main__, '__spec__', None) is None AND py_script.exists() is False AND exe_entrypoint.exists() is True.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create exe_entrypoint as py_script.with_suffix('.exe'). RESULT exe_entrypoint]
+            [COMMAND Return [exe_entrypoint] plus sys.argv[1:] as child_arguments, ignoring sys.executable and args. RESULT child_arguments]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: getattr(__main__, '__spec__', None) is None AND py_script.exists() is False AND exe_entrypoint.exists() is False AND script_entrypoint.exists() is True.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create script_entrypoint as py_script.with_name('%s-script.py' % py_script.name). RESULT script_entrypoint]
+            [COMMAND Return args followed by script_entrypoint and sys.argv[1:] as child_arguments. RESULT child_arguments]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: getattr(__main__, '__spec__', None) is None AND py_script.exists() is False AND exe_entrypoint.exists() is False AND script_entrypoint.exists() is False.]
+        [LOG "Script {py_script} does not exist."]
+        [THROW RuntimeError "Raised when no original script or Windows fallback entry-point (.exe or -script.py) can be found."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Logs that the given filename changed and terminates the process with exit code 3 to trigger a reload." trigger_reload]
+    [INPUTS]
+        <REF> filename </REF>: str "The name or path of the file whose change triggered the reload."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log an info message with the formatted text 'filename changed, reloading.' using logger.info, interpolating the value of filename into the message. RESULT _]
+            [COMMAND Terminate the process immediately with exit code 3 using sys.exit(3). RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Runs the child process repeatedly with a modified environment until it exits with a return code other than 3, then returns that code." restart_with_reloader]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_code </REF>: int "Return code of the last child process run, returned when it is not equal to 3."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create the child environment dictionary by copying os.environ and setting DJANGO_AUTORELOAD_ENV to the string 'true'. RESULT new_environ]
+            [COMMAND Obtain the child process argument list by calling get_child_arguments(). RESULT args]
+            [COMMAND Start an infinite retry loop. RESULT loop]
+            [COMMAND Within the infinite retry loop, run the subprocess with subprocess.run(args, env=new_environ, close_fds=False). RESULT p]
+            [COMMAND Within the infinite retry loop, after running the subprocess, if p.returncode is not equal to 3, immediately return p.returncode; otherwise continue to the next iteration of the loop. RESULT p.returncode]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Return the most suitable reloader for the environment by selecting WatchmanReloader when Watchman is available and falling back to StatReloader when Watchman is unavailable." get_reloader]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> reloader </REF>: object "A WatchmanReloader instance when Watchman is available, otherwise a StatReloader instance."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inside a try block, call WatchmanReloader.check_availability() to test whether Watchman is available; discard the return value. RESULT _]
+            [COMMAND Return a new WatchmanReloader instance because check_availability completed without raising WatchmanUnavailable. RESULT reloader]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When WatchmanReloader.check_availability() raises WatchmanUnavailable inside the try block]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch WatchmanUnavailable and immediately return a new StatReloader instance as the fallback reloader. RESULT reloader]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Starts the Django main thread after wrapping its target with check_errors, then runs the supplied reloader loop until shutdown is requested, falling back to StatReloader if Watchman becomes unavailable." start_django]
+    [INPUTS]
+        <REF> reloader </REF>: object "Reloader instance used to watch for file changes and control shutdown via should_stop and run."
+        <REF> main_func </REF>: callable "Callable to execute on the Django main thread after being wrapped by check_errors."
+        <REF> args </REF>: tuple "Positional arguments passed to the thread target; corresponds to *args."
+        <REF> kwargs </REF>: dict "Keyword arguments passed to the thread target; corresponds to **kwargs."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enable terminal echo by calling ensure_echo_on(). RESULT none]
+            [COMMAND Redefine main_func as the result of check_errors(main_func). RESULT main_func]
+            [COMMAND Create a threading.Thread named 'django-main-thread' with target=main_func, args=args, and kwargs=kwargs. RESULT django_main_thread]
+            [COMMAND Set django_main_thread.daemon to True before starting the thread. RESULT django_main_thread]
+            [COMMAND Start the Django main thread by calling django_main_thread.start(). RESULT django_main_thread]
+            [COMMAND Evaluate the loop condition while not reloader.should_stop; if reloader.should_stop is falsy, enter the loop, otherwise skip the loop entirely. RESULT none]
+            [COMMAND Within each reloader-loop iteration, try to call reloader.run(django_main_thread); if it returns normally, proceed to the next while-condition check. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: During a reloader-loop iteration, reloader.run(django_main_thread) raises WatchmanUnavailable.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Replace reloader with a new StatReloader() instance. RESULT reloader]
+            [COMMAND Log the error message 'Error connecting to Watchman: %s' with the caught exception ex. RESULT none]
+            [COMMAND Log the info message 'Watching for file changes with %s' with reloader.__class__.__name__. RESULT none]
+            [COMMAND Fall through to the end of the loop body and re-evaluate the while condition using the new reloader. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers a SIGTERM handler and then either starts Django with the file-watch autoreloader or restarts with the reloader and exits with the resulting code, while ignoring KeyboardInterrupt." run_with_reloader]
+    [INPUTS]
+        <REF> main_func </REF>: callable "The primary Django/ASGI callable passed through to start_django and used by the reloader startup path."
+        <REF> args </REF>: tuple "Additional positional arguments passed through to start_django and restart_with_reloader."
+        <REF> kwargs </REF>: dict "Additional keyword arguments passed through to start_django and restart_with_reloader."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Register the SIGTERM signal handler with signal.signal, using signal.SIGTERM and a lambda that ignores its arguments and calls sys.exit(0), so any SIGTERM terminates the process with exit code 0. RESULT None]
+            [COMMAND Enter the try block and check whether the environment variable identified by the module-level constant DJANGO_AUTORELOAD_ENV equals the string 'true'. RESULT django_autoreload_enabled]
+            [COMMAND In the true branch of the condition inside the try block, call get_reloader() and assign its return value to reloader. RESULT reloader]
+            [COMMAND In the same true branch, call logger.info with the format string 'Watching for file changes with %s' and reloader.__class__.__name__ as the argument. RESULT None]
+            [COMMAND In the same true branch, call start_django(reloader, main_func, *args, **kwargs) and do not capture its return value. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The environment variable named by DJANGO_AUTORELOAD_ENV is not equal to the string 'true'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the else branch, call restart_with_reloader() and assign its return value to exit_code. RESULT exit_code]
+            [COMMAND In the else branch, call sys.exit(exit_code) to terminate the process with that exit code. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: A KeyboardInterrupt is raised while executing the try block.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Catch the KeyboardInterrupt in the except block, execute pass (no operation), and let the method end normally. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: A SIGTERM signal is received after the handler has been registered.]
+        [LOG "SIGTERM received; the registered handler calls sys.exit(0)."]
+        [THROW SystemExit "sys.exit(0) raises SystemExit, terminating the process with status code 0."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: The else branch executes sys.exit(exit_code).]
+        [LOG "restart_with_reloader() returned; explicit process termination with exit_code."]
+        [THROW SystemExit "sys.exit(exit_code) raises SystemExit, terminating the process with the exit code returned by restart_with_reloader()."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

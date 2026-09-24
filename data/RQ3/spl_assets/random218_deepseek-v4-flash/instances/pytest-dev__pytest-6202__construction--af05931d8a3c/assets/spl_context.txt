@@ -1,0 +1,2032 @@
+# FILE: src/_pytest/python.py
+# CLASS PyobjContext
+
+# CLASS PyobjMixin
+
+[DEFINE_WORKER: "Lazily returns the underlying Python object, initializing and caching it via _getobj() when the '_obj' attribute is missing or None, and conditionally extending own_markers with get_unpacked_marks when marker collection is allowed." obj]
+    [INPUTS]
+        <REF> self </REF>: object "The instance that holds the cached _obj attribute, the _ALLOW_MARKERS flag, and the own_markers list."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> obj </REF>: object "The underlying Python object, either the cached self._obj or the newly initialized result of self._getobj()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the '_obj' attribute from self using getattr(self, '_obj', None), with None as the default when the attribute is missing, and assign the result to the local variable obj. RESULT obj]
+            [COMMAND If obj is the singleton None, call self._getobj(), then assign the returned object to both self._obj and the local variable obj. RESULT obj]
+            [COMMAND Within the 'if obj is None' branch, if self._ALLOW_MARKERS is truthy, extend self.own_markers with get_unpacked_marks(self.obj) as a marker-duplication workaround. RESULT own_markers]
+            [COMMAND Return the local variable obj as the underlying Python object. RESULT obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Stores the provided value in the instance attribute _obj." obj]
+    [INPUTS]
+        <REF> value </REF>: any "The value to assign to the internal _obj attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the given value to the instance attribute _obj, replacing any previous value. RESULT self._obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the current value of the attribute named by self.name from the object self.parent.obj using dynamic attribute lookup." _getobj]
+    [INPUTS]
+        <REF> self </REF>: object "Object exposing a parent attribute containing an obj attribute, and a name attribute used as the attribute name to retrieve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The value of the attribute named by self.name on self.parent.obj."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the value of the attribute named by self.name from the object self.parent.obj using getattr. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.parent.obj does not have an attribute named by self.name]
+        [LOG "AttributeError raised by getattr because the requested attribute is missing"]
+        [THROW AttributeError "The attribute named by self.name does not exist on self.parent.obj."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Builds a dotted Python path from the object's node chain by skipping instance nodes, stripping module extensions, optionally stopping at the containing module, and replacing '.[' with '['." getmodpath]
+    [INPUTS]
+        <REF> self </REF>: object "The current object whose node chain is used."
+        <REF> stopatmodule </REF>: bool "If true, stop processing at the first Module node. Default is true."
+        <REF> includemodule </REF>: bool "If true and stopatmodule is true, include the stopping Module's stripped name in the result. Default is false."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Dot-separated module path relative to the containing module, with '.[' replaced by '['."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the node chain by calling self.listchain() and assign it to chain. RESULT chain]
+            [COMMAND Reverse chain in place. RESULT chain]
+            [COMMAND Initialize parts as an empty list. RESULT parts]
+            [COMMAND For each node in chain, if node is an Instance, continue to the next iteration; otherwise assign node.name to name. RESULT name]
+            [COMMAND In the for loop over chain, if node is a Module, assign name = os.path.splitext(name)[0] to strip the file extension. RESULT name]
+            [COMMAND In the for loop over chain, if node is a Module and stopatmodule is true, append name to parts when includemodule is true, then break out of the loop. RESULT parts]
+            [COMMAND In the for loop over chain, for every node that reaches the end of the loop body without breaking (non-Module nodes, or Module nodes when stopatmodule is false), append name to parts. RESULT parts]
+            [COMMAND After the for loop, reverse parts in place. RESULT parts]
+            [COMMAND Join the components in parts with '.' as the separator and assign the string to s. RESULT s]
+            [COMMAND Return s.replace('.[', '['). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the source file path and line number for self.obj, preferring compat_co_firstlineno when it is an int, and returns them along with the module path from self.getmodpath()." reportinfo]
+    [INPUTS]
+        <REF> self </REF>: object "Instance that must have an obj attribute and a getmodpath() method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple "Tuple (fspath, lineno, modpath), where fspath is the object's source file path, lineno is the resolved integer line number, and modpath is the module path returned by self.getmodpath()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve obj from self.obj. RESULT obj]
+            [COMMAND Retrieve compat_co_firstlineno from obj using getattr with default None. RESULT compat_co_firstlineno]
+            [COMMAND Resolve fspath and lineno by selecting the branch based on whether compat_co_firstlineno is an int. RESULT fspath, lineno]
+            [COMMAND Retrieve modpath by calling self.getmodpath(). RESULT modpath]
+            [COMMAND Assert that lineno is an int and continue; if not, raise AssertionError. RESULT lineno]
+            [COMMAND Return the tuple (fspath, lineno, modpath). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: compat_co_firstlineno is an instance of int.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set fspath to sys.modules[obj.__module__].__file__. RESULT fspath]
+            [COMMAND If fspath ends with '.pyc', set fspath to fspath[:-1] to convert the bytecode path to the source path. RESULT fspath]
+            [COMMAND Set lineno to compat_co_firstlineno. RESULT lineno]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: compat_co_firstlineno is not an instance of int.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call getfslineno(obj) and unpack the returned pair into fspath and lineno. RESULT fspath, lineno]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: lineno is not an int after fspath and lineno are resolved.]
+        [LOG "Assertion failed: isinstance(lineno, int)"]
+        [THROW AssertionError "Raised when the assertion that lineno is an int fails."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS PyCollector
+
+[DEFINE_WORKER: "Checks whether a given function name matches the configured prefix or glob patterns for Python functions by delegating to the helper method." funcnamefilter]
+    [INPUTS]
+        <REF> name </REF>: string "Candidate function name to test against the configured Python function name patterns."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> match_result </REF>: boolean "True if the name matches the configured prefix or glob patterns for Python functions, otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _matches_prefix_or_glob_option with the constant option key "python_functions" and the provided name, then return the resulting boolean immediately. RESULT match_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether an object has a __test__ attribute whose value is exactly the boolean True, while ignoring truthy values from custom __getattr__ behavior." isnosetest]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is called; unused in the method body."
+        <REF> obj </REF>: object "The object to inspect for the __test__ attribute."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> is_nose_test </REF>: boolean "True only if obj.__test__ is exactly the boolean True; False otherwise."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the value of the __test__ attribute from obj using safe_getattr, with False as the default value if the attribute does not exist. RESULT test_attr]
+            [COMMAND Return True if test_attr is exactly the boolean singleton True; otherwise return False. RESULT is_nose_test]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether the given class name matches the configured python_classes prefix or glob pattern by delegating to _matches_prefix_or_glob_option." classnamefilter]
+    [INPUTS]
+        <REF> name </REF>: string "The class name to test against the configured python_classes matching rules."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if name matches the configured python_classes prefix or glob pattern; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self._matches_prefix_or_glob_option("python_classes", name) and store the boolean result. RESULT match_result]
+            [COMMAND Return match_result immediately as the result of classnamefilter. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines whether an object should be treated as a test callable by applying the name/nose-test filter, unwrapping static methods, and returning True only when the object is callable and is not marked as a pytest fixture." istestfunction]
+    [INPUTS]
+        <REF> self </REF>: object "The instance providing funcnamefilter and isnosetest."
+        <REF> obj </REF>: object "The object to inspect for test-callable status."
+        <REF> name </REF>: string "The name used by the name filter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if obj passes the name/nose-test filter, is callable, and has no pytest fixture marker; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the outer condition `self.funcnamefilter(name) or self.isnosetest(obj)` with short-circuit semantics, so `isnosetest` is only called when the name filter returns false. RESULT outer_condition]
+            [COMMAND If outer_condition is True, proceed with the true-branch validation; if outer_condition is False, follow the alternative flow and return False. RESULT branch_selected]
+            [COMMAND Within the true branch of the outer condition, when isinstance(obj, staticmethod) is True, unwrap the static method by reassigning obj to safe_getattr(obj, '__func__', False). RESULT obj]
+            [COMMAND Within the true branch, return the short-circuit boolean expression `safe_getattr(obj, '__call__', False) and fixtures.getfixturemarker(obj) is None`; if obj has no __call__ attribute, return False without checking the fixture marker. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: outer_condition is False]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether a test class is selected by first testing the class name filter and, when that yields a falsy value, falling back to testing whether the object is a nose test, using short-circuit evaluation." istestclass]
+    [INPUTS]
+        <REF> self </REF>: object "Bound instance providing the classnamefilter and isnosetest methods."
+        <REF> obj </REF>: object "Test object checked by isnosetest when the class name filter returns a falsy value."
+        <REF> name </REF>: str "Class name passed to classnamefilter."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The value returned by the boolean OR expression: the first truthy value from self.classnamefilter(name), otherwise the value returned by self.isnosetest(obj)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.classnamefilter(name) and store the returned value as result_A. RESULT result_A]
+            [COMMAND If result_A is falsy, call self.isnosetest(obj) and store the returned value as result_B. RESULT result_B]
+            [COMMAND Return result_B as the final result when the class name filter was falsy. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When result_A is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return result_A immediately without evaluating self.isnosetest(obj). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether a given name matches any configured prefix or glob-pattern option, returning True on the first successful match and False otherwise." _matches_prefix_or_glob_option]
+    [INPUTS]
+        <REF> option_name </REF>: string "Name of the ini configuration option that supplies the list of prefix or glob patterns to check against."
+        <REF> name </REF>: string "Target string to test against the configured prefix and glob options."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if any configured option is a prefix of name or matches name as a glob pattern; False if no option matches."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the configured option list by calling self.config.getini(option_name). RESULT options]
+            [COMMAND For each option in the configured options list, check whether name starts with option using an inclusive prefix match; if it does, return True immediately. RESULT early_true]
+            [COMMAND Within the same loop iteration, if the prefix match failed, check whether option contains any glob wildcard character among '*', '?', or '['; if it does not, skip the fnmatch call and continue to the next option. RESULT has_wildcard]
+            [COMMAND Within the same loop iteration, if the option does contain a glob wildcard, evaluate whether name fully matches option using fnmatch.fnmatch(name, option); if it matches, return True immediately. RESULT glob_match]
+            [COMMAND After all configured options have been checked without a successful match, return False. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Deduplicates names across the object's __dict__ and its class MRO, converts each unique entry with _makeitem, and returns a list of all non-None results sorted by item.reportinfo()[:2]." collect]
+    [INPUTS]
+        <REF> self </REF>: object "The collector instance whose obj attribute is inspected and whose _makeitem method is used to create collected items."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> values </REF>: list "A sorted list of item objects returned by _makeitem; an empty list is returned if the __test__ attribute on self.obj is falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Build dicts by evaluating getattr(self.obj, "__dict__", {}) as the first element, then appending basecls.__dict__ for each basecls in inspect.getmro(self.obj.__class__). RESULT dicts]
+            [COMMAND Initialize seen to an empty dictionary and values to an empty list. RESULT seen, values]
+            [COMMAND For each dic in dicts, iterate over a snapshot of dic.items(); for each (name, obj) in that snapshot, if name is already in seen then continue; otherwise set seen[name] = True before calling self._makeitem(name, obj) to obtain res; if res is None then continue; if res is not a list then replace res with [res]; finally extend values with the elements of res. RESULT values]
+            [COMMAND Sort values in place using key lambda item: item.reportinfo()[:2]. RESULT values]
+            [COMMAND Return values. RESULT values]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: getattr(self.obj, "__test__", True) is falsy.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty list immediately. RESULT []]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Delegates collection of a single item to the pytest hook system by invoking pytest_pycollect_makeitem with the collector, name, and object, then returns the hook result." _makeitem]
+    [INPUTS]
+        <REF> self </REF>: collector "The collector instance used to access the pytest hook caller."
+        <REF> name </REF>: str "The name of the item to collect."
+        <REF> obj </REF>: object "The object to be collected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The collection item or items returned by the pytest_pycollect_makeitem hook."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call self.ihook.pytest_pycollect_makeitem with collector=self, name=name, and obj=obj. RESULT hook_result]
+            [COMMAND Return hook_result to the caller. RESULT method_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the unchanged result of invoking the private method _importtestmodule on the current instance." _getobj]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance whose _importtestmodule method will be invoked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: any "The value returned by self._importtestmodule(), propagated unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke self._importtestmodule() with no arguments and return the resulting value unchanged to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Injects module-level and function-level setup fixtures, parses fixture factories through the session fixture manager, then delegates to the parent class's collect() method." collect]
+    [INPUTS]
+        <REF> self </REF>: Collector "Collector instance on which setup fixtures are injected and whose session fixture manager is used to parse fixture factories."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: collect_result "Result returned by the parent class's collect() method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Inject the module-level setup fixture by calling self._inject_setup_module_fixture() and discard the return value. RESULT _]
+            [COMMAND Inject the function-level setup fixture by calling self._inject_setup_function_fixture() and discard the return value. RESULT _]
+            [COMMAND Access self.session._fixturemanager, call parsefactories(self), and discard the return value. RESULT _]
+            [COMMAND Call super().collect() and return its result unchanged to the caller. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Injects a hidden autouse module-scoped pytest fixture into the collected module object that runs xunit-style setUpModule and tearDownModule functions around module execution when either is present." _inject_setup_module_fixture]
+    [INPUTS]
+        <REF> self </REF>: object "Instance of the collector class whose obj attribute is the module object to modify."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Find the first non-fixture function among the candidate attribute names 'setUpModule' and 'setup_module' on self.obj, using that exact order, and store the returned function object or None as setup_module. RESULT setup_module]
+            [COMMAND Find the first non-fixture function among the candidate attribute names 'tearDownModule' and 'teardown_module' on self.obj, using that exact order, and store the returned function object or None as teardown_module. RESULT teardown_module]
+            [COMMAND Evaluate whether setup_module is None and teardown_module is None, indicating that no xunit module hooks are available. RESULT both_missing]
+            [COMMAND Because both_missing is false, define a generator function named xunit_setup_module_fixture taking request and decorate it with @fixtures.fixture(autouse=True, scope='module'); inside that fixture, if setup_module is not None call _call_with_optional_argument(setup_module, request.module), yield once to allow the test module to execute, then if teardown_module is not None call _call_with_optional_argument(teardown_module, request.module). RESULT xunit_setup_module_fixture]
+            [COMMAND Assign xunit_setup_module_fixture to the __pytest_setup_module attribute on self.obj. RESULT self.obj.__pytest_setup_module]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: both_missing is true, meaning setup_module is None and teardown_module is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None immediately without defining or attaching the xunit module fixture. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Injects a hidden autouse function-scoped pytest fixture into the collected module object to invoke setup_function and teardown_function when available, while leaving instance-bound tests to setup_method and teardown_method." _inject_setup_function_fixture]
+    [INPUTS]
+        <REF> self </REF>: object "The module collector instance whose self.obj attribute is inspected for setup_function and teardown_function and then modified with the assigned fixture."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _get_first_non_fixture_func(self.obj, ('setup_function',)) and assign the returned function to setup_function. RESULT setup_function]
+            [COMMAND Call _get_first_non_fixture_func(self.obj, ('teardown_function',)) and assign the returned function to teardown_function. RESULT teardown_function]
+            [COMMAND Check whether both setup_function and teardown_function are None; continue only if at least one of them is present. RESULT both_functions_missing]
+            [COMMAND Define xunit_setup_function_fixture(request) as a generator function decorated with @fixtures.fixture(autouse=True, scope='function'). RESULT xunit_setup_function_fixture]
+            [COMMAND Inside xunit_setup_function_fixture, when request.instance is None, if setup_function is not None, call _call_with_optional_argument(setup_function, request.function) before yielding. RESULT setup_function_called]
+            [COMMAND Inside xunit_setup_function_fixture, after the optional setup call, yield to allow the test to run. RESULT test_run_yield]
+            [COMMAND Inside xunit_setup_function_fixture, after the test run resumes from the yield, if teardown_function is not None, call _call_with_optional_argument(teardown_function, request.function). RESULT teardown_function_called]
+            [COMMAND Assign xunit_setup_function_fixture to self.obj.__pytest_setup_function. RESULT self.obj.__pytest_setup_function]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Both setup_function and teardown_function are None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return from _inject_setup_function_fixture immediately without defining or assigning the fixture. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: Inside xunit_setup_function_fixture, request.instance is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Yield to allow the test to run and then return immediately, leaving setup and teardown to setup_method and teardown_method. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Imports the test module from its filesystem path using the configured import mode, assuming it is called once per module, registers the module with the plugin manager, and returns it, translating syntax, path mismatch, import, and invalid skip errors into collection errors." _importtestmodule]
+    [INPUTS]
+        <REF> self </REF>: object "Collector instance with config.getoption(), fspath.pyimport(), fspath.ImportMismatchError, and config.pluginmanager.consider_module()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> mod </REF>: module "Imported test module after plugin manager processing."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the --import-mode option by calling self.config.getoption("--import-mode") and assign it to importmode. RESULT importmode]
+            [COMMAND Within the try block, call self.fspath.pyimport(ensuresyspath=importmode) to import the module and assign the returned module to mod. RESULT mod]
+            [COMMAND After the try/except blocks complete without a raised exception, call self.config.pluginmanager.consider_module(mod) to process the imported module. RESULT None]
+            [COMMAND Return mod as the imported test module. RESULT mod]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During the import call, self.fspath.pyimport(ensuresyspath=importmode) raises SyntaxError.]
+        [LOG "Format the current syntax error using _pytest._code.ExceptionInfo.from_current().getrepr(style='short') and use that as the collection error message."]
+        [THROW CollectError "Raises self.CollectError with the short syntax error representation."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the import call, self.fspath.pyimport(ensuresyspath=importmode) raises self.fspath.ImportMismatchError.]
+        [LOG "Capture e from sys.exc_info()[1] and format 'import file mismatch:
+imported module %r has this __file__ attribute:
+  %s
+which is not the same as the test file we want to collect:
+  %s
+HINT: remove __pycache__ / .pyc files and/or use a unique basename for your test file modules' with e.args."]
+        [THROW CollectError "Raises self.CollectError with the import file mismatch message derived from e.args."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the import call, self.fspath.pyimport(ensuresyspath=importmode) raises ImportError.]
+        [LOG "Build ExceptionInfo.from_current(); if self.config.getoption('verbose') < 2, filter exc_info.traceback using filter_traceback. Set exc_repr to exc_info.getrepr(style='short') when exc_info.traceback exists, otherwise exc_info.exconly(). Then format 'ImportError while importing test module '{fspath}'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+{traceback}' with self.fspath and str(exc_repr) as formatted_tb."]
+        [THROW CollectError "Raises self.CollectError with the ImportError message containing the formatted traceback."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the import call, self.fspath.pyimport(ensuresyspath=importmode) raises _pytest.runner.Skipped as e and e.allow_module_level is True.]
+        [LOG "Allow the module-level skip by re-raising the original _pytest.runner.Skipped exception without wrapping it."]
+        [THROW _pytest.runner.Skipped "Re-raises the original _pytest.runner.Skipped exception unchanged."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During the import call, self.fspath.pyimport(ensuresyspath=importmode) raises _pytest.runner.Skipped as e and e.allow_module_level is False.]
+        [LOG "Use the message 'Using pytest.skip outside of a test is not allowed. To decorate a test function, use the @pytest.mark.skip or @pytest.mark.skipif decorators instead, and to skip a module use `pytestmark = pytest.mark.{skip,skipif}.'"]
+        [THROW CollectError "Raises self.CollectError explaining that pytest.skip outside a test is not allowed."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS Package
+
+[DEFINE_WORKER: "Initializes a filesystem collector by deriving the session from the parent collector, calling the base FSCollector initializer, and storing the directory name as well as session trace and recursion settings." FSCollector.__init__]
+    [INPUTS]
+        <REF> fspath </REF>: path object "Filesystem path for this collector; its dirname is assigned to self.name and the path is assigned to self.fspath."
+        <REF> parent </REF>: FSCollector or None "Parent collector; must be non-None because its session attribute is used as the session for both the base initializer and this collector."
+        <REF> config </REF>: Config or None "Configuration object passed through to the base FSCollector initializer."
+        <REF> session </REF>: Session or None "Provided session value is ignored; the actual session is always taken from parent.session."
+        <REF> nodeid </REF>: str or None "Node identifier passed through to the base FSCollector initializer."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set session to parent.session. RESULT session]
+            [COMMAND Call nodes.FSCollector.__init__ with self, fspath, parent=parent, config=config, session=session, and nodeid=nodeid. RESULT None]
+            [COMMAND Set self.name to fspath.dirname. RESULT self.name]
+            [COMMAND Set self.trace to session.trace. RESULT self.trace]
+            [COMMAND Set self._norecursepatterns to session._norecursepatterns. RESULT self._norecursepatterns]
+            [COMMAND Set self.fspath to fspath. RESULT self.fspath]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Locates module-level setup and teardown callables on self.obj using prioritized candidate names, invokes the setup callable immediately when present, and registers a finalizer that invokes the teardown callable with an optional argument." setup]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign to setup_module the result of _get_first_non_fixture_func(self.obj, ("setUpModule", "setup_module")). RESULT setup_module]
+            [COMMAND If setup_module is not None, call _call_with_optional_argument(setup_module, self.obj). RESULT none]
+            [COMMAND Assign to teardown_module the result of _get_first_non_fixture_func(self.obj, ("tearDownModule", "teardown_module")). RESULT teardown_module]
+            [COMMAND If teardown_module is not None, create func by calling partial(_call_with_optional_argument, teardown_module, self.obj). RESULT func]
+            [COMMAND If teardown_module is not None, register func as a finalizer by calling self.addfinalizer(func). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Decides whether a directory should be recursed into by rejecting __pycache__ directories, honoring pytest_ignore_collect, applying no-recurse patterns, and then invoking directory collection." _recurse]
+    [INPUTS]
+        <REF> self </REF>: object "The collector instance that provides gethookproxy, config, _norecursepatterns, and is used as the parent during directory collection."
+        <REF> dirpath </REF>: path object "The filesystem path being considered for recursion; provides basename, dirpath(), and check(fnmatch=pat)."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool | null "Returns False for __pycache__ or no-recurse pattern matches, None if pytest_ignore_collect is truthy, and True after successful directory collection."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether dirpath.basename equals '__pycache__'. If it does, use the __pycache__ early-return path. RESULT is_pycache]
+            [COMMAND Call self.gethookproxy(dirpath.dirpath()) and assign the returned hook proxy to ihook. RESULT ihook]
+            [COMMAND Call ihook.pytest_ignore_collect(path=dirpath, config=self.config). If it returns a truthy value, use the ignore-collect early-return path. RESULT ignore_collect_check]
+            [COMMAND Iterate over self._norecursepatterns in order; for each pattern pat, test dirpath.check(fnmatch=pat). If the first match occurs, use the no-recurse-pattern early-return path. RESULT norecurse_check]
+            [COMMAND Overwrite ihook by calling self.gethookproxy(dirpath) for the directory itself. RESULT ihook]
+            [COMMAND Call ihook.pytest_collect_directory(path=dirpath, parent=self). RESULT collect_directory_result]
+            [COMMAND Return True from _recurse. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: dirpath.basename equals '__pycache__'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False from _recurse immediately. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: After the parent hook proxy is assigned to ihook, ihook.pytest_ignore_collect(path=dirpath, config=self.config) returns a truthy value.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None from _recurse immediately. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: There exists a pattern pat in self._norecursepatterns for which dirpath.check(fnmatch=pat) is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the for pat in self._norecursepatterns loop, return False from _recurse immediately. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the hook proxy appropriate for a filesystem path, creating a filtered FSHookProxy when some conftest plugins are not active and falling back to the global config hook otherwise." gethookproxy]
+    [INPUTS]
+        <REF> self </REF>: object "Context object exposing config.pluginmanager and config.hook."
+        <REF> fspath </REF>: path-like "Filesystem path for which the hook proxy is requested."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> proxy </REF>: FSHookProxy or hook relay "The hook proxy that will handle hook calls for fspath."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access self.config.pluginmanager and assign it to pm. RESULT pm]
+            [COMMAND Call pm._getconftestmodules(fspath) and assign the returned conftest modules to my_conftestmodules. RESULT my_conftestmodules]
+            [COMMAND Compute remove_mods as pm._conftest_plugins.difference(my_conftestmodules). RESULT remove_mods]
+            [COMMAND Evaluate remove_mods for truthiness to choose the proxy assignment branch. RESULT remove_mods]
+            [COMMAND In the if remove_mods branch, assign proxy = FSHookProxy(fspath, pm, remove_mods). RESULT proxy]
+            [COMMAND Return proxy. RESULT proxy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: remove_mods is falsy (empty set, None, or otherwise falsy)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the else branch, assign proxy = self.config.hook. RESULT proxy]
+            [COMMAND Return proxy. RESULT proxy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects a single file by validating it, obtaining a hook proxy, applying initial-path and duplicate-path filters, and returning either a single-element self list for __init__.py or the pytest_collect_file hook result." _collectfile]
+    [INPUTS]
+        <REF> self </REF>: object "The collector instance providing config, pluginmanager, fspath, gethookproxy, and isinitpath."
+        <REF> path </REF>: object "Filesystem path object to collect."
+        <REF> handle_dupes </REF>: bool "Whether to perform duplicate-path filtering. Defaults to true."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: tuple or list "Empty tuple if collection is ignored or duplicate; a single-element list containing self when path equals self.fspath; otherwise the result of pytest_collect_file."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that path.isfile() is true; otherwise raise AssertionError with the formatted non-file message. RESULT _file_assertion_passed]
+            [COMMAND Call self.gethookproxy(path) and assign the returned hook proxy to ihook. RESULT ihook]
+            [COMMAND If self.isinitpath(path) is false and ihook.pytest_ignore_collect(path=path, config=self.config) is truthy, return an empty tuple immediately. RESULT _ignore_early_return]
+            [COMMAND If handle_dupes is true, read self.config.getoption('keepduplicates') and assign it to keepduplicates. RESULT keepduplicates]
+            [COMMAND If handle_dupes is true and keepduplicates is false, assign self.config.pluginmanager._duplicatepaths to duplicate_paths. RESULT duplicate_paths]
+            [COMMAND If handle_dupes is true, keepduplicates is false, and path is in duplicate_paths, return an empty tuple immediately. RESULT _duplicate_early_return]
+            [COMMAND If handle_dupes is true, keepduplicates is false, and path is not in duplicate_paths, add path to duplicate_paths. RESULT _duplicate_registered]
+            [COMMAND If self.fspath equals path, return a list containing self. RESULT _init_file_return]
+            [COMMAND Return ihook.pytest_collect_file(path=path, parent=self). RESULT _collect_file_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: path.isfile() returns false]
+        [LOG "The path is not a file; the assertion message is formatted as: {path!r} is not a file (isdir={path.isdir()!r}, exists={path.exists()!r}, islink={path.islink()!r})."]
+        [THROW AssertionError "The path being collected must be an existing file."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the given path is one of the session's initial paths and returns the boolean membership result." isinitpath]
+    [INPUTS]
+        <REF> self </REF>: object "The current instance used to access self.session._initialpaths."
+        <REF> path </REF>: path-like "The path to check for membership in the session's initial paths."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if path is in self.session._initialpaths; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether path is contained in self.session._initialpaths using the in operator. RESULT membership_result]
+            [COMMAND Return membership_result as the method result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects a single Instance named '()' for a test class only when the class is marked testable and defines neither __init__ nor __new__, otherwise returns an empty list after issuing a PytestCollectionWarning." collect]
+    [INPUTS]
+        <REF> self </REF>: Collector "The pytest collector instance with obj, parent, warn, _inject_setup_class_fixture, and _inject_setup_method_fixture."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: List[Instance] "Either [Instance(name='()', parent=self)] when collection proceeds, or [] when an early-exit guard fails."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether safe_getattr(self.obj, '__test__', True) is false; if true, follow the non-testable alternative flow. RESULT is_not_testable]
+            [COMMAND Evaluate whether hasinit(self.obj) is true; if true, follow the __init__ alternative flow. RESULT has_init]
+            [COMMAND Only if hasinit(self.obj) is false, evaluate whether hasnew(self.obj) is true; if true, follow the __new__ alternative flow. RESULT has_new]
+            [COMMAND Inject the setup_class fixture into self via self._inject_setup_class_fixture(). RESULT None]
+            [COMMAND Inject the setup_method fixture into self via self._inject_setup_method_fixture(). RESULT None]
+            [COMMAND Return [Instance(name='()', parent=self)]. RESULT collected_instances]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_not_testable is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return []. RESULT empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: has_init is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit PytestCollectionWarning with message 'cannot collect test class %r because it has a __init__ constructor (from: %s)' formatted with self.obj.__name__ and self.parent.nodeid. RESULT None]
+            [COMMAND Return []. RESULT empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: has_init is false and has_new is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Emit PytestCollectionWarning with message 'cannot collect test class %r because it has a __new__ constructor (from: %s)' formatted with self.obj.__name__ and self.parent.nodeid. RESULT None]
+            [COMMAND Return []. RESULT empty_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Injects a hidden autouse class-scoped pytest fixture into the collected class so that optional setup_class and teardown_class methods are invoked around the class test lifecycle." _inject_setup_class_fixture]
+    [INPUTS]
+        <REF> self </REF>: object "Collector instance; its obj attribute references the collected class object on which the fixture is installed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve the setup_class method from self.obj by calling _get_first_non_fixture_func(self.obj, ('setup_class',)) and store the resulting callable or None. RESULT setup_class]
+            [COMMAND Read the teardown_class attribute from self.obj with getattr(self.obj, 'teardown_class', None) and store the resulting callable or None. RESULT teardown_class]
+            [COMMAND Define a hidden autouse class-scoped pytest fixture named xunit_setup_class_fixture that takes cls and is decorated with fixtures.fixture(autouse=True, scope='class'). Inside the fixture, if setup_class is not None, resolve the underlying function with getimfunc(setup_class), invoke it with _call_with_optional_argument(func, self.obj), then yield once; after the yield resumes, if teardown_class is not None, resolve it with getimfunc(teardown_class) and invoke it with _call_with_optional_argument(func, self.obj). RESULT xunit_setup_class_fixture]
+            [COMMAND Assign xunit_setup_class_fixture to self.obj.__pytest_setup_class. RESULT self.obj.__pytest_setup_class]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: setup_class is None and teardown_class is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return from _inject_setup_class_fixture without defining or assigning __pytest_setup_class. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Injects a hidden, autouse, function-scoped pytest fixture into the collected class object so that xunit-style setup_method and teardown_method, if present, are called around each test." _inject_setup_method_fixture]
+    [INPUTS]
+        <REF> self </REF>: object "The collector/fixture-manager instance; self.obj is the collected test class object to modify."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Resolve setup_method by calling _get_first_non_fixture_func(self.obj, ("setup_method",)) and assign the result to setup_method. RESULT setup_method]
+            [COMMAND Resolve teardown_method by calling getattr(self.obj, "teardown_method", None) and assign the result to teardown_method; use None when the attribute is absent. RESULT teardown_method]
+            [COMMAND Evaluate the guard: if setup_method is None and teardown_method is None, return immediately; otherwise continue with fixture creation. RESULT guard_passed]
+            [COMMAND Define a nested generator fixture function named xunit_setup_method_fixture(self, request) decorated with @fixtures.fixture(autouse=True, scope="function"), closing over the outer setup_method and teardown_method locals. RESULT xunit_setup_method_fixture]
+            [COMMAND Within the fixture function xunit_setup_method_fixture, before the yield, set method = request.function to capture the current test function. RESULT method]
+            [COMMAND Within the fixture function xunit_setup_method_fixture, before the yield, if setup_method is not None, set func = getattr(self, "setup_method") and call _call_with_optional_argument(func, method). RESULT func]
+            [COMMAND Within the fixture function xunit_setup_method_fixture, yield without a value so the test executes between setup and teardown. RESULT yield_point]
+            [COMMAND Within the fixture function xunit_setup_method_fixture, after the yield, if teardown_method is not None, set func = getattr(self, "teardown_method") and call _call_with_optional_argument(func, method). RESULT teardown_func]
+            [COMMAND Assign the decorated fixture object xunit_setup_method_fixture to self.obj.__pytest_setup_method; if rendered inside a Python class, the double-underscore attribute name may be name-mangled to _<ClassName>__pytest_setup_method. RESULT self.obj.__pytest_setup_method]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: setup_method is None and teardown_method is None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return without registering any fixture. RESULT early_return]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+# CLASS Instance
+
+[DEFINE_WORKER: "Returns the result of calling obj() on the parent object of self." _getobj]
+    [INPUTS]
+        <REF> self </REF>: object "Current object whose parent attribute is accessed."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> obj_result </REF>: object "The value returned by calling obj() on the parent object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Access the parent attribute of self to obtain parent_obj. RESULT parent_obj]
+            [COMMAND Call obj() on parent_obj and return its result. RESULT obj_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers fixture factories for the current collector through the session fixture manager, then delegates collection to the parent class and returns its result." collect]
+    [INPUTS]
+        <REF> self </REF>: Collector "The current collector instance whose fixture factories are registered before the parent class collection is invoked."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: Any "The collection result returned by super().collect()."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Register fixture factories for the current collector by calling self.session._fixturemanager.parsefactories(self) and discard the return value. RESULT discarded]
+            [COMMAND Call super().collect() to perform the parent class collection logic. RESULT collection_result]
+            [COMMAND Return collection_result to the caller as the method's output. RESULT method_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a new object instance by calling _getobj, assigns it to self.obj, and returns that assigned object." newinstance]
+    [INPUTS]
+        <REF> self </REF>: object "Current instance of the class."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> self.obj </REF>: object "The object returned by _getobj and assigned to the instance attribute self.obj."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call _getobj on the current instance and assign the returned value to self.obj. RESULT self.obj]
+            [COMMAND Return the value of self.obj to the caller. RESULT return value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS FunctionMixin
+
+[DEFINE_WORKER: "Performs setup for this test function by checking whether self.parent is an Instance and, if so, creating a new instance on it and storing the result of self._getobj() in self.obj." setup]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether self.parent is an instance of Instance. RESULT parent_is_instance]
+            [COMMAND Within the if block when parent_is_instance is true, call self.parent.newinstance() and ignore its return value. RESULT None]
+            [COMMAND Within the if block when parent_is_instance is true, assign self.obj to the result of self._getobj(). RESULT self.obj]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Prunes an exception traceback by cutting pytest-internal frames, preserving the original traceback when all frames would be removed, and optionally shortening middle frame representations for auto traceback style." _prunetraceback]
+    [INPUTS]
+        <REF> self </REF>: object "The instance providing _obj, obj, and config."
+        <REF> excinfo </REF>: ExceptionInfo "The exception info object whose traceback is pruned in place."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: None "This method returns None; it updates excinfo.traceback in place."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the outer guard: if self has attribute '_obj' and self.config.getoption('fulltrace', False) is falsy, enter the pruning block; otherwise skip the entire block and leave excinfo.traceback unchanged. RESULT pruning_guard]
+            [COMMAND Inside the outer guard, compute code = _pytest._code.Code(get_real_func(self.obj)); note that the guard checks '_obj' but the access is to self.obj. RESULT code]
+            [COMMAND Inside the outer guard, unpack path, firstlineno = code.path, code.firstlineno. RESULT path_firstlineno]
+            [COMMAND Inside the outer guard, set traceback = excinfo.traceback and ntraceback = traceback.cut(path=path, firstlineno=firstlineno). RESULT ntraceback]
+            [COMMAND Inside the outer guard, if ntraceback equals traceback, set ntraceback = ntraceback.cut(path=path). RESULT ntraceback]
+            [COMMAND Inside the outer guard, if ntraceback still equals traceback, set ntraceback = ntraceback.filter(filter_traceback). RESULT ntraceback]
+            [COMMAND Inside the outer guard, if filtered ntraceback is empty, set ntraceback = traceback. RESULT ntraceback]
+            [COMMAND Inside the outer guard, after the fallback logic, assign excinfo.traceback = ntraceback.filter(). RESULT excinfo.traceback]
+            [COMMAND Inside the outer guard, check whether self.config.getoption('tbstyle', 'auto') == 'auto'. RESULT tbstyle_auto]
+            [COMMAND Inside the outer guard and the 'auto' style block, if len(excinfo.traceback) > 2, enter the middle-frame shortening loop. RESULT middle_frames_present]
+            [COMMAND Inside the outer guard, 'auto' style block, and len > 2 condition, for each entry in excinfo.traceback[1:-1] (skipping first and last frames), call entry.set_repr_style('short'). RESULT excinfo.traceback]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves the configured traceback style, defaulting 'auto' to 'long', and returns the formatted failure representation from _repr_failure_py." repr_failure]
+    [INPUTS]
+        <REF> excinfo </REF>: exception info object "Exception information to be formatted."
+        <REF> outerr </REF>: optional object "Deprecated outerr argument; must be None or an assertion error is raised."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Formatted traceback/failure representation produced by _repr_failure_py."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that outerr is None; if it is not None, raise AssertionError with message 'XXX outerr usage is deprecated'. RESULT outerr_check]
+            [COMMAND Resolve the traceback style by calling self.config.getoption('tbstyle', 'auto') and assign the result to style. RESULT style]
+            [COMMAND If style equals 'auto', set style to 'long'. RESULT style]
+            [COMMAND Call self._repr_failure_py(excinfo, style=style) and return its result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: outerr is not None]
+        [LOG "XXX outerr usage is deprecated"]
+        [THROW AssertionError "Raised because the deprecated outerr argument is not None."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS CallSpec2
+
+[DEFINE_WORKER: "Stores the supplied metafunc and initializes all parametrization bookkeeping attributes to fresh empty containers or the NOTSET sentinel." __init__]
+    [INPUTS]
+        <REF> metafunc </REF>: object "The metafunc object to be stored on self.metafunc."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store the external metafunc parameter into self.metafunc. RESULT self.metafunc]
+            [COMMAND Initialize self.funcargs as a fresh empty dictionary. RESULT self.funcargs]
+            [COMMAND Initialize self._idlist as a fresh empty list. RESULT self._idlist]
+            [COMMAND Initialize self.params as a fresh empty dictionary. RESULT self.params]
+            [COMMAND Set self._globalid to the shared NOTSET sentinel. RESULT self._globalid]
+            [COMMAND Set self._globalparam to the shared NOTSET sentinel. RESULT self._globalparam]
+            [COMMAND Initialize self._arg2scopenum as a fresh empty dictionary, used for sorting parametrized resources. RESULT self._arg2scopenum]
+            [COMMAND Initialize self.marks as a fresh empty list. RESULT self.marks]
+            [COMMAND Initialize self.indices as a fresh empty dictionary. RESULT self.indices]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Constructs and returns a new CallSpec2 instance initialized with the same metafunc and copied field values as the current CallSpec2." copy]
+    [INPUTS]
+        <REF> self </REF>: CallSpec2 "The source CallSpec2 instance whose fields are copied."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> cs </REF>: CallSpec2 "The new CallSpec2 instance with copied fields."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Create a new CallSpec2 instance using self.metafunc and assign it to cs. RESULT cs]
+            [COMMAND Update cs.funcargs with all entries from self.funcargs. RESULT cs]
+            [COMMAND Update cs.params with all entries from self.params. RESULT cs]
+            [COMMAND Extend cs.marks with all items from self.marks. RESULT cs]
+            [COMMAND Update cs.indices with all entries from self.indices. RESULT cs]
+            [COMMAND Update cs._arg2scopenum with all entries from self._arg2scopenum. RESULT cs]
+            [COMMAND Copy self._idlist into a new list and assign it to cs._idlist. RESULT cs]
+            [COMMAND Assign cs._globalid the same reference as self._globalid. RESULT cs]
+            [COMMAND Assign cs._globalparam the same reference as self._globalparam. RESULT cs]
+            [COMMAND Return cs. RESULT cs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether an argument name is already present in the instance's params or funcargs collections and raises ValueError if it is a duplicate." _checkargnotcontained]
+    [INPUTS]
+        <REF> arg </REF>: Any "Argument name to be checked against self.params and self.funcargs."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the short-circuit OR condition 'arg in self.params or arg in self.funcargs' to determine whether arg is already registered as a parameter or function-local argument. RESULT duplicate_check]
+            [COMMAND If duplicate_check is false, end the method normally without returning a value. RESULT method_end]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When arg is present in self.params or self.funcargs, so duplicate_check is true.]
+        [LOG "Duplicate argument: {arg!r}"]
+        [THROW ValueError "ValueError indicating that arg is already present in self.params or self.funcargs."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the value for a named parameter from local parameters, falling back to the global parameter if the local key is missing, or raises ValueError if the global parameter is not set." getparam]
+    [INPUTS]
+        <REF> name </REF>: any "The name of the parameter to retrieve."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any "The value of self.params[name] when the key exists, or self._globalparam when the local key is missing and the global parameter is set."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self.params[name] immediately when the key exists. RESULT param_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: A KeyError occurs because self.params does not contain name.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the except KeyError block, check whether self._globalparam is NOTSET. RESULT globalparam_is_notset]
+            [COMMAND If self._globalparam is NOTSET, raise ValueError(name). RESULT value_error]
+            [COMMAND If self._globalparam is not NOTSET, return self._globalparam as the fallback parameter value. RESULT fallback_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: self._globalparam is NOTSET while handling the KeyError for name.]
+        [LOG "Raising ValueError because the requested parameter is not found in self.params and no global parameter is set."]
+        [THROW ValueError "Indicates that the parameter name is unknown."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a hyphen-separated string of the truthy elements of self._idlist, converted to strings and preserving their original order." id]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: string "Hyphen-separated string of the truthy elements of self._idlist, each converted to string; empty string if there are no truthy elements."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the current value of self._idlist. RESULT idlist_value]
+            [COMMAND Apply filter(None, idlist_value) to keep only truthy elements, dropping None, False, 0, 0.0, empty strings, empty lists, and empty dicts while preserving original order. RESULT truthy_items]
+            [COMMAND Apply map(str, truthy_items) to convert each retained element to its string representation. RESULT string_items]
+            [COMMAND Join string_items with '-' as the separator using '-'.join(string_items). RESULT joined_string]
+            [COMMAND Return joined_string as the method result; if there are no truthy elements, this returns an empty string. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Sets multiple argument names to their corresponding values in the instance's type-specific storage while recording each argument's parameter index and scope number, then appends an id and extends the marks list." setmulti2]
+    [INPUTS]
+        <REF> self </REF>: object "The instance whose argument storage, indices, scope mapping, id list, and marks are mutated."
+        <REF> valtypes </REF>: dict "Mapping from argument name to the name of the attribute on self that stores values for that type."
+        <REF> argnames </REF>: list "Argument names to set, paired positionally with valset."
+        <REF> valset </REF>: list "Values to assign to the corresponding argument names."
+        <REF> id </REF>: any "Identifier to append to self._idlist."
+        <REF> marks </REF>: list "Marks to normalize and extend self.marks with."
+        <REF> scopenum </REF>: any "Scope number to record for each argument."
+        <REF> param_index </REF>: int "Parameter index to record for each argument."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each pair (arg, val) yielded by zip(argnames, valset), until either argnames or valset is exhausted, validate that arg is not already contained via self._checkargnotcontained(arg), determine valtype_for_arg from valtypes[arg], store val under key arg in the attribute of self named by valtype_for_arg, set self.indices[arg] to param_index, and set self._arg2scopenum[arg] to scopenum. RESULT self]
+            [COMMAND Append id to self._idlist. RESULT self._idlist]
+            [COMMAND Extend self.marks with the result of normalize_mark_list(marks). RESULT self.marks]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS Metafunc
+
+[DEFINE_WORKER: "Initializes a pytest function definition node by asserting the definition type and storing the definition, config, module, underlying function, fixture names, class, and fixture-to-definition mappings as instance attributes." __init__]
+    [INPUTS]
+        <REF> definition </REF>: FunctionDefinition or DefinitionMock "The function definition object whose obj attribute is used as the underlying Python test function."
+        <REF> fixtureinfo </REF>: FixtureInfo "Fixture information object providing names_closure and name2fixturedefs."
+        <REF> config </REF>: Config "The pytest config object for the test session."
+        <REF> cls </REF>: type or None "Optional class object where the test function is defined; defaults to None."
+        <REF> module </REF>: module or None "Optional module object where the test function is defined; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assert that definition is an instance of FunctionDefinition or has the type name 'DefinitionMock'; if not, raise AssertionError. RESULT assertion_passed]
+            [COMMAND Assign the definition argument to self.definition. RESULT self.definition]
+            [COMMAND Assign the config argument to self.config. RESULT self.config]
+            [COMMAND Assign the module argument to self.module. RESULT self.module]
+            [COMMAND Assign the obj attribute of definition to self.function. RESULT self.function]
+            [COMMAND Assign the names_closure attribute of fixtureinfo to self.fixturenames. RESULT self.fixturenames]
+            [COMMAND Assign the cls argument to self.cls. RESULT self.cls]
+            [COMMAND Initialize self._calls as an empty list. RESULT self._calls]
+            [COMMAND Initialize self._ids as an empty set. RESULT self._ids]
+            [COMMAND Assign the name2fixturedefs attribute of fixtureinfo to self._arg2fixturedefs. RESULT self._arg2fixturedefs]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: definition is not an instance of FunctionDefinition and type(definition).__name__ is not 'DefinitionMock']
+        [LOG "Assertion failed: definition must be a FunctionDefinition or a DefinitionMock"]
+        [THROW AssertionError "Raised when the definition argument does not satisfy the required type check."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes parametrize arguments and accumulates a new set of parametrized call specifications on the underlying test function, storing the result in self._calls." parametrize]
+    [INPUTS]
+        <REF> argnames </REF>: str | list[str] | tuple[str] "Comma-separated string, list, or tuple naming the parameter arguments."
+        <REF> argvalues </REF>: list | list[tuple] "List of values for a single parameter, or list of N-tuples for multiple parameters."
+        <REF> indirect </REF>: bool | list[str] "Indicates which argnames should be resolved indirectly as fixture request.param values; True means all argnames."
+        <REF> ids </REF>: list[str] | Callable | None "Optional test ids: a list of strings, a callable accepting a single argvalue and returning a string or None, or None for automatic ids."
+        <REF> scope </REF>: str | None "Optional scope name for grouping parameter instances; overrides fixture-defined scope when provided."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Normalize the input argument names and build parameter sets by calling ParameterSet._for_parametrize with argnames, argvalues, self.function, self.config, and function_definition=self.definition; unpack the returned pair into argnames and parameters and then delete the original argvalues reference. RESULT argnames, parameters]
+            [COMMAND Validate that 'request' is not present in argnames; if this validation fails, the reserved-name exception flow is triggered. RESULT reserved_name_check_passed]
+            [COMMAND If scope is None, assign scope to the result of _find_parametrized_scope(argnames, self._arg2fixturedefs, indirect). RESULT scope]
+            [COMMAND Call self._validate_if_using_arg_names(argnames, indirect) to validate the combination of argument names and indirect setting. RESULT validation_done]
+            [COMMAND Resolve argument value types by calling self._resolve_arg_value_types(argnames, indirect) and store the result in arg_values_types. RESULT arg_values_types]
+            [COMMAND Resolve parameter ids by calling self._resolve_arg_ids(argnames, ids, parameters, item=self.definition), using the previous ids value as input and rebinding ids to the result. RESULT ids]
+            [COMMAND Convert scope to a numeric scope index by calling scope2index(scope, descr='parametrize() call in ' + self.function.__name__) and store it in scopenum. RESULT scopenum]
+            [COMMAND Initialize newcalls as an empty list. RESULT newcalls]
+            [COMMAND For each callspec in self._calls if self._calls is truthy, otherwise in a list containing CallSpec2(self), and for each param_index starting at 0 with (param_id, param_set) from enumerate(zip(ids, parameters)) where zip stops at the shorter sequence, copy callspec into newcallspec, call newcallspec.setmulti2 with arg_values_types, argnames, param_set.values, param_id, param_set.marks, scopenum, and param_index, then append newcallspec to newcalls. RESULT newcalls]
+            [COMMAND Assign newcalls to self._calls. RESULT self._calls]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: After parameter normalization, argnames contains the reserved name 'request'.]
+        [LOG "'request' is a reserved name and cannot be used in @pytest.mark.parametrize"]
+        [THROW Failed "Raised by fail() to abort parametrization when 'request' is used as a parameter name."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves actual ids for the given argnames by converting a callable ids parameter into an idfn, validating any non-callable ids list against the parameter sets, and delegating final id generation to idmaker." _resolve_arg_ids]
+    [INPUTS]
+        <REF> argnames </REF>: List[str] "List of argument names passed to parametrize()."
+        <REF> ids </REF>: Callable or List[Optional[str]] or None "The ids parameter of the parametrized call; can be a callable id function, a list of strings or None values, or None."
+        <REF> parameters </REF>: List[ParameterSet] "List of parameter values, same size as argnames."
+        <REF> item </REF>: Item "The item that generated this parametrized call."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: List[str] "List of resolved ids for each argname."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import saferepr from _pytest._io.saferepr RESULT saferepr]
+            [COMMAND Initialize idfn to None RESULT idfn]
+            [COMMAND Check whether ids is callable RESULT ids_is_callable]
+            [COMMAND If ids_is_callable is true, execute alternative_flows[0]; otherwise continue with the original ids and idfn unchanged RESULT ids]
+            [COMMAND If ids is truthy, assign func_name = self.function.__name__ RESULT func_name]
+            [COMMAND If ids is truthy, verify that len(ids) is exactly equal to len(parameters); if not, trigger exception_flows[0] RESULT validation_length]
+            [COMMAND If ids is truthy, iterate over each id_value in ids and verify that id_value is None or isinstance(id_value, str); if not, trigger exception_flows[1] RESULT validation_types]
+            [COMMAND Call idmaker(argnames, parameters, idfn, ids, self.config, item=item) and assign the returned value to ids RESULT ids]
+            [COMMAND Return ids RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: ids is callable]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set idfn = ids RESULT idfn]
+            [COMMAND Set ids = None RESULT ids]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within the truthy ids guard, len(ids) differs from len(parameters)]
+        [LOG "In {func_name}: {len(parameters)} parameter sets specified, with different number of ids: {len(ids)}"]
+        [THROW Failed "Exception raised by pytest.fail() with pytrace=False when the number of ids does not match the number of parameter sets."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: Within the truthy ids guard and the for loop over id_value in ids, id_value is not None and not isinstance(id_value, str)]
+        [LOG "In {func_name}: ids must be list of strings, found: {saferepr(id_value)} (type: {type(id_value)})"]
+        [THROW Failed "Exception raised by pytest.fail() with pytrace=False when an id value is neither None nor a string."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Resolves whether each parametrized argument name maps to a fixture parameter ('params') or a test function parameter ('funcargs') based on the bool or Sequence value of indirect." _resolve_arg_value_types]
+    [INPUTS]
+        <REF> argnames </REF>: List[str] "List of argument names passed to parametrize()."
+        <REF> indirect </REF>: Union[bool, Sequence[str]] "Same indirect parameter from parametrize(); if True or False, applies uniformly; if a sequence, only listed names become 'params'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> valtypes </REF>: Dict[str, str] "Mapping from each argument name to either 'params' or 'funcargs'."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If indirect is a bool, initialize valtypes by mapping every name in argnames to 'params' when indirect is True, otherwise to 'funcargs'. RESULT valtypes]
+            [COMMAND Return valtypes. RESULT valtypes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: indirect is a Sequence and not a bool, so indirect explicitly names the arguments that should be treated as fixture parameters.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize valtypes by mapping every name in argnames to 'funcargs'. RESULT valtypes]
+            [COMMAND For each arg in the indirect sequence, set valtypes[arg] to 'params' when arg is a valid name from argnames; otherwise the exception flow for an unknown indirect fixture is triggered. RESULT valtypes]
+            [COMMAND Return valtypes. RESULT valtypes]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Within the Sequence branch, when an element arg in the indirect sequence is not present in argnames.]
+        [LOG "In {self.function.__name__}: indirect fixture '{arg}' doesn't exist"]
+        [THROW Failed "Exception raised by pytest.fail(..., pytrace=False) to abort because an indirect fixture name does not exist."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: When indirect is neither a bool nor a Sequence.]
+        [LOG "In {self.function.__name__}: expected Sequence or boolean for indirect, got {type(indirect).__name__}"]
+        [THROW Failed "Exception raised by pytest.fail(..., pytrace=False) to abort because indirect has an invalid type."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Validates that each argument name in argnames is either a fixturename or a default-valued argument used by the underlying function, and fails with a descriptive error if the function does not use the named fixture/argument." _validate_if_using_arg_names]
+    [INPUTS]
+        <REF> self </REF>: object "Calling object that provides .function and .fixturenames for validation."
+        <REF> argnames </REF>: List[str] "List of argument names passed to parametrize() that must be validated."
+        <REF> indirect </REF>: bool, tuple, or list "Same indirect parameter of parametrize(); controls whether an unknown name is labeled 'fixture' or 'argument' when reporting an error."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: None "Returns None implicitly when every arg in argnames is valid; otherwise fail() raises an exception instead of returning."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the set of default argument names from self.function using get_default_arg_names() and store it as default_arg_names. RESULT default_arg_names]
+            [COMMAND Store the function name self.function.__name__ as func_name. RESULT func_name]
+            [COMMAND For each arg in argnames, check whether arg is in self.fixturenames; if it is, continue to the next iteration. Any arg not in self.fixturenames is invalid and will follow an exception flow. RESULT current_arg]
+            [COMMAND Within the for loop over argnames, when arg is not in self.fixturenames and arg is in default_arg_names, follow the exception flow for a default-valued argument conflict. RESULT default_arg_conflict]
+            [COMMAND Within the for loop over argnames, when arg is not in self.fixturenames and arg is not in default_arg_names, compute name: if indirect is a tuple or list, name is 'fixture' if arg is in indirect else 'argument'; otherwise name is 'fixture' if indirect is truthy else 'argument'. RESULT name]
+            [COMMAND Within the for loop over argnames, after computing name in the not-default branch, follow the exception flow for an unused fixture/argument. RESULT unused_name_conflict]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During iteration over argnames, the current arg is not in self.fixturenames and arg is in default_arg_names.]
+        [LOG "Call fail with message: In {func_name}: function already takes an argument '{arg}' with a default value, with pytrace=False."]
+        [THROW Failed "Exception raised by fail() to abort validation and report the conflicting default argument."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: During iteration over argnames, the current arg is not in self.fixturenames and arg is not in default_arg_names.]
+        [LOG "Call fail with message: In {func_name}: function uses no {name} '{arg}', where name is 'fixture' or 'argument' as computed from indirect, with pytrace=False."]
+        [THROW Failed "Exception raised by fail() to abort validation and report the unused fixture/argument."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+# CLASS Function
+
+[DEFINE_WORKER: "Initializes a pytest node instance by calling the superclass initializer, storing call arguments and fixture metadata, merging callspec and keyword markers, and recording the original function name." __init__]
+    [INPUTS]
+        <REF> name </REF>: object "Name of the node being initialized."
+        <REF> parent </REF>: object "Parent node in the pytest node hierarchy."
+        <REF> args </REF>: object "Optional argument container stored as self._args."
+        <REF> config </REF>: object "Configuration object passed to the superclass initializer."
+        <REF> callspec </REF>: object "Optional callspec object whose marks are merged into keyword metadata and own markers."
+        <REF> callobj </REF>: object "Optional call object stored as self.obj when it is not NOTSET."
+        <REF> keywords </REF>: dict "Optional mapping of keyword names to markers merged into self.keywords."
+        <REF> session </REF>: object "Pytest session passed to the superclass and used for fixture manager access."
+        <REF> fixtureinfo </REF>: object "Optional fixture metadata created lazily from the session fixture manager when None."
+        <REF> originalname </REF>: string "Original undecorated function name stored as self.originalname."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call super().__init__ with name, parent, config, and session. RESULT self]
+            [COMMAND Assign self._args = args. RESULT self._args]
+            [COMMAND If callobj is not NOTSET, assign self.obj = callobj; otherwise leave self.obj unchanged. RESULT self.obj]
+            [COMMAND Update self.keywords with self.obj.__dict__. RESULT self.keywords]
+            [COMMAND Extend self.own_markers with get_unpacked_marks(self.obj). RESULT self.own_markers]
+            [COMMAND If callspec is truthy, assign self.callspec = callspec. RESULT self.callspec]
+            [COMMAND Within the if callspec block, for each mark in callspec.marks, set self.keywords[mark.name] = mark. RESULT self.keywords]
+            [COMMAND Within the if callspec block, extend self.own_markers with normalize_mark_list(callspec.marks). RESULT self.own_markers]
+            [COMMAND If keywords is truthy, update self.keywords with keywords. RESULT self.keywords]
+            [COMMAND Update self.keywords with {mark.name: True for mark in self.iter_markers() if mark.name not in self.keywords}. RESULT self.keywords]
+            [COMMAND If fixtureinfo is None, assign fixtureinfo = self.session._fixturemanager.getfixtureinfo(self, self.obj, self.cls, funcargs=True). RESULT fixtureinfo]
+            [COMMAND Assign self._fixtureinfo = fixtureinfo. RESULT self._fixtureinfo]
+            [COMMAND Assign self.fixturenames = fixtureinfo.names_closure. RESULT self.fixturenames]
+            [COMMAND Call self._initrequest(). RESULT self]
+            [COMMAND Assign self.originalname = originalname. RESULT self.originalname]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Initializes the instance by setting funcargs to an empty dictionary and assigning _request to a FixtureRequest constructed from self." _initrequest]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.funcargs to a fresh empty dictionary. RESULT self.funcargs]
+            [COMMAND Construct a FixtureRequest instance by calling fixtures.FixtureRequest with self as the argument, and assign that instance to self._request. RESULT self._request]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the underlying Python function object obtained by calling getimfunc with self.obj." function]
+    [INPUTS]
+        <REF> self </REF>: object "The current object; its obj attribute is passed to getimfunc."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: function "The underlying Python function object returned by getimfunc(self.obj)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Pass self.obj as the argument to getimfunc and return the result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Gets the attribute named by self.name from self.parent.obj, after removing any bracketed parametrization suffix from self.name." _getobj]
+    [INPUTS]
+        <REF> self </REF>: object "The object on which _getobj is called; it provides self.name and self.parent.obj."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The value of the attribute on self.parent.obj whose name is self.name, possibly truncated before the first '[' character."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign the value of self.name to local variable name. RESULT name]
+            [COMMAND Find the 0-based index of the first '[' character in name using str.find, and assign it to local variable i; if no '[' exists, i becomes -1. RESULT i]
+            [COMMAND After the conditional truncation step, retrieve the attribute with the name stored in name from self.parent.obj using getattr and return it. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: i is not equal to -1, meaning name contains a '[' character at index i.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Truncate name to the substring from the beginning up to but not including index i by assigning name[:i] to name. RESULT name]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns self unchanged as a compatibility shim for code expecting a pytest-2.2 style request object." _pyfuncitem]
+    [INPUTS]
+        <REF> self </REF>: object "The pytest item instance exposed as a request-compatible object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The same instance, returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return self immediately to the caller. RESULT self]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Executes the underlying test function by invoking the pytest_pyfunc_call hook through self.ihook with pyfuncitem set to self." runtest]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke the pytest_pyfunc_call hook through self.ihook, passing pyfuncitem=self to execute the underlying test function, and discard the returned value. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Calls the parent class setup and then populates fixtures using fixtures.fillfixtures." setup]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Invoke the parent class setup method via super().setup(). RESULT parent_setup_done]
+            [COMMAND Call fixtures.fillfixtures(self) to populate the test fixtures. RESULT fixtures_filled]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+# CLASS FunctionDefinition
+
+[DEFINE_WORKER: "Always raises a RuntimeError stating that function definitions are not supposed to be used." runtest]
+    [INPUTS]
+        <REF> self </REF>: object "The instance on which the method is called; not used by the method."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enter runtest and proceed directly to the unconditional raise statement. RESULT exception_triggered]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: Always, because the method body consists solely of a raise statement.]
+        [LOG "function definitions are not supposed to be used"]
+        [THROW RuntimeError "Raises RuntimeError with the message 'function definitions are not supposed to be used'."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates a property whose getter finds the nearest ancestor pytest node of a dynamically named type and returns that node's underlying Python object, or None if no such ancestor exists." pyobj_property]
+    [INPUTS]
+        <REF> name </REF>: string "Name of a pytest node class attribute, such as 'Module', 'Class', 'Function', or 'Session'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> property_result </REF>: property "A property whose getter returns the underlying Python object of the nearest matching ancestor pytest node, or None if no matching ancestor exists."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested function get(self) that will act as the property getter. RESULT get]
+            [COMMAND Within the body of get(self), resolve the target pytest node type by calling getattr(__import__('pytest'), name). RESULT pytest_node_type]
+            [COMMAND Within the body of get(self), call self.getparent(pytest_node_type) to find the nearest ancestor matching the resolved pytest node type. RESULT node]
+            [COMMAND Within the body of get(self), when node is not None, return node.obj. RESULT node_obj]
+            [COMMAND Build doc by formatting 'python {} object this node was collected from (can be None).' with name.lower() as the replacement value. RESULT doc]
+            [COMMAND Return a property object with get as the getter, None as the setter, None as the deleter, and doc as the documentation string. RESULT property_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: Within the body of get(self), node is None because no matching ancestor pytest node was found.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Fall through the conditional and return None from the getter. RESULT none_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers pytest command-line option flags and ini configuration settings on the provided parser for fixture display and Python test discovery settings." pytest_addoption]
+    [INPUTS]
+        <REF> parser </REF>: object "Pytest parser instance on which the general option group and ini configuration options are registered."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Get the 'general' option group from parser and assign it to group. RESULT group]
+            [COMMAND In the group, add option strings '--fixtures' and '--funcargs' with action 'store_true', destination 'showfixtures', default False, and help text 'show available fixtures, sorted by plugin appearance (fixtures with leading '_' are only shown with '-v')'. RESULT none]
+            [COMMAND In the group, add option string '--fixtures-per-test' with action 'store_true', destination 'show_fixtures_per_test', default False, and help text 'show fixtures per test'. RESULT none]
+            [COMMAND Add ini option 'python_files' to parser with type 'args', default ['test_*.py', '*_test.py'], and help text 'glob-style file patterns for Python test module discovery'. RESULT none]
+            [COMMAND Add ini option 'python_classes' to parser with type 'args', default ['Test'], and help text 'prefixes or glob names for Python test class discovery'. RESULT none]
+            [COMMAND Add ini option 'python_functions' to parser with type 'args', default ['test'], and help text 'prefixes or glob names for Python test function and method discovery'. RESULT none]
+            [COMMAND Add ini option 'disable_test_id_escaping_and_forfeit_all_rights_to_community_support' to parser with type 'bool', default False, and help text 'disable string escape non-ascii characters, might cause unwanted side effects(use at your own risk)'. RESULT none]
+            [COMMAND In the group, add option string '--import-mode' with default 'prepend', choices ['prepend', 'append'], destination 'importmode', and help text 'prepend/append to sys.path when importing test modules, default is to prepend.'. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Displays fixtures or per-test fixtures based on the provided pytest configuration options, returning 0 when either display option is enabled." pytest_cmdline_main]
+    [INPUTS]
+        <REF> config </REF>: object "Pytest configuration object exposing an options attribute with boolean flags showfixtures and show_fixtures_per_test."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: int | None "Returns integer 0 after displaying fixtures or per-test fixtures; otherwise returns None implicitly."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If config.option.showfixtures is truthy, execute the showfixtures alternative flow; otherwise continue. RESULT showfixtures_guard_checked]
+            [COMMAND If config.option.show_fixtures_per_test is truthy, execute the show_fixtures_per_test alternative flow; otherwise continue. RESULT show_fixtures_per_test_guard_checked]
+            [COMMAND Reach the end of pytest_cmdline_main without an explicit return, so return_value becomes None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: config.option.showfixtures is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call showfixtures(config) to display fixture information. RESULT showfixtures_result]
+            [COMMAND Return 0 from pytest_cmdline_main immediately, bypassing all remaining steps. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: config.option.show_fixtures_per_test is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call show_fixtures_per_test(config) to display fixtures for each test. RESULT show_fixtures_per_test_result]
+            [COMMAND Return 0 from pytest_cmdline_main immediately, bypassing all remaining steps. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Verifies that no misspelled parametrize marker is present on the test definition, then applies every correctly spelled parametrize marker to metafunc." pytest_generate_tests]
+    [INPUTS]
+        <REF> metafunc </REF>: Metafunc "Pytest metafunc object for the test function; provides definition and parametrize()."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set alt_spellings to the list ["parameterize", "parametrise", "parameterise"]. RESULT alt_spellings]
+            [COMMAND For each mark_name in alt_spellings, if metafunc.definition.get_closest_marker(mark_name) is truthy, construct msg as "{0} has '{1}' mark, spelling should be 'parametrize'" and call fail(msg.format(metafunc.function.__name__, mark_name), pytrace=False), which raises an exception and aborts the remaining flow. RESULT metafunc]
+            [COMMAND After the spelling-check loop completes without raising, for each marker in metafunc.definition.iter_markers(name="parametrize"), call metafunc.parametrize(*marker.args, **marker.kwargs). RESULT metafunc]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: For a mark_name in alt_spellings ("parameterize", "parametrise", or "parameterise"), metafunc.definition.get_closest_marker(mark_name) returns a truthy marker.]
+        [LOG "Formatted message '{metafunc.function.__name__} has '{mark_name}' mark, spelling should be 'parametrize''"]
+        [THROW Failed "Pytest failure exception raised by fail(..., pytrace=False) to reject the misspelled marker."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Registers the parametrize and usefixtures markers with their documentation descriptions on the pytest configuration object." pytest_configure]
+    [INPUTS]
+        <REF> config </REF>: pytest configuration object "The pytest configuration object used to register marker definitions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call config.addinivalue_line with first argument "markers" and second argument the concatenated string describing the parametrize marker: 'parametrize(argnames, argvalues): call a test function multiple times passing in different arguments in turn. argvalues generally needs to be a list of values if argnames specifies only one name or a list of tuples of values if argnames specifies multiple names. Example: @parametrize('arg1', [1,2]) would lead to two calls of the decorated test function, one with arg1=1 and another with arg1=2.see https://docs.pytest.org/en/latest/parametrize.html for more info and examples.' RESULT registered_parametrize_marker]
+            [COMMAND Call config.addinivalue_line with first argument "markers" and second argument the concatenated string describing the usefixtures marker: 'usefixtures(fixturename1, fixturename2, ...): mark tests as needing all of the specified fixtures. see https://docs.pytest.org/en/latest/fixture.html#usefixtures ' RESULT registered_usefixtures_marker]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Executes a pytest test function by reading the test function and fixture arguments from the pytest item, skipping coroutine/async-generator functions and awaitable/async-iterable results with a warning, and returning True after a successful synchronous call." pytest_pyfunc_call]
+    [INPUTS]
+        <REF> pyfuncitem </REF>: pytest.Function "The pytest item representing the test function; provides obj, funcargs, _fixtureinfo.argnames, and nodeid."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool "Always True when the synchronous test function call completes without being skipped."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Define the nested helper async_warn() that sets msg = 'async def functions are not natively supported and have been skipped.\nYou need to install a suitable plugin for your async framework, for example:\n  - pytest-asyncio\n  - pytest-trio\n  - pytest-tornasync', emits warnings.warn(PytestUnhandledCoroutineWarning(msg.format(pyfuncitem.nodeid))), and then calls skip(msg='async def function and no async plugin installed (see warnings)'). RESULT async_warn]
+            [COMMAND Set testfunction to pyfuncitem.obj. RESULT testfunction]
+            [COMMAND If iscoroutinefunction(testfunction) is true, or if sys.version_info >= (3, 6) is true and inspect.isasyncgenfunction(testfunction) is true, with short-circuit logic at both OR and inner AND, the first alternative flow applies and the normal flow stops because async_warn() calls skip. RESULT void]
+            [COMMAND Set funcargs to pyfuncitem.funcargs. RESULT funcargs]
+            [COMMAND Build testargs as a dictionary comprehension mapping each arg in pyfuncitem._fixtureinfo.argnames to funcargs[arg]. RESULT testargs]
+            [COMMAND Call testfunction(**testargs) and assign the return value to result. RESULT result]
+            [COMMAND If hasattr(result, '__await__') is true or hasattr(result, '__aiter__') is true, with short-circuit OR, the second alternative flow applies and the normal flow stops because async_warn() calls skip. RESULT void]
+            [COMMAND Return True as the final return value. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: iscoroutinefunction(testfunction) is true, or (sys.version_info >= (3, 6) and inspect.isasyncgenfunction(testfunction) is true); the outer OR short-circuits if iscoroutinefunction(testfunction) is true, and the inner AND short-circuits if the version check is false.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call async_warn() to emit PytestUnhandledCoroutineWarning(msg.format(pyfuncitem.nodeid)) and then call skip to mark the test skipped. RESULT void]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: hasattr(result, '__await__') is true or hasattr(result, '__aiter__') is true; the OR short-circuits when __await__ is present.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call async_warn() after the test function has returned to emit the warning and skip the test. RESULT void]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects a .py file as a pytest module when it is an initial path or matches the configured Python file patterns, and returns None otherwise." pytest_collect_file]
+    [INPUTS]
+        <REF> path </REF>: object "The file path object being considered for collection; exposes ext and is passed to the pytest collection hook."
+        <REF> parent </REF>: object "The parent pytest collector/session object providing session, config, and hook proxy access."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object|null "The collection result returned by ihook.pytest_pycollect_makemodule(path=path, parent=parent), or None when the file is skipped."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the file extension from path and store it as ext. RESULT ext]
+            [COMMAND Within the collection decision, determine whether ext is exactly '.py'. If it is not, the file is skipped and None is returned. RESULT is_py_file]
+            [COMMAND Within the ext == '.py' branch, check whether parent.session.isinitpath(path) identifies path as an initial pytest path. RESULT is_initial_path]
+            [COMMAND Within the ext == '.py' branch, when is_initial_path is false, determine whether path_matches_patterns(path, parent.config.getini('python_files') + ['__init__.py']) is true. RESULT matches_patterns]
+            [COMMAND After path passes the selection filters, get the hook proxy from parent.session.gethookproxy(path). RESULT ihook]
+            [COMMAND Return the result of ihook.pytest_pycollect_makemodule(path=path, parent=parent). RESULT collection_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: ext is not '.py']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None without invoking the pytest collection hook. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: ext is '.py', parent.session.isinitpath(path) is false, and path_matches_patterns(path, parent.config.getini('python_files') + ['__init__.py']) is false]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None because the file is not an initial path and does not match the configured Python file patterns. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns True if the given py.path.local path matches at least one glob pattern in the provided patterns list." path_matches_patterns]
+    [INPUTS]
+        <REF> path </REF>: py.path.local "The path object to test; must expose an fnmatch method that accepts a pattern and returns a boolean."
+        <REF> patterns </REF>: Iterable[str] "An iterable of glob patterns to compare against the path. If empty, the method returns False."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True if path matches at least one pattern in patterns; False otherwise, including the empty-pattern case."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each pattern in patterns, lazily calling path.fnmatch(pattern), and stop at the first pattern for which path.fnmatch returns True. RESULT match_found]
+            [COMMAND Return match_found as the boolean result; if no pattern matched or patterns is empty, return False. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns a Package collector when the path basename is exactly '__init__.py', otherwise returns a Module collector for the given path and parent." pytest_pycollect_makemodule]
+    [INPUTS]
+        <REF> path </REF>: object "File path whose basename is checked to determine whether it is a Python package marker file."
+        <REF> parent </REF>: object "Parent collector used when constructing the Package or Module object."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "A Package object if path.basename equals '__init__.py'; otherwise a Module object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether path.basename is exactly equal to the string "__init__.py". RESULT is_package_init]
+            [COMMAND Since is_package_init is false, construct Module(path, parent) and return it. RESULT module_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: is_package_init is true]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Construct Package(path, parent) and return it immediately. RESULT package_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns None unconditionally, indicating that no custom parametrization ID is provided." pytest_make_parametrize_id]
+    [INPUTS]
+        <REF> config </REF>: object "The pytest configuration object."
+        <REF> val </REF>: object "The parameter value for which an ID is requested."
+        <REF> argname </REF>: Optional[str] "Optional parameter name; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: None "Always returns None."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the constant None to the caller as the parametrization ID. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Calls func with the supplied arg when func's positional parameter count is nonzero; otherwise calls func without arguments." _call_with_optional_argument]
+    [INPUTS]
+        <REF> func </REF>: callable "Function to call, either unbound or bound method."
+        <REF> arg </REF>: object "Argument to pass to func if func accepts an argument."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> None </REF>: NoneType "The method does not return a meaningful value; it only performs a call."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the number of positional parameters accepted by func from func.__code__.co_argcount and assign it to arg_count. RESULT arg_count]
+            [COMMAND If inspect.ismethod(func) is true, decrement arg_count by 1 to exclude the implicit self parameter. RESULT arg_count]
+            [COMMAND If arg_count is truthy, call func(arg); otherwise, call func() without arguments. RESULT None]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the first attribute from obj whose name is in names and that exists but is not marked as a fixture, or None if no such attribute is found." _get_first_non_fixture_func]
+    [INPUTS]
+        <REF> obj </REF>: object "Object on which to look up the named attributes."
+        <REF> names </REF>: iterable of str "Ordered names of attributes to check for a non-fixture callable."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object or None "The first matching attribute/method that is not a fixture, or None if no match exists."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Iterate over each name in names in order. RESULT name]
+            [COMMAND Within the for loop over names, retrieve the attribute named name from obj using getattr(obj, name, None) and assign it to meth. RESULT meth]
+            [COMMAND Within the same for loop, evaluate whether meth is not None and fixtures.getfixturemarker(meth) is None. RESULT is_non_fixture_attr]
+            [COMMAND Within the same for loop, if is_non_fixture_attr is true, return meth immediately as the function result. RESULT returned_attr]
+            [COMMAND After the for loop completes without returning, return None implicitly. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns whether obj has a truthy __init__ attribute that is not object.__init__, with an implicit None result when there is no truthy __init__." hasinit]
+    [INPUTS]
+        <REF> obj </REF>: object "The object whose __init__ attribute is inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool or None "True if obj has a truthy __init__ not equal to object.__init__; False if it has a truthy __init__ equal to object.__init__; None if init is falsy, typically because no __init__ attribute was found."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the __init__ attribute of obj using getattr(obj, "__init__", None) and store it in init. RESULT init]
+            [COMMAND Evaluate whether init is truthy. RESULT init_is_truthy]
+            [COMMAND If init is truthy, return the result of the inequality comparison init != object.__init__. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: init is falsy, which most commonly means getattr returned None because no __init__ attribute exists.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Reach the end of the function and return None. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether obj exposes a truthy __new__ attribute that is distinct from object.__new__, returning True or False, or None when no usable __new__ attribute is present." hasnew]
+    [INPUTS]
+        <REF> obj </REF>: object "The object or class whose __new__ attribute is inspected."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: bool or None "True if a truthy __new__ exists and is not object.__new__; False if it is equal to object.__new__; None if __new__ is absent or falsy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Retrieve the __new__ attribute from obj, defaulting to None if the attribute does not exist. RESULT new]
+            [COMMAND Evaluate the truthiness of new to select the appropriate branch. RESULT new_is_truthy]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: new is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compare new with object.__new__ for inequality. RESULT is_distinct_new]
+            [COMMAND Return is_distinct_new as the function result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: new is falsy or None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return None implicitly as the function result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines the narrowest fixture scope for a parametrized call when all arguments are indirect fixtures, otherwise returns 'function'." _find_parametrized_scope]
+    [INPUTS]
+        <REF> argnames </REF>: list | tuple "Names of the parametrized arguments for the call."
+        <REF> arg2fixturedefs </REF>: dict | None "Mapping from fixture argument names to lists of fixture definitions; may be None or empty when no fixture definitions are available."
+        <REF> indirect </REF>: bool | list | tuple "Boolean flag or list/tuple of argument names indicating which arguments are indirect fixtures."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> scope </REF>: str "The narrowest fixture scope selected from used fixtures, or 'function' when no fixture-based scope applies."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import scopes from _pytest.fixtures. RESULT scopes]
+            [COMMAND Determine whether all arguments are fixtures: if indirect is a list or tuple, set all_arguments_are_fixtures to whether len(indirect) equals len(argnames); otherwise set all_arguments_are_fixtures to bool(indirect). RESULT all_arguments_are_fixtures]
+            [COMMAND Evaluate all_arguments_are_fixtures; if it is false, skip the fixture-scope selection steps and go directly to the final return of 'function'. RESULT all_arguments_are_fixtures]
+            [COMMAND Inside the all_arguments_are_fixtures true branch, set fixturedefs to arg2fixturedefs if arg2fixturedefs is truthy, otherwise set it to an empty dictionary. RESULT fixturedefs]
+            [COMMAND Inside the all_arguments_are_fixtures true branch, build used_scopes by collecting fixturedef[0].scope for each name/fixturedef pair in fixturedefs.items() where name is in argnames. RESULT used_scopes]
+            [COMMAND Inside the all_arguments_are_fixtures true branch, if used_scopes is non-empty, iterate over scopes in reversed order and return the first scope that appears in used_scopes. RESULT selected_scope]
+            [COMMAND After the all_arguments_are_fixtures true branch, or after a fixture-scope search that did not return a value, return the string 'function'. RESULT scope]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the original val when the configuration indicates that test ID escaping should be disabled, otherwise returns ascii_escaped(val), and treats a missing config as not disabling escaping." _ascii_escaped_by_config]
+    [INPUTS]
+        <REF> val </REF>: object "The value to either return unchanged or ASCII-escape based on the configuration."
+        <REF> config </REF>: object or None "The configuration object used to read the disable_test_id_escaping_and_forfeit_all_rights_to_community_support option; None disables the option lookup."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object "The original val if escape_option is truthy, otherwise the ASCII-escaped representation of val."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether config is None using an identity comparison. RESULT config_is_none]
+            [COMMAND Assign a value to escape_option based on whether config is None. RESULT escape_option]
+            [COMMAND Evaluate the truthiness of escape_option. RESULT escape_option_is_truthy]
+            [COMMAND Return val unchanged if escape_option_is_truthy is true, otherwise return ascii_escaped(val). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: config is None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the config-is-None branch, set escape_option to False. RESULT escape_option]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: config is not None]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the config-is-not-None branch, call config.getini("disable_test_id_escaping_and_forfeit_all_rights_to_community_support") and assign the returned value to escape_option. RESULT escape_option]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: escape_option is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the escape_option-is-truthy branch, return val unchanged. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: escape_option is falsy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the escape_option-is-falsy branch, return ascii_escaped(val). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Determines a stable string identifier for a pytest parameter value by first consulting an optional id-generating function or pytest configuration hook, then falling back to type-based string conversion and finally to a positional name-index concatenation." _idval]
+    [INPUTS]
+        <REF> val </REF>: object "Parameter value whose id string is being determined."
+        <REF> argname </REF>: str "Name of the parameter, used in error messages and the final fallback id."
+        <REF> idx </REF>: int "Position of the parameter, used in error messages and the final fallback id."
+        <REF> idfn </REF>: callable or None "Optional callback that may generate a custom id from val."
+        <REF> item </REF>: object "Test item exposing nodeid for error messages."
+        <REF> config </REF>: object or None "Pytest configuration object used to invoke the pytest_make_parametrize_id hook."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Computed id string returned by the method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate the initial conditional block: if idfn is truthy, enter alternative_flows[0]; if idfn is falsy and config is truthy, enter alternative_flows[1]. If execution reaches past the idfn/config block without an early return or exception, continue to the type-based fallback conversion. RESULT initial_id_block_done]
+            [COMMAND In the post-branch fallback, if isinstance(val, STRING_TYPES) is true, return _ascii_escaped_by_config(val, config). RESULT escaped_string_result]
+            [COMMAND Else if val is None or isinstance(val, (float, int, bool)) is true, return str(val). RESULT primitive_str_result]
+            [COMMAND Else if isinstance(val, REGEX_TYPE) is true, return ascii_escaped(val.pattern). RESULT regex_escaped_result]
+            [COMMAND Else if isinstance(val, enum.Enum) is true, return str(val). RESULT enum_str_result]
+            [COMMAND Else if (inspect.isclass(val) or inspect.isfunction(val), using short-circuit or) and hasattr(val, "__name__") is true, return val.__name__. RESULT callable_name_result]
+            [COMMAND If none of the above type-based branches matched, return str(argname) + str(idx). RESULT positional_fallback_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: idfn is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the if idfn branch, call idfn(val) inside the try block and assign the returned value to generated_id. RESULT generated_id]
+            [COMMAND Within the same branch, if generated_id is not None, set val to generated_id. RESULT val]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: idfn is falsy and config is truthy]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Within the elif config branch, call config.hook.pytest_make_parametrize_id(config=config, val=val, argname=argname) and assign the result to hook_id. RESULT hook_id]
+            [COMMAND If hook_id is truthy, return hook_id immediately. RESULT hook_id_returned]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: idfn is truthy and calling idfn(val) raises an Exception, excluding BaseException subclasses such as KeyboardInterrupt or SystemExit.]
+        [LOG "Reports that an error was raised while trying to determine the id of the parameter at the given position, including item.nodeid, argname, and idx in the formatted message."]
+        [THROW ValueError "ValueError raised with the formatted message, with the original idfn exception chained via 'from e'."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the identifier for a parameter set by preferring an explicit parameterset.id, otherwise generating a hyphen-joined id from its values when ids is unavailable at idx, and otherwise returning the ASCII-escaped existing ids[idx]." _idvalset]
+    [INPUTS]
+        <REF> idx </REF>: integer "Index into the ids list for the current parameter set."
+        <REF> parameterset </REF>: object "Parameter set containing an optional explicit id and a values collection."
+        <REF> argnames </REF>: array of strings "Argument names paired with parameterset.values for generated id parts."
+        <REF> idfn </REF>: callable "Function passed to _idval to compute each generated id component."
+        <REF> ids </REF>: array of strings or null "Existing identifier list, or null when no precomputed identifiers are available."
+        <REF> item </REF>: object "Context item passed through to _idval during id generation."
+        <REF> config </REF>: object "Configuration used by id generation and ASCII escaping."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> resolved_id </REF>: string "The final identifier string returned by the method."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether parameterset.id is not None. RESULT has_explicit_id]
+            [COMMAND If has_explicit_id is true, return parameterset.id as the resolved identifier immediately. RESULT resolved_id]
+            [COMMAND Check whether a generated id is required: ids is None, or idx is out of range (idx >= len(ids)), or ids[idx] is None, evaluated in short-circuit order. RESULT need_generated_id]
+            [COMMAND If need_generated_id is true, for each val, argname pair in zip(parameterset.values, argnames), call _idval(val, argname, idx, idfn, item=item, config=config) and collect the result. RESULT id_parts]
+            [COMMAND Join id_parts with '-' and return the joined string as the resolved identifier. RESULT resolved_id]
+            [COMMAND If need_generated_id is false, return _ascii_escaped_by_config(ids[idx], config) as the resolved identifier. RESULT resolved_id]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Generates a list of IDs from parameter sets by calling _idvalset for each set, then disambiguates any duplicate IDs by appending occurrence counters." idmaker]
+    [INPUTS]
+        <REF> argnames </REF>: list "Argument names passed through to _idvalset when generating each ID."
+        <REF> parametersets </REF>: list "List of parameter sets; each set is passed to _idvalset with its zero-based index."
+        <REF> idfn </REF>: callable "Optional ID function passed through to _idvalset; defaults to None."
+        <REF> ids </REF>: list "Optional previous ID list passed as the old ids context to _idvalset; defaults to None."
+        <REF> config </REF>: object "Optional configuration object passed through to _idvalset; defaults to None."
+        <REF> item </REF>: object "Optional item object passed through to _idvalset; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> ids </REF>: list "The final list of generated IDs, with duplicate entries renamed in place to be unique."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enumerate parametersets and, for each (valindex, parameterset) pair, call _idvalset(valindex, parameterset, argnames, idfn, ids, config=config, item=item), using the old ids value as the context; collect all results in order and bind the completed list to ids. If parametersets is empty, ids becomes []. RESULT ids]
+            [COMMAND If len(set(ids)) != len(ids), meaning ids contains duplicate values, enter the duplicate-handling block; otherwise skip the following duplicate-handling steps. RESULT duplicate_ids_present]
+            [COMMAND Within the duplicate-handling block, build duplicates as a list of every testid from ids for which ids.count(testid) > 1. RESULT duplicates]
+            [COMMAND Within the duplicate-handling block, initialize a Counter to track how many times each duplicate testid has already been processed. RESULT counters]
+            [COMMAND Within the duplicate-handling block, for each index, testid in enumerate(ids), if testid is in duplicates, replace ids[index] with testid concatenated with str(counters[testid]), then increment counters[testid]; this renames the first duplicate occurrence as testid + '0', the second as testid + '1', and so on. RESULT ids]
+            [COMMAND Return the final ids list. RESULT ids]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Imports wrap_session from _pytest.main and returns the result of calling wrap_session(config, _show_fixtures_per_test)." show_fixtures_per_test]
+    [INPUTS]
+        <REF> config </REF>: object "Pytest configuration object passed to wrap_session."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> return_value </REF>: object "The result returned by wrap_session(config, _show_fixtures_per_test)."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import wrap_session from the _pytest.main module RESULT wrap_session]
+            [COMMAND Call wrap_session with config as the first argument and _show_fixtures_per_test as the second argument RESULT wrapped_result]
+            [COMMAND Return wrapped_result RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects the given pytest session and, for each collected test item, prints a formatted list of the fixtures it uses, including source paths and docstrings when verbose mode is enabled." _show_fixtures_per_test]
+    [INPUTS]
+        <REF> config </REF>: object "Pytest configuration object used to create the terminal writer and to read the verbose option."
+        <REF> session </REF>: object "Pytest session whose collected items are inspected for fixture usage."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the _pytest.config module so create_terminal_writer is available as _pytest.config.create_terminal_writer. RESULT _pytest]
+            [COMMAND Call session.perform_collect() to ensure all test items are collected before display. RESULT none]
+            [COMMAND Set curdir to py.path.local(), representing the current working directory. RESULT curdir]
+            [COMMAND Set tw to _pytest.config.create_terminal_writer(config), creating the terminal writer used for all output. RESULT tw]
+            [COMMAND Set verbose to config.getvalue("verbose"), the integer pytest verbosity level. RESULT verbose]
+            [COMMAND Define helper function get_best_relpath(func): call getlocation(func, curdir) to obtain loc, then return curdir.bestrelpath(loc). RESULT get_best_relpath]
+            [COMMAND Define helper function write_fixture(fixture_def): set argname = fixture_def.argname. If verbose <= 0 and argname.startswith("_"), return immediately. If verbose > 0, set bestrel = get_best_relpath(fixture_def.func) and funcargspec = "{} -- {}".format(argname, bestrel); otherwise set funcargspec = argname. Call tw.line(funcargspec, green=True). Set fixture_doc = fixture_def.func.__doc__. If fixture_doc is truthy, call write_docstring(tw, fixture_doc); otherwise call tw.line("    no docstring available", red=True). RESULT write_fixture]
+            [COMMAND Define helper function write_item(item): try to set info = item._fixtureinfo; on AttributeError, treat the item as a doctest item and return silently. If info.name2fixturedefs is empty, return. Call tw.line(), then tw.sep("-", "fixtures used by {}".format(item.name)), then tw.sep("-", "({})".format(get_best_relpath(item.function))). For each _, fixturedefs in sorted(info.name2fixturedefs.items()), assert fixturedefs is not None, skip empty fixturedefs lists, and call write_fixture(fixturedefs[-1]) to display the last fixture definition for the test item. RESULT write_item]
+            [COMMAND For each session_item in session.items, call write_item(session_item). RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During the loop over sorted(info.name2fixturedefs.items()) inside write_item, when fixturedefs is None.]
+        [LOG "AssertionError raised because the assertion 'fixturedefs is not None' failed."]
+        [THROW AssertionError "Raised by the explicit assertion that each fixture name maps to a non-None list of fixture definitions."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Imports wrap_session from _pytest.main, invokes it with the supplied config and the _showfixtures_main callback, and returns the result." showfixtures]
+    [INPUTS]
+        <REF> config </REF>: object "Pytest configuration object used to set up and run the session."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: integer "Value returned by wrap_session(config, _showfixtures_main), typically the session exit status."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import wrap_session from _pytest.main. RESULT wrap_session]
+            [COMMAND Call wrap_session with the given config and _showfixtures_main as arguments. RESULT session_result]
+            [COMMAND Return session_result. RESULT session_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Collects and deduplicates pytest fixture definitions from the session fixture manager, sorts them, and prints a formatted terminal listing with module headers, scope annotations, source paths, and docstrings, omitting underscore-prefixed fixtures unless verbose mode is enabled." _showfixtures_main]
+    [INPUTS]
+        <REF> config </REF>: pytest.Config "Pytest configuration object used to create the terminal writer and to read the verbose option."
+        <REF> session </REF>: pytest.Session "Active pytest session whose fixture manager is inspected; perform_collect() is called before scanning."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Import the _pytest.config module. RESULT _pytest]
+            [COMMAND Call session.perform_collect() to ensure test collection has occurred. RESULT session]
+            [COMMAND Create curdir by calling py.path.local() with no arguments to represent the current working directory. RESULT curdir]
+            [COMMAND Create tw by calling _pytest.config.create_terminal_writer(config). RESULT tw]
+            [COMMAND Read the verbose value by calling config.getvalue("verbose") and store it as verbose. RESULT verbose]
+            [COMMAND Retrieve the fixture manager from session._fixturemanager and store it as fm. RESULT fm]
+            [COMMAND Initialize available as an empty list. RESULT available]
+            [COMMAND Initialize seen as an empty set. RESULT seen]
+            [COMMAND Begin the outer loop over each argname and fixturedefs pair in fm._arg2fixturedefs.items(). RESULT argname, fixturedefs]
+            [COMMAND Within the outer loop, assert that fixturedefs is not None; if the assertion fails, stop with AssertionError. RESULT none]
+            [COMMAND Within the outer loop, if fixturedefs is empty, continue to the next argname. RESULT none]
+            [COMMAND Within the outer loop, begin the inner loop over each fixturedef in fixturedefs. RESULT fixturedef]
+            [COMMAND Within the inner loop, compute loc = getlocation(fixturedef.func, curdir). RESULT loc]
+            [COMMAND Within the inner loop, if (fixturedef.argname, loc) is already in seen, continue to the next fixturedef. RESULT none]
+            [COMMAND Within the inner loop, add (fixturedef.argname, loc) to seen. RESULT seen]
+            [COMMAND Within the inner loop, append the tuple (len(fixturedef.baseid), fixturedef.func.__module__, curdir.bestrelpath(loc), fixturedef.argname, fixturedef) to available. RESULT available]
+            [COMMAND Sort available in-place; Python's tuple ordering is primarily by len(fixturedef.baseid), then module, bestrelpath, argname, and fixturedef. RESULT available]
+            [COMMAND Set currentmodule to None. RESULT currentmodule]
+            [COMMAND Begin the final loop over each tuple (baseid, module, bestrel, argname, fixturedef) in available. RESULT baseid, module, bestrel, argname, fixturedef]
+            [COMMAND Within the final loop, if currentmodule != module and module does not start with "_pytest.", write a blank line, write the separator "fixtures defined from {module}", and set currentmodule = module; if module starts with "_pytest.", do not write a header and leave currentmodule unchanged. RESULT currentmodule]
+            [COMMAND Within the final loop, if verbose <= 0 and argname[0] == "_", continue to the next tuple; due to short-circuit evaluation, argname[0] is only checked when verbose <= 0. RESULT none]
+            [COMMAND Within the final loop, write argname to tw with green=True. RESULT tw]
+            [COMMAND Within the final loop, if fixturedef.scope != "function", write " [%s scope]" % fixturedef.scope to tw with cyan=True. RESULT tw]
+            [COMMAND Within the final loop, if verbose > 0, write " -- %s" % bestrel to tw with yellow=True. RESULT tw]
+            [COMMAND Within the final loop, write a newline to tw. RESULT tw]
+            [COMMAND Within the final loop, recompute loc = getlocation(fixturedef.func, curdir). RESULT loc]
+            [COMMAND Within the final loop, set doc = fixturedef.func.__doc__ or "". RESULT doc]
+            [COMMAND Within the final loop, if doc is truthy, call write_docstring(tw, doc). RESULT tw]
+            [COMMAND Within the final loop, if doc is falsy, write "    {loc}: no docstring available" to tw with red=True. RESULT tw]
+            [COMMAND Within the final loop, write a blank line to tw. RESULT tw]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: During the outer loop over fm._arg2fixturedefs.items(), when the value fixturedefs is None.]
+        [LOG "Assertion failed: fixturedefs is not None while iterating fixture manager entries."]
+        [THROW AssertionError "Raised because every fixturedefs entry in the fixture manager must be a non-None collection."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Normalizes a docstring by stripping trailing whitespace, isolating its first line, and writing that first line plus the dedented remaining lines with a configurable indentation prefix to a text writer." write_docstring]
+    [INPUTS]
+        <REF> tw </REF>: TextWriter "Writer object with line() and write() methods that receives the formatted docstring output."
+        <REF> doc </REF>: str "Docstring text to be normalized and written."
+        <REF> indent </REF>: str "Indentation prefix to prepend to each written line; defaults to four spaces."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Strip trailing whitespace from doc and store the result back in doc. RESULT doc]
+            [COMMAND If doc contains a newline, split doc at the first newline into firstline and rest; otherwise set firstline to the entire stripped doc and rest to an empty string. RESULT firstline, rest]
+            [COMMAND If firstline.strip() is non-empty, call tw.line with the concatenation of indent and firstline.strip(). RESULT tw]
+            [COMMAND If rest is non-empty, dedent rest and split the resulting text on newline characters into dedented_lines. RESULT dedented_lines]
+            [COMMAND Within the if rest is non-empty block, for each line in dedented_lines, call tw.write with the concatenation of indent, line, and a newline character. RESULT tw]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

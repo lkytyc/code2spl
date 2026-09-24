@@ -1,0 +1,190 @@
+class Words2Numbers:
+    def __init__(self):
+        self.numwords = {}
+        self.numwords["zero"] = 0
+        self.numwords["one"] = 1
+        self.numwords["two"] = 2
+        self.numwords["three"] = 3
+        self.numwords["four"] = 4
+        self.numwords["five"] = 5
+        self.numwords["six"] = 6
+        self.numwords["seven"] = 7
+        self.numwords["eight"] = 8
+        self.numwords["nine"] = 9
+        self.numwords["ten"] = 10
+        self.numwords["eleven"] = 11
+        self.numwords["twelve"] = 12
+        self.numwords["thirteen"] = 13
+        self.numwords["fourteen"] = 14
+        self.numwords["fifteen"] = 15
+        self.numwords["sixteen"] = 16
+        self.numwords["seventeen"] = 17
+        self.numwords["eighteen"] = 18
+        self.numwords["nineteen"] = 19
+        self.numwords["twenty"] = 20
+        self.numwords["thirty"] = 30
+        self.numwords["forty"] = 40
+        self.numwords["fifty"] = 50
+        self.numwords["sixty"] = 60
+        self.numwords["seventy"] = 70
+        self.numwords["eighty"] = 80
+        self.numwords["ninety"] = 90
+        self.numwords["hundred"] = 100
+        self.numwords["thousand"] = 1000
+        self.numwords["million"] = 1000000
+        self.numwords["billion"] = 1000000000
+        self.numwords["trillion"] = 1000000000000
+        self.numwords["and"] = 0
+
+        self.ordinal_words = {
+            "first": 1,
+            "second": 2,
+            "third": 3,
+            "fourth": 4,
+            "fifth": 5,
+            "sixth": 6,
+            "seventh": 7,
+            "eighth": 8,
+            "ninth": 9,
+            "tenth": 10,
+            "eleventh": 11,
+            "twelfth": 12,
+            "thirteenth": 13,
+            "fourteenth": 14,
+            "fifteenth": 15,
+            "sixteenth": 16,
+            "seventeenth": 17,
+            "eighteenth": 18,
+            "nineteenth": 19,
+            "twentieth": 20,
+            "thirtieth": 30,
+            "fortieth": 40,
+            "fiftieth": 50,
+            "sixtieth": 60,
+            "seventieth": 70,
+            "eightieth": 80,
+            "ninetieth": 90,
+            "hundredth": 100,
+            "thousandth": 1000,
+            "millionth": 1000000,
+            "billionth": 1000000000,
+            "trillionth": 1000000000000
+        }
+
+        self.ordinal_suffixes = ["th", "st", "nd", "rd"]
+
+    def _strip_ordinal_suffix(self, word):
+        for suffix in self.ordinal_suffixes:
+            if word.endswith(suffix):
+                base = word[:-len(suffix)]
+                if base in self.numwords:
+                    return base
+        return None
+
+    def _is_number_word(self, word):
+        if word in self.numwords:
+            return True
+        if word in self.ordinal_words:
+            return True
+        if self._strip_ordinal_suffix(word):
+            return True
+        return False
+
+    def text2int(self, text):
+        text = text.replace("-", " ")
+        words = text.split()
+        result = []
+        current = 0
+        total = 0
+
+        for word in words:
+            if word in self.ordinal_words:
+                value = self.ordinal_words[word]
+                if value >= 100:
+                    if current == 0:
+                        current = 1
+                    current *= value
+                    if value > 100:
+                        total += current
+                        current = 0
+                else:
+                    current += value
+                continue
+
+            base = self._strip_ordinal_suffix(word)
+            if base:
+                value = self.numwords[base]
+                if value >= 100:
+                    if current == 0:
+                        current = 1
+                    current *= value
+                    if value > 100:
+                        total += current
+                        current = 0
+                else:
+                    current += value
+                continue
+
+            if word in self.numwords:
+                value = self.numwords[word]
+                if value == 0:
+                    continue
+                if value >= 100:
+                    if current == 0:
+                        current = 1
+                    current *= value
+                    if value > 100:
+                        total += current
+                        current = 0
+                else:
+                    current += value
+            else:
+                if current != 0 or total != 0:
+                    result.append(str(total + current))
+                    total = 0
+                    current = 0
+                result.append(word)
+
+        if current != 0 or total != 0:
+            result.append(str(total + current))
+
+        return " ".join(result)
+
+    def is_valid_input(self, text):
+        text = text.replace("-", " ")
+        words = text.split()
+        for word in words:
+            if not self._is_number_word(word):
+                return False
+        return True
+
+import unittest
+
+class Words2NumbersTestIsValidInput(unittest.TestCase):
+    def test_is_valid_input(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("twenty-five thousand three hundred and forty-two"))
+
+    def test_is_valid_input2(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("second hundred and third"))
+
+    def test_is_valid_input3(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("twenty-fifth thousand three hundred and forty-second"))
+
+    def test_is_valid_input4(self):
+        w2n = Words2Numbers()
+        self.assertFalse(w2n.is_valid_input("eleventy thousand and five"))
+
+    def test_is_valid_input5(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("seventy two thousand and hundred eleven"))
+
+    def test_is_valid_input6(self):
+        w2n = Words2Numbers()
+        self.assertTrue(w2n.is_valid_input("fifteenth hundred"))
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

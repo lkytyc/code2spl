@@ -1,0 +1,215 @@
+Task:
+Reconstruct one complete executable Python class from the SPL input.
+
+SPL Concept:
+- SPL is the only program representation in this condition.
+- SPL is a code-derived structured natural-language view of a class.
+- Each inline card has a `### Function:` header followed by that method's `[DEFINE_WORKER]` block.
+- `[INPUTS]` and `[OUTPUTS]` describe contracts.
+- `[COMMAND]`, `[CONDITION]`, `[RETURN]`, `[ALTERNATIVE_FLOW]`, and `[EXCEPTION_FLOW]` describe implementation checkpoints.
+- `<SPL>name</SPL>` references another method with its own worker block.
+- `<REF>name</REF>` marks a variable, parameter, field, or intermediate value reference.
+
+SPL Reconstruction Workflow:
+Step 1: Scan all `[DEFINE_WORKER]` blocks to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `self.<name>` references and COMMAND RESULT values;
+- method contracts from `[INPUTS]` and `[OUTPUTS]`;
+- call graph from `<SPL>` references;
+- data flow from `<REF>` references and COMMAND RESULT values;
+- branch and exception behavior from alternative and exception flows.
+
+Step 3: Implement each method from its checkpoints:
+- main flow becomes the normal statement order;
+- alternative flows become conditional branches when their condition is supported;
+- exception flows become try/except or explicit raise only when required;
+- referenced values become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the SPL contract.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by SPL.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+SPL Input:
+
+### Function: `Server.__init__`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Initialize the instance with empty default containers for the whitelist, send structure, and receive structure." __init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Assign an empty list to self.white_list. RESULT self.white_list]
+            [COMMAND Assign an empty dictionary to self.send_struct. RESULT self.send_struct]
+            [COMMAND Assign an empty dictionary to self.receive_struct. RESULT self.receive_struct]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `Server.add_white_list`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Checks whether an address is already in the whitelist, returns False for duplicates, and otherwise appends the address and returns the updated whitelist." add_white_list]
+    [INPUTS]
+        <REF> addr </REF>: object "The address value to check for membership in the whitelist and append if it is not already present."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool_or_list "Returns False if the address is already in the whitelist; otherwise returns the updated whitelist after appending the address."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether addr is already present in self.white_list. RESULT addr_in_white_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: addr is already present in self.white_list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False immediately without modifying self.white_list. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: addr is not present in self.white_list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Append addr to self.white_list. RESULT updated_white_list_state]
+            [COMMAND Return self.white_list after the append operation. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `Server.del_white_list`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Removes an address from the whitelist when present and returns the updated whitelist, otherwise returns False." del_white_list]
+    [INPUTS]
+        <REF> self </REF>: object "Instance containing the whitelist collection."
+        <REF> addr </REF>: any "Address value to remove if it exists in the whitelist."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool or collection "False if the address is absent; otherwise the updated whitelist after removal."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether addr is present in self.white_list. RESULT membership_check]
+            [COMMAND If addr is not present, return False immediately. RESULT false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: addr is present in self.white_list]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Remove addr from self.white_list. RESULT self.white_list]
+            [COMMAND Return the updated self.white_list. RESULT self.white_list]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `Server.recv`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Validates an input mapping, rejects malformed or non-whitelisted senders, stores the received address and content, and returns the content on success." recv]
+    [INPUTS]
+        <REF> info </REF>: dict "Input mapping expected to contain the keys 'addr' and 'content'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: int|bool|any "Returns -1 for invalid input structure, False for non-whitelisted addresses, or the received content for allowed addresses."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether info is a dictionary and contains both required keys 'addr' and 'content'; if not, return -1 immediately. RESULT early_reject]
+            [COMMAND Extract addr from info['addr'] and content from info['content']. RESULT addr, content]
+            [COMMAND If addr is not present in self.white_list, return False without modifying state. RESULT rejected]
+            [COMMAND Otherwise, store {'addr': addr, 'content': content} in self.receive_struct and return self.receive_struct['content']. RESULT receive_struct]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: info is not a dict, or info is missing 'addr', or info is missing 'content'.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return -1 as a malformed-input signal. RESULT invalid_input]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: addr is not in self.white_list.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return False as a whitelist rejection. RESULT blocked]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `Server.send`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Validate that the input is a dictionary containing addr and content, then store those two fields in self.send_struct without modification." send]
+    [INPUTS]
+        <REF> info </REF>: dict "Input dictionary expected to contain addr and content."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: str "Returns an error message string when the input structure is invalid; otherwise updates internal state and returns nothing."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether info is a dictionary and contains both addr and content keys. RESULT validation_passed]
+            [COMMAND If the validation fails, return the message "info structure is not correct" immediately. RESULT error_message]
+            [COMMAND Create a new dictionary for self.send_struct with addr copied from info["addr"] and content copied from info["content"]. RESULT self.send_struct]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+
+---
+### Function: `Server.show`
+
+**SPL (source-derived behavior checkpoints for this function; map them back to source before using them):**
+[DEFINE_WORKER: "Returns the matching stored structure for the given type value, using send and receive cases with False as the fallback." show]
+    [INPUTS]
+        <REF> self </REF>: object "Instance holding the send_struct and receive_struct attributes"
+        <REF> type </REF>: string "Selector value used to choose which structure to return"
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object|boolean "send_struct for send, receive_struct for receive, otherwise False"
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether type equals "send". RESULT condition_send]
+            [COMMAND If the send condition is true, return self.send_struct immediately. RESULT return_self_send_struct]
+            [COMMAND Otherwise check whether type equals "receive". RESULT condition_receive]
+            [COMMAND If the receive condition is true, return self.receive_struct immediately. RESULT return_self_receive_struct]
+            [COMMAND If neither condition matches, return False. RESULT return_false]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+

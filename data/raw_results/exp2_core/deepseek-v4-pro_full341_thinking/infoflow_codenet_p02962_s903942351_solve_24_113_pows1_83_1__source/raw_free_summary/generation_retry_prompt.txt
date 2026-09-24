@@ -1,0 +1,412 @@
+FINAL-SUBMISSION RETRY. The previous call exhausted its reasoning budget without a visible answer. Perform only the minimum remaining verification, then emit the exact JSON object required by the task. Do not provide analysis, prose, or markdown. Never return an empty response.
+
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Please perform a **static** analysis of “information flow” on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+## 1. Information Flow Definition
+
+An **information flow** from variable `x` to variable `y`, written `x -> y`, exists whenever information stored in `x` is transferred to or used to derive information transferred to `y`. 
+
+We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` is **defined or updated** at `lineNumber`.
+
+
+### Types of Direct Flows
+
+- **Direct Explicit Flow**  
+  A direct explicit flow occurs when the value written by one variable instance is directly used in computing the value of another, through operations like assignments.
+
+  Formally, if `(varA, lineA)` writes a value and `(varB, lineB)` reads that value to compute its own, then there is a **direct explicit flow** from `(varA, lineA)` to `(varB, lineB)`, written as: `(varA,lineA) -> (varB,lineB)`. 
+
+
+  **Example 1**:
+    ```
+    1  x = 5
+    2  y = x + 1
+    ```
+    `(x,1) -> (y,2)` is a direct explicit flow.
+
+
+  **Example 2**:
+    ```
+    1  x = 5
+    2  if cond:
+    3      y = x + 1
+    ```
+    `(x,1) -> (y,3)` is a direct explicit flow. 
+
+    Under static analysis, we treat **each conditional or loop as potentially taking any outcome**, and we **do not perform semantic pruning**. Therefore, even if the statement at line 3 is conditionally executed, we still recognize `(x,1)` as used to compute `(y,3)`.
+    
+
+
+- **Direct Implicit Flow**
+
+  A direct implicit flow from `(varA,lineA)` to `(varB, lineB)` occurs when `(varA,lineA)`’s value directly influences whether `lineB` executes. In other words, it corresponds to a **direct control dependence**, where the condition has **at least one branch** where `(varB, lineB)` must run and another where it may not. All conditional structures (e.g., if, while, for, switch, etc.) generate these flows.
+
+  Formally, if `(varA,lineA)` is **directly read** in a condition at `lineC` and that condition **directly** decides whether `lineB` executes, then we say there is an **direct implicit flow** from `(varA,lineA)` to `(varB,lineB)` (or `(varA,lineA) -> (varB,lineB)`).
+
+  **Example**:
+  ```
+  1  z = x + 5
+  2  if z > 1:
+  3      y = 10
+  ```
+  `(z,1) -> (z,2)* -> (y,3)` is a direct implicit flow through the condition at line 2. Line 2 is a conditional statement and the value of `(z,2)*` here is not redefined, therefore marked with "*".
+  
+  The asterisk * indicates that the variable is used for the conditional statement but not redefined at that line (e.g., used in a condition).
+
+
+
+### Information Flow Between Variables
+
+An **information flow** exists from a variable `(varA, lineA)` to another variable `(varB, lineB)` if there is a **transitive chain of direct flows** — explicit, implicit, or both — connecting them.
+
+That is, there exists a sequence of variables:
+`(varA, lineA) -> ... -> (varB, lineB)`
+
+
+
+## 2. **Output Format**  
+
+When asked "Which variable instances have information flow over `(targetVar, targetLine)`? List all such variables.", respond:, respond with a JSON object:
+
+```json
+   {
+    "InfomationFlowSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+If you believe there is no variables have information flow on `(targetVar, targetLine)`, respond:
+
+```json
+{
+  "InfomationFlowSources": false
+}
+```
+
+
+## 3. **Intraprocedural Data Dependence**  
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+
+## 4. **Example Code Snippet**:
+
+
+### Example 1
+```python
+1  def example_func():
+2      status = 0
+3      flag = False
+4      balance = 1000
+5      balance += 500
+6      if balance > 1000:
+7          status = 1
+8          flag = True
+9      limit = status * 5000
+10     transaction = limit * 0.2
+11     return flag
+```
+
+#### Example Question 1.1:
+Which variable instances have information flow over `(transaction,10)`? List all such variables.
+
+
+**Analysis**:
+- Line 10: `(transaction,10)` reads `limit`, so there is a direct explicit flow from `(limit,9)` to `(transaction,10)`. 
+- Line 9: `(limit,9)` reads `status`, so there is a direct explicit flow from `(status,7)` (or `(status,2)`) to `(limit,9)`. 
+- Line 7: `(status,7)` is updated only if line 6’s condition is true, so has a direct control dependence on line 6.
+- Line 6: checks `balance > 1000`, reads from `(balance,5)`, so there is a direct implicit flow from `(balance,5)` to `(status,7)` through `balance` at line 6.
+- Line 5: `(balance,5)` reads from `(balance,4)`, so there is a direct explicit flow from `(balance,4)` to `(balance,5)`.
+- Line 4: `(balance,4)` initializes the variable balance.
+  
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["limit", 9],
+      ["status", 2],
+      ["status", 7],
+      ["balance", 4],
+      ["balance", 5],
+    ]
+   }
+```
+
+ 
+#### Example Question 1.2
+Which variable instances have information flow over `(flag,3)`? List all such variables.
+
+**Analysis**
+Line 3 initializes `flag` without any data dependency or control dependency. 
+
+
+**Output**:
+```json
+{
+  "InfomationFlowSources": []
+}
+```
+
+
+
+### Example 2
+```python
+1.  val = 5
+2.  size = 3
+3.  arr = [0] * size
+4.  i = 0
+5.  j = 1
+6.  total = 0
+7.  if val > 2:
+8.      arr[j % size] = j
+9.  while i < size:
+10.     arr[j] += 1
+11.     score = arr[j+1]
+12.     total += score * 2
+13.     diff = total - score
+14.     j = (j + 1) % size
+15.     i += 1
+16. last = arr[-1]
+17. summary = diff + j
+```
+
+#### Example Question 2.1:
+Which variable instances have information flow over `(summary,17)`? List all such variables.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+    ]
+   }
+```
+
+
+**Analysis**:
+- Line 17: `(summary,17)` reads `diff` and `j`. `diff` is from line 13. Next, we focus on the path through `j`. `j` is updated from line 14 and line 5. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. When line 9 never evaluates to `true`, `(summary,17)` reads `j` from `(j,5)`. When line 9 evaluates to `true`, line 14 will be executed. 
+- Line 14: `(j,14)` is updated inside the `while i < size` loop, so its update is control-dependent on the loop condition at line 9. There is also an explicit flow from `size` to `j`.
+- Line 9: `while i < size` reads `size` (a pure read), so has a direct explicit flow from `(size,2)`. It also reads `i` from line 15 or line 4.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["diff", 13],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have information flow over `(score,11)`? List all such variables.
+
+
+**Analysis**:
+- Line 11: `(score,11)` reads `arr[j+1]`. There is a direct data dependence on both `arr` and `j`. That `j` may come from either `(j,5)` (initial) or subsequent updates at `(j,14)`. `arr` may come from line 3, line 8, or line 10 given the index `j+1` is with an unknown value. 
+- Static analysis assumption: Every branch or loop condition may succeed or fail; we do not prune unreachable paths. Therefore, `j` could be read from either line 5 (e.g., when it is the first iteration of the while loop) or line 14 (e.g., when it is the not the first iteration of the while loop). Similar for `arr`, it could be read from line 3, line 8, or line 10.
+- If `arr` is read from line 10, there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+- If `arr` is read from line 8, there is an explicit flow from `(j,5)` and `(size,2)` to `arr`. There is also implicit flow from `val` (as in the condition in line 7) read from line 1.
+- If `arr` is read from line 3, there is an explicit flow from `(size,2)` to `arr`.
+- Line 11 is control-dependent on line 9, therefore there is a implicit flow from `i` (possibly from `(i,15)` or `(i,4)`) and `size` (possibly from `(size,2)`) to line 11.
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+
+
+#### Example Question 2.3:
+Which variable instances have information flow over `(last,16)`? List all such variables.
+
+**Analysis**:
+- Line 16: `(last,16)` reads `arr[-1]`. That element may have been modified by the assignment in line 8, by the loop updates in line 10, or by initialization at line 3. Under static analysis, multiple update sites may contribute. 
+- If from Line 3: there is an explicit flow from `(size,2)` to it.
+- If from line 8: `arr[j % size] = j` executes only if `val > 2`, so `(arr,8)` has a direct control dependence on `(val,1)` via the `if` at line 7. There is also an explicit flow from `(j,5)` and `(size,2)` to `arr`.
+- If from line 10:  there is an explicit flow from `(j,5)`, `(j,14)`, and `(size,2)` to `arr`. There is also an explicit flow from `arr` itself because the operation is `+=`, hence from `(arr,3)`, `(arr,8)`, or `(arr,10)`. There is also an implicit flow from `i` and `size` to line 10. Hence from `(i, 4)`, `(i,15)`, and `(size,2)`.
+
+
+**Output**:
+```json
+   {
+    "InfomationFlowSources": [
+      ["arr", 10],
+      ["arr", 8],
+      ["arr", 3],
+      ["j", 14],
+      ["j", 5],
+      ["size", 2],
+      ["i", 4],
+      ["i", 15],
+      ["val", 1]
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```Python
+1   from collections import defaultdict, deque
+2   from heapq import heappush, heappop
+3   from itertools import permutations, accumulate
+4   import sys
+5   import math
+6   import bisect
+7   def LI(): return [int(x) for x in sys.stdin.buffer.readline().split()]
+8   def I(): return int(sys.stdin.buffer.readline())
+9   def LS():return [list(x) for x in sys.stdin.readline().split()]
+10  def S():
+11      res = list(sys.stdin.readline())
+12      if res[-1] == "\n":
+13          return res[:-1]
+14      return res
+15  def IR(n):
+16      return [I() for i in range(n)]
+17  def LIR(n):
+18      return [LI() for i in range(n)]
+19  def SR(n):
+20      return [S() for i in range(n)]
+21  def LSR(n):
+22      return [LS() for i in range(n)]
+23  sys.setrecursionlimit(1000000)
+24  def solve():
+25      mod = 1000000007
+26      s = S()
+27      t = S()
+28      ns = len(s)
+29      nt = len(t)
+30      f = {}
+31      for i in range(26):
+32          f[chr(i + ord("a"))] = i + 1
+33      for i in range(ns):
+34          s[i] = f[s[i]]
+35      for i in range(nt):
+36          t[i] = f[t[i]]
+37      b = 10
+38      mod1 = 1000000007
+39      mod2 = 1000000009
+40      pownt1 = pow(b,nt,mod)
+41      invnt1 = pow(pownt1,mod1-2,mod1)
+42      powns1 = pow(b,ns,mod1)
+43      invns1 = pow(powns1,mod1-2,mod1)
+44      pownt2 = pow(b,nt,mod2)
+45      invnt2 = pow(pownt2,mod2-2,mod2)
+46      powns2 = pow(b,ns,mod2)
+47      invns2 = pow(powns2,mod2-2,mod2)
+48      l = 0
+49      r = ns+2
+50      while r > l+1:
+51          m = (l+r) >> 1
+52          n = m*nt
+53          st = [m]*nt
+54          ms = n//ns
+55          rs = n-ms*ns
+56          ss = []
+57          for i in range(ns):
+58              if i < rs:
+59                  ss.append(ms + 1)
+60              else:
+61                  ss.append(ms)
+62          p1 = pow(b,n,mod1)
+63          p2 = pow(b,n,mod2)
+64          h1 = 0
+65          h2 = 0
+66          for i in range(nt):
+67              ti = t[i]
+68              pow1 = pow(b,(n-i)*mod1,mod1)
+69              pows1 = pow(pownt1,st[i],mod1)
+70              h1 += ti*pow1*(pows1-1)*pow(pows1*(1-invnt1),mod1-2,mod1)%mod1
+71              h1 %= mod1
+72              pow2 = pow(b,(n-i)*mod2,mod2)
+73              pows2 = pow(pownt2,st[i],mod2)
+74              h2 += ti*pow2*(pows2-1)*pow(pows2*(1-invnt2),mod2-2,mod2)%mod2
+75              h2 %= mod2
+76          k1 = 0
+77          k2 = 0
+78          for i in range(ns):
+79              if not ss[i]:
+80                  break
+81              si = s[i]
+82              pow1 = pow(b,(n-i)*mod1,mod1)
+83              pows1 = pow(powns1,ss[i],mod1)
+84              k1 += si*pow1*(pows1-1)*pow(pows1*(1-invns1),mod1-2,mod1)%mod1
+85              k1 %= mod1
+86              pow2 = pow(b,(n-i)*mod2,mod2)
+87              pows2 = pow(powns2,ss[i],mod2)
+88              k2 += si*pow2*(pows2-1)*pow(pows2*(1-invns2),mod2-2,mod2)%mod2
+89              k2 %= mod2
+90          k = 0
+91          for j in range(rs,ns+rs):
+92              if (h1,h2) == (k1,k2):
+93                  l = m
+94                  break
+95              i = j%ns
+96              si = s[i]
+97              sk = s[k]
+98              k1 -= sk*p1%mod1
+99              k1 += si
+100              k1 *= b
+101              k1 %= mod1
+102              k2 -= sk*p2%mod2
+103              k2 += si
+104              k2 *= b
+105              k2 %= mod2
+106              k += 1
+107          else:
+108              r = m
+109      if l == ns+1:
+110          print(-1)
+111      else:
+112          print(l)
+113      return
+114  if __name__ == "__main__":
+115      solve()
+```
+
+
+**Question**: Which variable instances have information flow over `(pows1,83)` in function `solve`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+This code finds the maximum number of times a string `t` can be repeated to form a substring of a string `s` repeated some number of times, using rolling hashes and binary search. It outputs -1 if no such repetition is possible.
+

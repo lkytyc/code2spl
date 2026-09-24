@@ -1,0 +1,143 @@
+# CLASS AccessGatewayFilter
+
+[DEFINE_WORKER: "Initialize a new instance by performing no additional setup beyond the default constructor behavior." __init__]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Enter the constructor and perform no state initialization, side effects, validations, or other operations. RESULT none]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns true for start-matching request URIs or for authenticated users with level greater than 2 after logging them, otherwise returns false on any exception." filter]
+    [INPUTS]
+        <REF> request </REF>: dict-like object "Request data containing at least path and method fields, and possibly credentials."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: bool "True when access is allowed; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read request_uri from request['path'] and read method from request['method']. RESULT request_uri, method]
+            [COMMAND If self.is_start_with(request_uri) is true, return true immediately. RESULT True]
+            [COMMAND Otherwise, call self.get_jwt_user(request) and assign the result to token. RESULT token]
+            [COMMAND From token, read user from token['user']. RESULT user]
+            [COMMAND If user['level'] is greater than 2, call self.set_current_user_info_and_log(user) and return true. RESULT True]
+            [COMMAND If no earlier return occurs and no handled path succeeds, return false. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: The request URI matches the start-with check before any token processing.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return true without reading JWT user information. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The decoded user exists and user['level'] is greater than 2.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Log the current user via self.set_current_user_info_and_log(user). RESULT logged_user]
+            [COMMAND Return true after logging. RESULT True]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: Any exception occurs while obtaining token, reading token['user'], or accessing user['level'] in the try block.]
+        [LOG "The exception is suppressed and the method returns false."]
+        [THROW None "No exception is propagated because the code catches all exceptions."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Checks whether the request URI starts with any of the two fixed prefixes and returns a boolean result with early exit on the first match." is_start_with]
+    [INPUTS]
+        <REF> request_uri </REF>: string "The URI string to test against the configured path prefixes."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: boolean "True if request_uri starts with '/api' or '/login'; otherwise False."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Initialize start_with as a fixed list containing the two string prefixes "/api" and "/login". RESULT start_with]
+            [COMMAND Iterate through each prefix s in start_with in list order. RESULT s]
+            [COMMAND Within the loop for the current prefix s, check whether request_uri starts with s using an exact prefix match. RESULT starts_with_match]
+            [COMMAND If the prefix match is true for the current s, return True immediately and stop checking any remaining prefixes. RESULT True]
+            [COMMAND If the loop completes without any matching prefix, return False. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: For a given prefix s, request_uri does not start with s.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Continue to the next prefix in start_with without returning yet. RESULT next_iteration]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: The start_with list is empty.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip the loop body entirely and return False. RESULT False]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Extract the authorization token from the request, optionally validate an embedded username-prefixed date in its JWT field against a 3-day expiration boundary, and return either None or the token." get_jwt_user]
+    [INPUTS]
+        <REF> request </REF>: object "Request-like data structure containing headers with an Authorization entry."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: object_or_null "Returns None when the JWT starts with the user name and the parsed trailing date is at least 3 days old; otherwise returns the authorization token object."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the authorization token from request['headers']['Authorization'] and store it as token. RESULT token]
+            [COMMAND Read the user object from token['user'] and store it as user. RESULT user]
+            [COMMAND Check whether token['jwt'] starts with user['name']. RESULT jwt_starts_with_user_name]
+            [COMMAND If token['jwt'] starts with user['name'], split token['jwt'] by user['name'], take element at index 1 as the trailing date string, and store it as jwt_str_date. RESULT jwt_str_date]
+            [COMMAND If token['jwt'] starts with user['name'], parse jwt_str_date using the format %Y-%m-%d and store the parsed date as jwt_date. RESULT jwt_date]
+            [COMMAND If token['jwt'] starts with user['name'], compute whether datetime.datetime.today() minus jwt_date is greater than or equal to datetime.timedelta(days=3). RESULT is_expired_at_or_beyond_3_days]
+            [COMMAND If token['jwt'] starts with user['name'] and the age comparison is greater than or equal to 3 days, return None immediately. RESULT return_None]
+            [COMMAND Return token. RESULT token]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: token['jwt'] does not start with user['name']]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Skip date extraction and expiration validation and continue to the final return of token. RESULT token]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: token['jwt'] starts with user['name'] but datetime.datetime.today() minus jwt_date is less than datetime.timedelta(days=3)]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do not return None and continue to the final return of token. RESULT token]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Copies the user's address into a local host variable and logs a level-1 message formed by concatenating the user's name, address, and the current timestamp string." set_current_user_info_and_log]
+    [INPUTS]
+        <REF> self </REF>: object "Instance context passed to the method and not otherwise used in the method body."
+        <REF> user </REF>: mapping "Input container expected to provide keyed access to at least 'address' and 'name' values."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read the value at key 'address' from user and assign it directly to the local variable host without transformation or validation. RESULT host]
+            [COMMAND Get the value at key 'name' from user, concatenate it with host and the string form of the current datetime, and write the resulting message through logging.log with level set to 1. RESULT log_written]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]

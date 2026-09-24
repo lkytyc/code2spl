@@ -1,0 +1,116 @@
+class AccessGatewayFilter:
+    def __init__(self):
+        pass
+
+    def is_start_with(self, path, prefixes=("/api", "/login")):
+        if path is None:
+            return False
+        return any(str(path).startswith(prefix) for prefix in prefixes)
+
+    def filter(self, request):
+        try:
+            path = request.get("path")
+            if self.is_start_with(path):
+                return True
+
+            token = self.get_jwt_user(request)
+            if not token:
+                return False
+
+            user = token.get("user")
+            if not isinstance(user, dict):
+                return False
+
+            if user.get("level", 0) > 2:
+                self.set_current_user_info_and_log(user)
+                return True
+
+            return False
+        except Exception:
+            return False
+
+    def get_jwt_user(self, request):
+        import datetime
+
+        headers = request.get("headers", {})
+        auth = headers.get("Authorization")
+        if not isinstance(auth, dict):
+            return None
+
+        user = auth.get("user")
+        jwt = auth.get("jwt")
+        if not user or not jwt:
+            return None
+
+        user_name = user.get("name") if isinstance(user, dict) else None
+        if not user_name:
+            return None
+
+        jwt = str(jwt)
+        user_name = str(user_name)
+
+        if not jwt.startswith(user_name):
+            return None
+
+        date_str = jwt[len(user_name):]
+        try:
+            token_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+        current_date = datetime.date.today()
+        if (current_date - token_date).days >= 3:
+            return None
+
+        return auth
+
+    def set_current_user_info_and_log(self, user):
+        import datetime
+
+        name = user.get("name", "")
+        address = user.get("address", "")
+        timestamp = datetime.datetime.now().isoformat(sep=" ", timespec="seconds")
+        message = f"user={name}, address={address}, time={timestamp}"
+        print(message)
+
+import unittest
+
+class AccessGatewayFilterTestGetJwtUser(unittest.TestCase):
+    def test_get_jwt_user_1(self):
+        agf = AccessGatewayFilter()
+        request = {
+            'headers': {'Authorization': {'user': {'name': 'user1'}, 'jwt': 'user1' + str(datetime.date.today())}}}
+        res = agf.get_jwt_user(request)
+        self.assertIsNotNone(res)
+
+    def test_get_jwt_user_2(self):
+        agf = AccessGatewayFilter()
+        request = {
+            'headers': {'Authorization': {'user': {'name': 'user2'}, 'jwt': 'user2' + str(datetime.date.today())}}}
+        res = agf.get_jwt_user(request)
+        self.assertIsNotNone(res)
+
+    def test_get_jwt_user_3(self):
+        agf = AccessGatewayFilter()
+        request = {
+            'headers': {'Authorization': {'user': {'name': 'user3'}, 'jwt': 'user3' + str(datetime.date.today())}}}
+        res = agf.get_jwt_user(request)
+        self.assertIsNotNone(res)
+
+    def test_get_jwt_user_4(self):
+        agf = AccessGatewayFilter()
+        request = {
+            'headers': {'Authorization': {'user': {'name': 'user4'}, 'jwt': 'user4' + str(datetime.date.today())}}}
+        res = agf.get_jwt_user(request)
+        self.assertIsNotNone(res)
+
+    def test_get_jwt_user_5(self):
+        agf = AccessGatewayFilter()
+        request = {'headers': {'Authorization': {'user': {'name': 'user1'}, 'jwt': 'user1' + str(
+            datetime.date.today() - datetime.timedelta(days=5))}}}
+        res = agf.get_jwt_user(request)
+        self.assertIsNone(res)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

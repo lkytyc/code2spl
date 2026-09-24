@@ -1,0 +1,302 @@
+[INSTRUCTIONS]
+
+You are a program-analysis assistant. Perform a **static** data-dependence analysis on a given code snippet, treating each branch or loop condition as potentially taking any outcome, without using semantic or symbolic execution to prune paths.
+
+
+## 1. Data Dependence Definition
+
+   Data dependence captures the influence of data flow between variables.
+
+   We denote each variable instance as `(var,lineNumber)`, meaning the variable `var` defined or updated at `lineNumber`.
+
+   >  **Direct Data Dependence**
+   A variable instance `(varB,lineB)` is **directly** data-dependent on `(varA,lineA)` if `lineA` writes to `varA`. Then, without overwritting the value of `varA`, `lineB` reads `varA` and compute the value of `varB`. In other words, the value of `(varB,lineB)` relies on the value produced at `(varA,lineA)`. In addition, changing the execution order of `(varA,lineA)` and `(varB,lineB)` would alter their results.
+
+
+   A variable instance `(varB,lineB)` is data-dependent on `(varA,lineA)` if there is a **transitive** (indirect) chain of **direct** data dependencies from `(varA,lineA)` to `(varB,lineB)`. This is equivalent to saying that `(varA,lineA)` has data dependence over `(varB,lineB)`, meaning the value written at `(varA,lineA)` can propagate to `(varB,lineB)` through a sequence of read/write operations.
+
+
+## 2. Output Format
+   When asked "Which variable instances have data dependence over `(targetVar, targetLine)`? List all such variables.", respond:
+   ```json
+   {
+    "DataDependenceSources": [
+      ["valA", lineA],
+      ["valB", lineB],
+      ...
+    ]
+   }
+   ```
+
+  If you believe there is no variables have data dependence over `(targetVar, targetLine)`, respond:
+   ```json
+   {
+    "DataDependenceSources": []
+   }
+   ```
+  
+
+## 3. Intraprocedural Data Dependence
+   All dependence analysis is performed within **a single function**. We do not track dependencies across function boundaries. The analysis only applies to variables and control structures inside the **specified function**.
+
+## 4. Example Code Snippet
+
+### Example 1
+
+```python
+1    total = 0
+2    value = 1
+3    step = value
+4    if step > 1:
+5        value += 3
+6    while total <= 10:
+7        total += value
+8        difference = total - step
+9        step += 1
+10   final_result = total * 2
+```
+
+
+#### Example Question 1.1:
+Which variable instances have data dependence over `(step,9)`? List all such variables.
+
+
+**Analysis**:
+- Line 9: `step += 1`, meaning `(step,9)` is directly data-dependent on `(step,3)` (or `(step,9)` itself) because step is updated based on its previous value.
+- Line 3: `step = value`, meaning `(step,3)` is directly data-dependent on `(value,2)`.
+Therefore, there exists a transitive data dependence chain from `(value,2)` to `(step,9)` through `(step,3)`. 
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["step", 9],
+      ["step", 3],
+      ["value", 2],
+    ]
+   }
+```
+
+
+
+
+
+#### Example Question 1.2 
+Which variable instances have data dependence over `(total,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `total += value`, meaning `(total,7)` reads from `total` at line 1 or 7 (itself), and `value` from either `(value,2)` or `(value,5)`.
+- Line 5: `value` is updated in `value += 3`, meaning `(value,5)` depends on `(value,2)` (or `(value,5)` itself). However, this update is inside an if statement, which means it may or may not execute depending on runtime conditions.
+- Line 2: value is initialized at `(value,2)`.
+
+
+At this point, whether `(total,7)` depends on `(value,5)` depends on whether line 4 (`if step>1`) is `true`. Since this is a static analysis, all possible paths are considered without analyzing actual reachability. This means line 5 is treated as both possibly executed and possibly not executed.
+
+- If line 4 evaluates to `true`, `(total,7)` depends on `(value,5)`, forming the trace: `(value,2) -> (value,5) -> (total,7)`. 
+- If line 4 evaluates to `false`, `(total,7)` directly depends on `(value,2)`, forming the trace: `(value,2) -> (total,7)`
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["total", 1],
+      ["total", 7],
+      ["value", 5],
+      ["value", 2]
+    ]
+   }
+```
+
+
+
+### Example 2
+
+```python
+1    arr = [1, 2, 3]
+2    x = 5
+3    if x > 2:
+4        arr[0] = x   
+5    for i in range(3):
+6        arr[i] += 1  
+7        temp = arr[i]  
+8        y = temp + 1  
+9    result = arr[-1]
+```
+
+#### Example Question 2.1:
+Which variable instances have data dependence over `(arr,6)`? List all such variables.
+
+
+
+**Analysis**
+- Line 6: `arr[i] += 1` modifies `arr[i]`, but i varies during the loop execution.
+   - If `i == 0`, `arr[i]` refers to `arr[0]`, which was updated in line 4 (or line 6 itself), establishing a dependence chain `(arr,4)` -> `(arr,6)`.
+   - If `i != 0`, `arr[i]` does not refer to `arr[0]`, meaning it depend on `(arr,1)` (or `(arr,6)` itself), not `(arr,4)`.
+   - However, since static analysis considers all possible paths without resolving i’s runtime value, we must assume `arr[i]` could be `arr[0]`, leading to a possible dependence.
+- Line 4: `arr[0] = x`, meaning `(arr,4)` depends on `(x,2)`.
+- Line 2: `x` is initialized at `(x,2)`.
+
+
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 4],
+      ["arr", 1],
+      ["i", 5],
+      ["x", 2]
+    ]
+   }
+```
+
+
+#### Example Question 2.2:
+Which variable instances have data dependence over `(temp,7)`? List all such variables.
+
+
+**Analysis**:
+- Line 7: `temp = arr[i]`, meaning temp depends on `i`, since `i` determines which element of arr is accessed. And `arr[i]` can only refer to `(arr,6)` as they have the same index.
+- Line 5: `i` is initialized and iterates over the range 0 to 3.
+
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["i", 5],
+    ]
+   }
+```
+
+#### Example Question 2.3:
+Which variable instances have data dependence over `(result,9)`? List all such variables.
+
+**Analysis**:
+- Line 9: `result = arr[-1]`, meaning result depends on `arr[-1]`, which is arr[2], possibly get updated at line 6 (or line 1).
+  - If it is from line 6: `arr[i] += 1`, `arr[i]` is modified based on the value of `i`. Line 5: `i` iterates over 0 to 3.
+  - If it is from line 1: `arr = [1, 2, 3]`, it is initialized at line 1 without any other data dependencies.
+
+**Output**:
+```json
+   {
+    "DataDependenceSources": [
+      ["arr", 6],
+      ["arr", 1],
+      ["i", 5],
+    ]
+   }
+```
+
+---
+
+[YOUR TURN]
+
+Below is **your target snippet**. 
+
+```C
+1   #include<stdio.h>
+2   #include<math.h>
+3   #include<stdlib.h>
+4   long compare_int(const void *a,const void *b)
+5   {
+6   	return *(long*)a-*(long*)b;
+7   }
+8   int main(void)
+9   {
+10  	int n;
+11  	scanf("%d",&n);
+12  	int a[501][501];
+13  	long p,k=1,cnt=0;
+14  	for(int i=0;i<n;i++) {
+15  		for(int j=0;j<n;j++) {
+16  			a[i][j]=k;
+17  			k++;
+18  		}
+19  	}
+20  	for(int ii=0;ii<(n*n);ii++) {
+21  		scanf("%ld",&p);
+22  		if(1<=p&&n>=p) {
+23  			a[0][p-1]=0;
+24  		}
+25  		else if((n*n)>=p&&((n*n)-n+1)<=p) {
+26  			a[n-1][n-(n*n)+p-1]=0;
+27  		} else if (p%n==0) {	
+28  				a[(p/n)-1][n-1]=0;
+29  		} else if(p%n==1) {
+30  				a[p/n][0]=0;
+31  		} else {
+32  				a[p/n][(p%n)-1]=0;
+33  				long i=p/n;
+34  				long j=(p%n)-1;
+35  				long m[5]={i,n-1-i,j,n-1-j};
+36  				for(int jj=0;jj<i;jj++) {
+37  					if(a[jj][j]==0) {
+38  						m[0]--;
+39  					}
+40  				}
+41  				for(int jj=n-1;jj>i;jj--) {
+42  					if(a[jj][j]==0) {
+43  						m[1]--;
+44  					}
+45  				}
+46  				for(int jj=0;jj<j;jj++) {
+47  					if(a[i][jj]==0) {
+48  						m[2]--;
+49  						}
+50  				}
+51  				for(int jj=n-1;jj>j;jj--) {
+52  					if(a[i][jj]==0) {
+53  						m[3]--;
+54  												}
+55  				}
+56  				qsort(m,4,sizeof(long),compare_int);
+57  				long mm=m[0];
+58  				cnt=cnt+mm;
+59  			}
+60  		}
+61  	printf("%ld\n",cnt);
+62  	return 0;
+63  }
+```
+
+
+**Question**: Which variable instances have data dependence over `(a,16)` in function `main`? List all such variables.
+
+**Output**:
+
+
+---
+Auxiliary Summary Context:
+- The raw source in the official prompt remains authoritative.
+- The summary is auxiliary context only and may omit exact implementation details.
+
+Natural-Language Summary:
+Function main: Reads a matrix dimension n, fills an n x n matrix with sequential integers, then processes n*n position inputs to mark cells as zero and accumulate the minimum adjusted distance to the matrix edges for interior cells, finally printing the accumulated count.
+It takes n (int) — Matrix dimension read from standard input; p (long) — Position value read from standard input in the main loop.
+It returns cnt (long) — Accumulated sum of minimum adjusted distances for interior cells, printed to standard output.
+The behaviour proceeds in this order:
+1. Declare integer variable n, 2D integer array a of size 501x501, and long variables p, k initialized to 1, and cnt initialized to 0. This produces n, a, p, k, cnt.
+2. Read an integer value from standard input into variable n using scanf. This produces n.
+3. For each row i from 0 to n-1, for each column j from 0 to n-1, assign the current value of k to a[i][j] and then increment k by 1. This produces a.
+4. For each iteration ii from 0 to n*n-1, read a long value from standard input into variable p using scanf. This produces p.
+5. Within the loop over ii, if p is between 1 and n inclusive, set the element a[0][p-1] to 0. This produces a.
+6. Within the loop over ii, if p is between n*n-n+1 and n*n inclusive, set the element a[n-1][n-(n*n)+p-1] to 0. This produces a.
+7. Within the loop over ii, if p modulo n equals 0, set the element a[(p/n)-1][n-1] to 0. This produces a.
+8. Within the loop over ii, if p modulo n equals 1, set the element a[p/n][0] to 0. This produces a.
+9. Within the loop over ii, for any other value of p, set the element a[p/n][(p%n)-1] to 0, then declare long variables i equal to p/n and j equal to (p%n)-1, and initialize a long array m of size 5 with values {i, n-1-i, j, n-1-j}. This produces a, i, j, m.
+10. Within the else branch, for each jj from 0 to i-1, if a[jj][j] equals 0, decrement m[0] by 1. This produces m.
+11. Within the else branch, for each jj from n-1 down to i+1, if a[jj][j] equals 0, decrement m[1] by 1. This produces m.
+12. Within the else branch, for each jj from 0 to j-1, if a[i][jj] equals 0, decrement m[2] by 1. This produces m.
+13. Within the else branch, for each jj from n-1 down to j+1, if a[i][jj] equals 0, decrement m[3] by 1. This produces m.
+14. Within the else branch, sort the first 4 elements of array m in ascending order using qsort with the compare_int comparator. This produces m.
+15. Within the else branch, assign the minimum value m[0] to a new long variable mm, and add mm to cnt. This produces mm, cnt.
+16. After the loop over ii completes, print the value of cnt as a long integer followed by a newline using printf. This produces output.
+17. Return 0 from the main function. This produces return.

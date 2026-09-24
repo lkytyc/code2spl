@@ -1,0 +1,75 @@
+class NumericEntityUnescaper:
+
+    def replace(self, string):
+        out = []
+        i = 0
+        length = len(string)
+
+        while i < length - 2:
+            if string[i] == '&' and string[i + 1] == '#':
+                start = i + 2
+                is_hex = False
+
+                if string[start] in ('x', 'X'):
+                    is_hex = True
+                    start += 1
+
+                end = start
+                while end < length:
+                    c = string[end]
+                    if is_hex and not NumericEntityUnescaper.is_hex_char(c):
+                        break
+                    if not is_hex and not c.isdigit():
+                        break
+                    end += 1
+
+                if end < length and string[end] == ';':
+                    digits = string[start:end]
+                    try:
+                        code_point = int(digits, 16 if is_hex else 10)
+                        out.append(chr(code_point))
+                        i = end + 1
+                        continue
+                    except (ValueError, OverflowError):
+                        return ''.join(out)
+
+            out.append(string[i])
+            i += 1
+
+        return ''.join(out)
+
+    @staticmethod
+    def is_hex_char(c):
+        return ('0' <= c <= '9') or ('a' <= c <= 'f') or ('A' <= c <= 'F')
+
+import unittest
+
+class NumericEntityUnescaperTestIsHexChar(unittest.TestCase):
+    def test_is_hex_char_1(self):
+        unescaper = NumericEntityUnescaper()
+        res = unescaper.is_hex_char('0')
+        self.assertEqual(res, True)
+
+    def test_is_hex_char_2(self):
+        unescaper = NumericEntityUnescaper()
+        res = unescaper.is_hex_char('F')
+        self.assertEqual(res, True)
+
+    def test_is_hex_char_3(self):
+        unescaper = NumericEntityUnescaper()
+        res = unescaper.is_hex_char('G')
+        self.assertEqual(res, False)
+
+    def test_is_hex_char_4(self):
+        unescaper = NumericEntityUnescaper()
+        res = unescaper.is_hex_char('X')
+        self.assertEqual(res, False)
+
+    def test_is_hex_char_5(self):
+        unescaper = NumericEntityUnescaper()
+        res = unescaper.is_hex_char('Z')
+        self.assertEqual(res, False)
+
+if __name__ == '__main__':
+    import unittest
+    unittest.main(verbosity=2)

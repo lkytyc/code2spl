@@ -1,0 +1,553 @@
+# FILE: lib/matplotlib/mlab.py
+# CLASS GaussianKDE
+
+[DEFINE_WORKER: "Initializes a Gaussian kernel density estimator by validating and caching the dataset, selecting a bandwidth method, and precomputing covariance, inverse covariance, and normalization factor." __init__]
+    [INPUTS]
+        <REF> dataset </REF>: array-like or ndarray "The sample data used to construct the kernel density estimate; converted to at least 2D with np.atleast_2d."
+        <REF> bw_method </REF>: None | str | Number | callable "Bandwidth selection method: None, 'scott', 'silverman', a numeric scalar constant, or a callable that returns the bandwidth factor."
+    [END_INPUTS]
+
+    [OUTPUTS]
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert the input dataset to at least a 2D NumPy array using np.atleast_2d(dataset) and assign the result to self.dataset. RESULT self.dataset]
+            [COMMAND Validate that np.array(self.dataset).size is greater than 1; if the total number of elements is 0 or 1, raise the defined ValueError before continuing. RESULT _]
+            [COMMAND Convert self.dataset with np.array(self.dataset) and unpack its shape into self.dim (first dimension) and self.num_dp (second dimension), which requires exactly two dimensions. RESULT self.dim, self.num_dp]
+            [COMMAND Configure self.covariance_factor based on bw_method; the valid cases are None, 'scott', 'silverman', a numeric scalar, or a callable, and invalid inputs raise ValueError. RESULT self.covariance_factor]
+            [COMMAND Call self.covariance_factor() with no explicit arguments and store the returned bandwidth factor in self.factor. RESULT self.factor]
+            [COMMAND If self does not already have the _data_inv_cov attribute, compute self.data_covariance as np.atleast_2d(np.cov(self.dataset, rowvar=1, bias=False)) and self.data_inv_cov as np.linalg.inv(self.data_covariance); otherwise reuse the existing cached values. RESULT self.data_covariance, self.data_inv_cov]
+            [COMMAND Compute self.covariance as self.data_covariance * self.factor ** 2, self.inv_cov as self.data_inv_cov / self.factor ** 2, and self.norm_factor as np.sqrt(np.linalg.det(2 * np.pi * self.covariance)) * self.num_dp. RESULT self.covariance, self.inv_cov, self.norm_factor]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: bw_method is None.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Do nothing; keep the existing/default covariance_factor unchanged. RESULT _]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: bw_method is not None and cbook._str_equal(bw_method, 'scott') is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.covariance_factor to self.scotts_factor. RESULT self.covariance_factor]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: bw_method is not None, does not match 'scott', and cbook._str_equal(bw_method, 'silverman') is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self.covariance_factor to self.silverman_factor. RESULT self.covariance_factor]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: bw_method is not None, does not match 'scott' or 'silverman', and isinstance(bw_method, Number) is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Set self._bw_method to the string 'use constant'. RESULT self._bw_method]
+            [COMMAND Set self.covariance_factor to a lambda that returns the constant bw_method. RESULT self.covariance_factor]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: bw_method is not None, does not match 'scott' or 'silverman', is not a Number, and callable(bw_method) is true.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Store bw_method in self._bw_method. RESULT self._bw_method]
+            [COMMAND Set self.covariance_factor to a lambda that calls self._bw_method(self). RESULT self.covariance_factor]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: np.array(self.dataset).size is not greater than 1, meaning the dataset contains zero or one element.]
+        [LOG "Raise ValueError with message: `dataset` input should have multiple elements."]
+        [THROW ValueError "The dataset must contain more than one element for kernel density estimation."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: bw_method is not None, does not match 'scott' or 'silverman' via cbook._str_equal, is not a Number, and is not callable.]
+        [LOG "Raise ValueError with message: `bw_method` should be 'scott', 'silverman', a scalar or a callable."]
+        [THROW ValueError "The bw_method argument must be one of the supported string methods, a numeric scalar constant, or a callable."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes Scott's factor by raising the number of data points to the power -1/(dimensionality+4)." scotts_factor]
+    [INPUTS]
+        <REF> num_dp </REF>: numeric "Number of data points; used as the base of the power calculation."
+        <REF> dim </REF>: integer "Dimensionality of the data; used to compute the exponent denominator."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numeric "Scott's factor value computed as num_dp^(-1/(dim+4))."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the denominator as self.dim + 4. RESULT denominator]
+            [COMMAND Compute the exponent as -1.0 divided by denominator. RESULT exponent]
+            [COMMAND Compute the result by applying np.power with base self.num_dp and exponent the computed exponent. RESULT result]
+            [COMMAND Return result. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: self.dim + 4 equals 0]
+        [LOG "Division by zero while computing the exponent -1.0 / (self.dim + 4)."]
+        [THROW ZeroDivisionError "The exponent denominator self.dim + 4 is zero."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the Silverman bandwidth selection factor as a power-law function of the number of data points and the dimension." silverman_factor]
+    [INPUTS]
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> silverman_factor </REF>: float "The computed Silverman factor as a floating-point value."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Read self.num_dp and self.dim from the current object. RESULT self.num_dp, self.dim]
+            [COMMAND Compute the base as self.num_dp times (self.dim + 2.0) divided by 4.0. RESULT base]
+            [COMMAND Compute the exponent as -1.0 divided by (self.dim + 4). RESULT exponent]
+            [COMMAND Compute the Silverman factor as np.power(base, exponent). RESULT silverman_factor]
+            [COMMAND Return silverman_factor. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Evaluates the estimated probability density at query points by accumulating Gaussian kernel contributions from the dataset and normalizing by norm_factor." evaluate]
+    [INPUTS]
+        <REF> points </REF>: array-like "Query points; a 1-D vector of shape (n_dimensions,) is treated as a single point, or a 2-D array of shape (n_dimensions, n_points)."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numpy.ndarray "Array of shape (n_points,) containing the estimated pdf value at each query point."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert points to an array with at least two dimensions using np.atleast_2d. RESULT points]
+            [COMMAND Read the shape of the converted points array via np.array(points).shape and unpack it into dim and num_m. RESULT dim, num_m]
+            [COMMAND Validate that dim equals self.dim; if dim == self.dim continue, otherwise raise the ValueError described in exception_flows. RESULT validation_passed]
+            [COMMAND Initialize result as a one-dimensional NumPy array of zeros with length num_m. RESULT result]
+            [COMMAND Determine whether num_m >= self.num_dp; if true, run the data-point accumulation step; if false, use the alternative point-wise flow. RESULT branch_selected]
+            [COMMAND In the branch where num_m >= self.num_dp, for each dataset index i from 0 to self.num_dp-1, compute diff = self.dataset[:, i, np.newaxis] - points, tdiff = np.dot(self.inv_cov, diff), energy = np.sum(diff * tdiff, axis=0) / 2.0, and accumulate result = result + np.exp(-energy). RESULT result]
+            [COMMAND Normalize result by dividing every element by self.norm_factor. RESULT result]
+            [COMMAND Return result. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: num_m < self.num_dp]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND For each query point index i from 0 to num_m-1, compute diff = self.dataset - points[:, i, np.newaxis], tdiff = np.dot(self.inv_cov, diff), energy = np.sum(diff * tdiff, axis=0) / 2.0, and set result[i] = np.sum(np.exp(-energy), axis=0). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: dim != self.dim]
+        [LOG "points have dimension {dim}, dataset has dimension {self.dim}"]
+        [THROW ValueError "Raised when the dimensionality of the input points differs from the dimensionality of the KDE dataset."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Multiplies the input array x by a Hanning (Hann) window of length len(x), returning a windowed array of the same length with smoothly attenuated edges." window_hanning]
+    [INPUTS]
+        <REF> x </REF>: array_like "Input signal or array to be windowed; must support len() and elementwise multiplication with a NumPy array."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ndarray "Hann-windowed version of x, with the same length as x and endpoints scaled to zero for length greater than 1."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Compute the window length N = len(x). RESULT N]
+            [COMMAND Generate a Hann window w of length N using np.hanning(N); for N > 1 the window values are w[n] = 0.5 - 0.5 * cos(2 * pi * n / (N - 1)) for n = 0, 1, ..., N-1. RESULT w]
+            [COMMAND Multiply the Hann window w elementwise by x to compute result = w * x. RESULT result]
+            [COMMAND Return result as the Hann-windowed array. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: When len(x) == 0, np.hanning(0) returns an empty array, so the elementwise multiplication with x produces an empty array.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return an empty array as the windowed result. RESULT empty_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When len(x) == 1, np.hanning(1) returns the one-element array [1.0], so the multiplication leaves x unchanged.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return x with the same single element as the windowed result. RESULT single_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: When len(x) > 1, the first and last Hann window values are 0.0, so the first and last elements of the result become 0.0.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND After multiplying the Hann window by x, keep the first and last result elements as 0.0 and preserve the interior elements scaled by the corresponding window values. RESULT windowed_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the input signal window x unchanged, performing no windowing." window_none]
+    [INPUTS]
+        <REF> x </REF>: array_like "Input signal or window values to be returned as-is."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: array_like "The unchanged input x."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the current value of x without modification. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Removes the trend from x by dispatching key to the corresponding detrending algorithm, or by applying a user-provided callable along axis with a NumPy fallback." detrend]
+    [INPUTS]
+        <REF> x </REF>: array or sequence "Array or sequence containing the data to detrend."
+        <REF> key </REF>: str, callable, or None "Detrending algorithm: 'default', 'constant', 'mean', 'linear', 'none', a callable, or None (equivalent to 'mean')."
+        <REF> axis </REF>: int or None "Axis along which to detrend. None uses the default axis behavior for the selected algorithm."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: array or value "The detrended data produced by the selected detrending algorithm."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If key is None or key is one of 'constant', 'mean', or 'default', call detrend(x, key=detrend_mean, axis=axis) and return its result. RESULT detrended_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: key == 'linear']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call detrend(x, key=detrend_linear, axis=axis) and return its result. RESULT detrended_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: key == 'none']
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call detrend(x, key=detrend_none, axis=axis) and return its result. RESULT detrended_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: key is callable]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert x to a NumPy array with np.asarray(x). RESULT x_arr]
+            [COMMAND If axis is not None and axis + 1 > x_arr.ndim, raise ValueError. RESULT axis_validation_error]
+            [COMMAND If (axis is None and x_arr.ndim == 0) or (not axis and x_arr.ndim == 1), call key(x_arr) directly and return its result. RESULT direct_call_result]
+            [COMMAND Try to call key(x_arr, axis=axis) and return its result. RESULT axis_call_result]
+            [COMMAND On TypeError from calling key(x_arr, axis=axis), fall back to np.apply_along_axis(key, axis=axis, arr=x_arr) and return its result. RESULT apply_along_axis_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: axis is not None and axis + 1 > x_arr.ndim]
+        [LOG "Axis value {axis} is out of bounds for the array's number of dimensions."]
+        [THROW ValueError "Raised when the requested axis is out of bounds."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: key is not None, not in ['constant', 'mean', 'default', 'linear', 'none'], and not callable]
+        [LOG "Unknown value for key: {key!r}; allowed values are 'default', 'constant', 'mean', 'linear', or a function."]
+        [THROW ValueError "Raised when an unsupported detrending key is supplied."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Returns the input data unchanged with no detrending, ignoring the axis parameter." detrend_none]
+    [INPUTS]
+        <REF> x </REF>: any object "An object containing the data to be returned unchanged."
+        <REF> axis </REF>: int "Ignored; included only for compatibility with other detrend functions."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: any object "The original input object x returned unchanged."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return the input x unchanged, ignoring the axis parameter. RESULT x]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Detrend a 0-D or 1-D input by subtracting the ordinary least-squares linear fit computed from index positions." detrend_linear]
+    [INPUTS]
+        <REF> y </REF>: array_like or numpy.ndarray "Array or sequence containing the data; can be 0-D or 1-D."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> detrended </REF>: numpy.ndarray "Input y minus the best-fit line, or a 0-D array containing 0.0 in the input dtype for a 0-D input."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Convert y to a numpy array with np.asarray(y). RESULT y]
+            [COMMAND Check dimensional constraints: if y.ndim is greater than 1, raise ValueError; if y.ndim is equal to 0, return a 0-D array immediately; otherwise continue with linear detrending. RESULT dimension_check]
+            [COMMAND Create x as a 1-D float array from 0 to y.size - 1 using np.arange(y.size, dtype=float). RESULT x]
+            [COMMAND Compute the 2x2 population covariance matrix C of x and y using np.cov(x, y, bias=1). RESULT C]
+            [COMMAND Compute the slope b as C[0, 1] divided by C[0, 0]. RESULT b]
+            [COMMAND Compute the intercept a as y.mean() minus b times x.mean(). RESULT a]
+            [COMMAND Compute and return y minus (b times x plus a). RESULT detrended]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: y.ndim is 0 after converting y to a numpy array.]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Return np.array(0., dtype=y.dtype) as the short-circuit 0-D detrended result. RESULT zero_dimensional_result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: y.ndim is greater than 1 after converting y to a numpy array.]
+        [LOG "y cannot have ndim > 1"]
+        [THROW ValueError "Raised because detrend_linear only supports 0-D or 1-D input arrays."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates strided sliding windows of length n from a one-dimensional array with optional overlap, delegating to _stride_windows after normalizing noverlap and validating x." stride_windows]
+    [INPUTS]
+        <REF> x </REF>: array-like "1D array or sequence containing the data; must have exactly one dimension."
+        <REF> n </REF>: int "The number of data points in each window; must be at least 1 and no greater than x.shape[axis]."
+        <REF> noverlap </REF>: int or None "The overlap between adjacent windows; None is replaced by 0, and valid overlap values satisfy 0 <= noverlap < n."
+        <REF> axis </REF>: int "Axis along which the windows run; for the validated 1D input this must be 0."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: ndarray "Strided view of x containing all length-n windows; because the result may share memory with x, writing to it can modify other elements."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If noverlap is None, assign noverlap = 0. RESULT noverlap]
+            [COMMAND Validate that x has exactly one dimension; if np.ndim(x) is not 1, enter the ValueError exception flow. RESULT x_validated]
+            [COMMAND Return the result of calling _stride_windows(x, n, noverlap, axis). RESULT windows]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: np.ndim(x) != 1]
+        [LOG "Raised because x must be one-dimensional; message: only 1-dimensional arrays can be used"]
+        [THROW ValueError "Raised when the input x does not have exactly one dimension."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Creates strided sliding windows of length n from an input array with a specified overlap, using NumPy's sliding_window_view fast path when available and as_strided otherwise." _stride_windows]
+    [INPUTS]
+        <REF> x </REF>: array_like "Input data to be converted to a NumPy array and split into windows."
+        <REF> n </REF>: int "Window length; must be at least 1 in the general path and no greater than the array size. It is converted with int(n) in the fallback path."
+        <REF> noverlap </REF>: int "Number of samples shared between consecutive windows; must be less than n. It is converted with int(noverlap) in the fallback path."
+        <REF> axis </REF>: int "Axis used for window layout. axis == 0 enables the sliding_window_view fast path; any other value, including negative axes, uses the alternate strided layout. Defaults to 0."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> result </REF>: numpy.ndarray "A strided view of x reshaped into windows of length n. For axis == 0 the window dimension is first; for other axes it is last."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Evaluate whether np.lib.stride_tricks has attribute sliding_window_view and whether axis equals 0, using short-circuit evaluation; record whether the fast sliding_window_view path applies. RESULT fast_path_applicable]
+            [COMMAND When fast_path_applicable is true, execute the fast-path alternative and stop; the following fallback steps are skipped. When it is false, begin the general fallback path. RESULT path_selected]
+            [COMMAND In the general fallback path, check whether noverlap >= n; if so, the ValueError exception flow for noverlap must be less than n applies. RESULT validated_noverlap]
+            [COMMAND In the general fallback path, check whether n < 1; if so, the ValueError exception flow for n cannot be less than 1 applies. RESULT validated_n]
+            [COMMAND Convert x to a NumPy array with np.asarray(x) and bind the resulting array back to x. RESULT x]
+            [COMMAND Check whether n == 1 and noverlap == 0; if so, follow the singleton-window alternative and return its result; otherwise continue. RESULT continued]
+            [COMMAND In the general fallback path, check whether n > x.size; if so, the ValueError exception flow for n cannot be greater than the length of x applies. RESULT validated_length]
+            [COMMAND Convert noverlap to int(noverlap) and n to int(n) using Python int() truncation semantics, binding the converted values back to noverlap and n. RESULT converted_counts]
+            [COMMAND Compute step = n - noverlap. RESULT step]
+            [COMMAND If axis == 0, set shape = (n, (x.shape[-1] - noverlap) // step) and strides = (x.strides[0], step * x.strides[0]); otherwise set shape = ((x.shape[-1] - noverlap) // step, n) and strides = (step * x.strides[0], x.strides[0]). RESULT shape_and_strides]
+            [COMMAND Return np.lib.stride_tricks.as_strided(x, shape=shape, strides=strides). RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [ALTERNATIVE_FLOW: np.lib.stride_tricks has attribute sliding_window_view and axis == 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the fast path, confirm noverlap < n; if noverlap >= n, the ValueError exception flow applies instead. RESULT fast_path_validated]
+            [COMMAND Return np.lib.stride_tricks.sliding_window_view(x, n, axis=0)[::n - noverlap].T. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [ALTERNATIVE_FLOW: n == 1 and noverlap == 0]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND In the singleton-window special case, if axis == 0 return x[np.newaxis]; otherwise return x[np.newaxis].T. RESULT result]
+        [END_SEQUENTIAL_BLOCK]
+    [END_ALTERNATIVE_FLOW]
+
+    [EXCEPTION_FLOW: noverlap >= n, checked both inside the fast sliding_window_view path and again in the general fallback path]
+        [LOG "noverlap must be less than n"]
+        [THROW ValueError "Raised when the overlap is greater than or equal to the window length."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: n < 1 in the general fallback path after the noverlap validation has passed]
+        [LOG "n cannot be less than 1"]
+        [THROW ValueError "Raised when the window length is less than one."]
+    [END_EXCEPTION_FLOW]
+
+    [EXCEPTION_FLOW: n > x.size in the general fallback path after x has been converted with np.asarray and after the n == 1 and noverlap == 0 special case has not returned]
+        [LOG "n cannot be greater than the length of x"]
+        [THROW ValueError "Raised when the window length exceeds the total number of elements in x."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes a single-signal spectral estimate for the complex, magnitude, angle, or phase mode using _spectral_helper and returns the conditioned spectrum with its frequency array." _single_spectrum_helper]
+    [INPUTS]
+        <REF> mode </REF>: str "Spectral mode: one of 'complex', 'magnitude', 'angle', or 'phase'."
+        <REF> x </REF>: array-like "Input signal samples."
+        <REF> Fs </REF>: float or None "Sampling frequency used to build the frequency axis; defaults to None."
+        <REF> window </REF>: array-like, callable, or None "Window function or window values applied before the FFT; defaults to None."
+        <REF> pad_to </REF>: int or None "Target FFT length for zero-padding; if None, padded to len(x)."
+        <REF> sides </REF>: str or None "Selects one-sided or two-sided spectrum; defaults to None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> spec </REF>: ndarray "Computed spectrum in the requested mode; converted to real values for non-complex modes and flattened to 1-D if necessary."
+        <REF> freqs </REF>: ndarray "Frequency values corresponding to the spectrum."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND At function top level, call _api.check_in_list with allowed values ['complex', 'magnitude', 'angle', 'phase'] and mode=mode to validate mode. RESULT none]
+            [COMMAND At function top level, if pad_to is None, set pad_to to len(x). RESULT pad_to]
+            [COMMAND At function top level, call _spectral_helper with x=x, y=None, NFFT=len(x), Fs=Fs, detrend_func=detrend_none, window=window, noverlap=0, pad_to=pad_to, sides=sides, scale_by_freq=False, mode=mode and unpack its returned tuple into spec, freqs, and _ (discarding the third value). RESULT spec, freqs]
+            [COMMAND At function top level, if mode is not 'complex', replace spec with spec.real. RESULT spec]
+            [COMMAND At function top level, if spec.ndim is 2 and spec.shape[1] is 1, replace spec with spec[:, 0]. RESULT spec]
+            [COMMAND At function top level, return the tuple (spec, freqs). RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When _api.check_in_list finds that mode is not one of 'complex', 'magnitude', 'angle', or 'phase']
+        [LOG "mode must be one of 'complex', 'magnitude', 'angle', or 'phase'"]
+        [THROW ValueError "Raised when the requested mode is not an allowed spectrum mode."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the power spectral density of a signal by delegating to csd with y=None and returning the real part of the spectral density together with the frequency vector." psd]
+    [INPUTS]
+        <REF> x </REF>: 1-D array or sequence "Array or sequence containing the data to be analyzed."
+        <REF> NFFT </REF>: int or None "FFT block size used for segmenting the data and computing the spectrum."
+        <REF> Fs </REF>: float or None "Sampling frequency used to scale the frequency axis."
+        <REF> detrend </REF>: callable, str, or None "Function or method used to detrend each segment before windowing."
+        <REF> window </REF>: callable, ndarray, or None "Window function applied to each segment before computing the FFT."
+        <REF> noverlap </REF>: int or None "Number of points of overlap between segments."
+        <REF> pad_to </REF>: int or None "Length to which the input segments are zero-padded before computing the FFT."
+        <REF> sides </REF>: str or None "Specifies whether to return a one-sided or two-sided spectrum."
+        <REF> scale_by_freq </REF>: bool or None "Whether to scale the spectral density by the sampling frequency."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> Pxx </REF>: 1-D array "Real-valued power spectral density values."
+        <REF> freqs </REF>: 1-D array "Frequencies corresponding to the elements in Pxx."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Call csd with x as the signal, y explicitly set to None, and pass NFFT, Fs, detrend, window, noverlap, pad_to, sides, and scale_by_freq through unchanged. Assign the first returned value to Pxx and the second returned value to freqs. RESULT Pxx, freqs]
+            [COMMAND Extract the real part of Pxx using Pxx.real and assign it to Pxx_real. RESULT Pxx_real]
+            [COMMAND Return a tuple containing Pxx_real and freqs. RESULT return_value]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the cross-spectral density between two signals using Welch's averaged periodogram method and returns the averaged spectrum with its frequency vector." csd]
+    [INPUTS]
+        <REF> x </REF>: 1-D array or sequence "First signal data."
+        <REF> y </REF>: 1-D array or sequence "Second signal data."
+        <REF> NFFT </REF>: int or None "Segment length; if None, defaults to 256."
+        <REF> Fs </REF>: float or None "Sampling frequency; used for frequency bin calculation."
+        <REF> detrend </REF>: str, callable, or None "Detrending method applied to each segment."
+        <REF> window </REF>: str, tuple, callable, or None "Window function applied to each segment."
+        <REF> noverlap </REF>: int or None "Number of overlapping points between segments; defaults to 0 when None."
+        <REF> pad_to </REF>: int or None "Length to which each segment is zero-padded before FFT."
+        <REF> sides </REF>: str or None "Spectral side mode: 'default', 'onesided', or 'twosided'."
+        <REF> scale_by_freq </REF>: bool or None "Whether to scale the spectrum to a density per frequency unit."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> Pxy </REF>: 1-D ndarray "Cross-spectral density values before scaling."
+        <REF> freqs </REF>: 1-D ndarray "Frequency values corresponding to Pxy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If NFFT is None, set NFFT to the default value 256. RESULT NFFT]
+            [COMMAND Call _spectral_helper with x, y, NFFT, Fs, detrend_func, window, noverlap, pad_to, sides, scale_by_freq, and mode 'psd'; unpack the three returned values into Pxy, freqs, and _. RESULT Pxy, freqs, _]
+            [COMMAND If Pxy is 2-D and has more than one column, reduce Pxy to a 1-D array by averaging each row over columns using axis=1. RESULT Pxy]
+            [COMMAND If Pxy is 2-D and has exactly one column, reduce Pxy to a 1-D array by extracting the first column. RESULT Pxy]
+            [COMMAND Return the final Pxy and freqs as a tuple. RESULT (Pxy, freqs)]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes a spectrogram of a 1-D signal by splitting it into overlapping windowed FFT segments and returns the spectrum array, frequency vector, and segment midpoint times." specgram]
+    [INPUTS]
+        <REF> x </REF>: array-like "1-D input signal to compute the spectrogram for."
+        <REF> NFFT </REF>: int or None "Length of each segment/window; defaults to 256 if None."
+        <REF> Fs </REF>: float or None "Sampling frequency used to compute frequency and time vectors."
+        <REF> detrend </REF>: str or callable or None "Detrending function applied to each segment before windowing."
+        <REF> window </REF>: callable or ndarray or None "Windowing function or window array applied to each segment."
+        <REF> noverlap </REF>: int or None "Number of overlap points between segments; defaults to 128 if None."
+        <REF> pad_to </REF>: int or None "Zero-padding length for the FFT."
+        <REF> sides </REF>: str or None "Specifies whether to return a one-sided or two-sided spectrum."
+        <REF> scale_by_freq </REF>: bool or None "Whether to scale the power spectral density by frequency."
+        <REF> mode </REF>: str or None "Spectrum mode: 'psd', 'complex', 'magnitude', 'angle', or 'phase'."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> spectrum </REF>: array-like "2-D array of spectra for successive segments; complex only when mode is 'complex', otherwise real."
+        <REF> freqs </REF>: array-like "1-D array of frequencies corresponding to rows of spectrum."
+        <REF> t </REF>: array-like "1-D array of times corresponding to midpoints of segments."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND If noverlap is None, set noverlap to 128. RESULT noverlap]
+            [COMMAND If NFFT is None, set NFFT to 256. RESULT NFFT]
+            [COMMAND If len(x) <= NFFT, call _api.warn_external with message 'Only one segment is calculated since parameter NFFT (={NFFT}) >= signal length (={len(x)}).' RESULT none]
+            [COMMAND Call _spectral_helper with x=x, y=None, NFFT=NFFT, Fs=Fs, detrend_func=detrend, window=window, noverlap=noverlap, pad_to=pad_to, sides=sides, scale_by_freq=scale_by_freq, mode=mode, and unpack the returned tuple into spec, freqs, and t. RESULT spec, freqs, t]
+            [COMMAND If mode != 'complex', assign spec.real to spec. RESULT spec]
+            [COMMAND Return the tuple (spec, freqs, t). RESULT spec, freqs, t]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+[END_WORKER]
+
+[DEFINE_WORKER: "Computes the magnitude-squared coherence Cxy between input signals x and y by normalizing the squared cross-spectral density |Pxy|^2 by the product of the power spectral densities Pxx and Pyy, and returns Cxy together with the frequency vector f." cohere]
+    [INPUTS]
+        <REF> x </REF>: array-like "Array or sequence containing the data."
+        <REF> y </REF>: array-like "Array or sequence containing the data."
+        <REF> NFFT </REF>: int "FFT window length; default is 256."
+        <REF> Fs </REF>: float "Sampling frequency; default is 2."
+        <REF> detrend </REF>: callable "Detrending function; default is detrend_none."
+        <REF> window </REF>: callable "Window function; default is window_hanning."
+        <REF> noverlap </REF>: int "Number of points of overlap between segments; default is 0."
+        <REF> pad_to </REF>: int or None "Target length for zero-padding the FFT; default is None."
+        <REF> sides </REF>: str "Specifies which sides of the spectrum to return; default is 'default'."
+        <REF> scale_by_freq </REF>: bool or None "Whether to scale the spectrum by frequency; default is None."
+    [END_INPUTS]
+
+    [OUTPUTS]
+        <REF> Cxy </REF>: 1-D array "The coherence vector."
+        <REF> f </REF>: 1-D array "The frequencies for the elements in Cxy."
+    [END_OUTPUTS]
+
+    [MAIN_FLOW]
+        [SEQUENTIAL_BLOCK]
+            [COMMAND Check whether len(x) is less than 2 * NFFT; if so, follow the ValueError exception flow, otherwise continue. RESULT validation_passed]
+            [COMMAND Compute Pxx and f from x by calling psd(x, NFFT, Fs, detrend, window, noverlap, pad_to, sides, scale_by_freq). RESULT Pxx, f]
+            [COMMAND Compute Pyy and overwrite f by calling psd(y, NFFT, Fs, detrend, window, noverlap, pad_to, sides, scale_by_freq). RESULT Pyy, f]
+            [COMMAND Compute Pxy and overwrite f by calling csd(x, y, NFFT, Fs, detrend, window, noverlap, pad_to, sides, scale_by_freq). RESULT Pxy, f]
+            [COMMAND Compute Cxy element-wise as np.abs(Pxy) ** 2 / (Pxx * Pyy). RESULT Cxy]
+            [COMMAND Return the tuple (Cxy, f), where f is the frequency vector returned by the csd call. RESULT Cxy, f]
+        [END_SEQUENTIAL_BLOCK]
+    [END_MAIN_FLOW]
+
+    [EXCEPTION_FLOW: When len(x) < 2 * NFFT]
+        [LOG "Coherence is calculated by averaging over *NFFT* length segments.  Your signal is too short for your choice of *NFFT*."]
+        [THROW ValueError "Raised because the input signal x is shorter than twice the NFFT window length, so coherence cannot be calculated."]
+    [END_EXCEPTION_FLOW]
+
+[END_WORKER]

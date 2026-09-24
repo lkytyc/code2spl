@@ -1,0 +1,105 @@
+Task:
+Reconstruct one complete executable Python class from the compact class specification.
+
+Spec Concept:
+- The compact specification is a code-derived, human-readable behavior map of a class.
+- A `# Class:` line names the class, `# Fields:` lists its fields, and `# Calls:` lists cross-method call edges.
+- Each method has a `## name(self, ...) → return` section that lists its parameters with types and its numbered implementation steps.
+- Numbered steps describe the normal statement order; steps marked `IF`, `RETURN`, or `THROW` describe branches, returns, and raised errors.
+- `?` lines describe alternative branches; `! log:` and `! raise:` lines describe exception paths.
+- A `→ name` annotation on a step names the value that step produces.
+
+Reconstruction Workflow:
+Step 1: Scan the class overview and method sections to infer class name, constructor, field assignments, method names, method signatures, and return behavior.
+
+Step 2: Build a class-level behavior map:
+- fields and shared state from `# Fields:` and step result names;
+- method contracts from each method signature;
+- call graph from `# Calls:` and cross-method calls inside steps;
+- branch and exception behavior from `IF`, `?`, and `!` lines.
+
+Step 3: Implement each method from its numbered steps:
+- numbered steps become the normal statement order;
+- `?` alternative steps become conditional branches;
+- `! raise:` steps become try/except or explicit raise only when required;
+- `→` result names become local variables, fields, calls, or returned values.
+
+Step 4: Use the simplest valid Python implementation when formatting, style, or exact variable names are omitted.
+
+Step 5: Do not invent unrelated behavior that is not supported by the specification.
+
+Reconstruction Rules:
+- Identify the class, constructor, fields, methods, dependencies, return values, and error behavior described by the specification.
+- Preserve cross-method calls, field usage, control flow, data flow, return values, and exceptions.
+- Output only the complete Python class implementation.
+- Do not use markdown fences and do not explain.
+
+Class specification:
+
+# Class: AccessGatewayFilter
+# Calls: filter→is_start_with, filter→get_jwt_user, filter→set_current_user_info_and_log
+
+## __init__()
+
+## filter(request: dict) → bool
+Summary: Determines whether an incoming request is permitted by checking if the URI matches an allow-list prefix, then validating a JWT token and requiring the authenticated user's level to be strictly greater than 2.
+#   request: dict — Incoming request mapping containing at least 'path' (the request URI) and 'method' (the HTTP method)
+#   → result: bool — True if the request is allowed, False if authentication fails or an exception is raised
+1. Extract request['path'] into request_uri and request['method'] into method → request_uri,
+2. Call self.is_start_with(request_uri); if it returns True, return True immediately (early return, bypassing all authentication) → early_return_true
+3. Call self.get_jwt_user(request) and assign the result to token → token
+4. Extract token['user'] into user → user
+5. Check whether user['level'] is strictly greater than 2 (exclusive lower bound: level must be > 2, not >= 2) → level_check
+6. If level_check is True, call self.set_current_user_info_and_log(user), then return True → return_true
+   ? Do not call set_current_user_info_and_log; fall through the try block without returning, reaching the implicit end — however, since the try block has no further statements, execution exits the try and the method returns None implicitly (effectively a non-True result)
+   ! log: "Exception is silently swallowed by a bare except clause with no logging or re-raise"
+   ! raise: ExceptionName "Exception description"
+
+## get_jwt_user(request: dict) → dict or None
+Summary: Extracts a token from the request's Authorization header, checks whether the token's embedded JWT string starts with the associated username, and returns None if the token is 3 or more days old, otherwise returns the token.
+#   request: dict — Incoming request object containing a 'headers' dict with an 'Authorization' key whose value is expected to be a pre-parsed token dict
+#   → token: dict or None — The token dict extracted from the Authorization header, or None if the token is determined to be expired (3 or more days old)
+1. Read request['headers']['Authorization'] and assign it to token; token is expected to be a pre-parsed dict containing at minimum 'jwt' and 'user' keys → token
+2. Read token['user'] and assign it to user; user is expected to be a dict containing at minimum a 'name' key → user
+3. Check whether token['jwt'] starts with user['name']; if true, enter the expiry-check block, otherwise skip it entirely and proceed to return token → jwt_starts_with_name
+4. Within the jwt_starts_with_name branch: split token['jwt'] on the delimiter user['name'] and take the element at index 1 to obtain the date substring → jwt_str_date
+5. Within the jwt_starts_with_name branch: parse jwt_str_date using the format '%Y-%m-%d' with datetime.datetime.strptime to produce a datetime object → jwt_date
+6. Within the jwt_starts_with_name branch: compute the difference between datetime.datetime.today() (local time) and jwt_date; if the difference is greater than or equal to datetime.timedelta(days=3) (inclusive boundary at exactly 3 days), return None immediately to signal an expired or invalid token → expiry_check_return
+7. After the conditional block (jwt does not start with username, or token age is less than 3 days): return token to the caller → return_token
+   ? Skip the entire expiry-check block without performing any date parsing or age comparison, and fall through directly to return token
+   ? Do not return None; fall through silently past the inner if block and proceed to return token
+   ! log: "Accessing request['headers']['Authorization'] raises KeyError if the key is missing or TypeError if 'headers' is None; no default or guard is applied"
+   ! raise: KeyError / TypeError "Raised when the headers mapping or the Authorization key is absent; the method performs no null check before this access"
+   ! log: "Accessing token['user'] raises TypeError if token is None or not subscriptable, or KeyError if the 'user' key is absent"
+   ! raise: KeyError / TypeError "Raised when the token value extracted from the Authorization header cannot be subscripted or lacks the expected 'user' key"
+   ! log: "Accessing index [1] on the split result raises IndexError when the JWT string does not contain user['name'] as a separating substring despite startswith returning True"
+   ! raise: IndexError "Raised when split on user['name'] yields only one segment, meaning the name appears at the very end or the string equals the name exactly"
+   ! log: "datetime.datetime.strptime raises ValueError when the extracted date substring cannot be parsed according to the format string '%Y-%m-%d'"
+   ! raise: ValueError "Raised when the date portion of the JWT string is malformed or does not conform to the YYYY-MM-DD pattern"
+
+## is_start_with(request_uri: string) → boolean
+Summary: Checks whether the given request URI begins with any of the predefined prefixes ('/api' or '/login'), returning True on the first match or False if none match.
+#   request_uri: string — The incoming request URI string to test against the prefix list
+#   → result: boolean — True if request_uri starts with any prefix in the list, False otherwise
+1. Initialize local list variable start_with with two string literals: '/api' and '/login' → start_with
+2. Iterate over each element s in start_with; for each s, test whether request_uri starts with s using a case-sensitive, position-zero prefix match → match_check
+3. Within the loop, if request_uri.startswith(s) is True for the current s, immediately return True and exit the method without evaluating any remaining prefixes (early-exit short-circuit) → early_return_true
+4. After the loop completes with no match found across all prefixes, return False explicitly → return_false
+   ? The for loop body never executes; fall through to the explicit return False at the end of the method
+   ? Return True immediately on the first iteration without evaluating '/login' or any further elements (best-case O(1) path)
+
+## set_current_user_info_and_log(self: object, user: dict)
+Summary: Extracts the user's address into a local variable and writes a concatenated log entry combining the user's name, address, and current timestamp at log level 1.
+#   self: object — The instance on which this method is called; not directly used in the method body.
+#   user: dict — A mapping that must contain at minimum the keys 'address' (string or scalar) and 'name' (string); absence of either key raises a KeyError, and a None or non-subscriptable value raises a TypeError.
+1. Read user['address'] and assign its value to the local variable host; this is a direct key lookup with no transformation and no fallback — if 'address' is absent a KeyError is raised, if user is None or non-subscriptable a TypeError is raised. → host
+2. Call logging.log with keyword argument level=1 and keyword argument msg formed by concatenating user['name'], host, and the string representation of datetime.datetime.now() in that order with no separator; the concatenation requires user['name'] to be a string — a non-string name raises a TypeError — and str(datetime.datetime.now()) captures the current local timestamp at call time. → None
+   ! log: "Accessing user['address'] or user['name'] raises TypeError because user does not support key lookup."
+   ! raise: ExceptionName "Exception description"
+   ! log: "The key lookup user['address'] raises KeyError; no default or fallback is provided."
+   ! raise: ExceptionName "Exception description"
+   ! log: "The key lookup user['name'] inside the msg concatenation raises KeyError; no default or fallback is provided."
+   ! raise: ExceptionName "Exception description"
+   ! log: "String concatenation of user['name'] + host raises TypeError because the + operator requires both operands to be strings."
+   ! raise: ExceptionName "Exception description"
+
