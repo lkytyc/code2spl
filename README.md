@@ -85,7 +85,7 @@ with SPL localization. Passing follows.*
 ```text
 code/
   RQ1/  RQ2/  RQ3/        one harness per experiment: prepare → run → evaluate
-  spl_generation/          the SPL builder — index, router, MCP tools
+  spl_generation/          the SPL builder — router, symbol index, MCP tools
   common/                  env, paths, providers, the SPL protocol binding
   third_party/             mini-swe-agent, vendored verbatim
   REPRODUCING.md           what to run, in what order, at what cost  ← start here
@@ -136,27 +136,124 @@ re-run rules out an unlucky step cap, the untagged arm isolates structure from
 content, the 80-step study tests whether the effect survives a much larger
 budget.
 
-## Try it in 60 seconds
+
+## Getting started
+
+Reproduction comes in three levels, with very different costs:
+
+| Level | What it means | Cost |
+| --- | --- | --- |
+| Read the results | recompute every table from the frozen run records | seconds, no API |
+| Re-score | re-run evaluation over the shipped patches | CPU only (RQ3 additionally needs Docker) |
+| Re-run | generate new outputs from the models | API calls at full experiment cost |
+
+### Install
+
+Python 3.11 or newer; every command runs from the package root (the directory
+holding `code/`, `data/`, `requirements.txt`):
 
 ```bash
 python -m pip install -r requirements.txt
-cp code/.env.example code/.env        # your key + endpoint go here
-python code/tools/build_tables.py     # rebuilds every paper table — no key, no network
+```
+
+`requirements.txt` is the whole environment; it installs `mini-swe-agent` from
+the unmodified copy vendored under `code/third_party/`, so the agent version
+is the one shipped here.
+
+### Configure the LLM environment
+
+All model access goes through OpenAI-compatible endpoints, configured in one
+file:
+
+```bash
+cp code/.env.example code/.env
+```
+
+Then edit `code/.env`. The entries that matter:
+
+| Entry | What it is |
+| --- | --- |
+| `OPENAI_API_KEY` | the key every stage authenticates with (required) |
+| `OPENAI_API_KEYS` | several keys for parallel runs; requests are spread across them |
+| `OPENAI_BASE_URL` | your OpenAI-compatible gateway, if you use one; leave blank for the OpenAI default |
+| `SPL_BASE_URL` / `SPL_API_KEY` | a separate endpoint for SPL-building calls, if the builder runs elsewhere |
+| `SPL_BUILDER_MODEL` | which model builds SPL (the reported artifacts used `deepseek-v4-flash`) |
+| `SPL_TASK_MODEL` | the model for the measured stage of a *new* run |
+
+Two rules about what overrides what:
+
+- **The environment supplies access; the configs supply behavior.** Which
+  model, temperature and token cap a run uses is recorded in the JSON configs
+  under `data/RQn/settings/` — the harness reads those from the config, never
+  from `.env`. To substitute a different model, edit the config; `.env.example`
+  §5 lists every config file and the exact settings it records.
+- **A config's own `base_url` beats `.env`.** The DeepSeek configs name
+  `https://api.deepseek.com` themselves; the Claude/GPT configs ship with
+  `"base_url": null` and take the endpoint from `OPENAI_BASE_URL`.
+
+No credential is stored anywhere in the package, and `.gitignore` excludes
+`.env`. Any entry can also be given as a plain environment variable, which
+wins over the file.
+
+### Generate SPL for a repository
+
+SPL construction lives in [`code/spl_generation/`](code/spl_generation/) —
+`spl_router/` turns a repository into SPL, `spl_core/` renders the workers and
+cards, `spl_index/` keeps the symbol index, and `spl_mcp/` exposes the tool
+family the RQ3 agent calls (`spl_understand`, `spl_search`, `spl_expand`,
+`spl_refresh`, …). The experiments reach it through each experiment's prepare
+stage:
+
+| Experiment | SPL built by | Where the artifacts land |
+| --- | --- | --- |
+| RQ1 ClassEval | the model under test, in `code/RQ1/prepare.py` + `run.py` | `data/RQ1/spl_assets/model_runs/<model>/` |
+| RQ2 CoRe | `code/RQ2/prepare.py` (+ `repair_spl.py` for gaps) | `data/RQ2/spl_assets/` |
+| RQ3 SWE-bench | `code/RQ3/prepare_random218_flash_assets.py`, builder `deepseek-v4-flash` | `data/RQ3/spl_assets/` |
+
+**One warning before building anything:** the artifacts under `data/*/spl_assets/`
+are *frozen* — every number in the paper was measured against exactly these
+files, and model sampling is not deterministic, so regenerating them changes
+the text and voids the comparison. Reproduce by reading them; extend
+`code/spl_generation/` only to cover new repositories, with the builder
+settings (`SPL_BUILDER_*`) in `.env`.
+
+### Rebuild the paper tables
+
+No key, no network, seconds:
+
+```bash
+python code/tools/build_tables.py
 ```
 
 A clean run ends with `cross-checked 6 frozen rows, 0 mismatch(es)` — that is
-the package proving it arrived intact. Want to go further? Re-scoring is
-CPU-only; full re-runs cost real tokens.
-[`code/REPRODUCING.md`](code/REPRODUCING.md) maps every level, entry point by
-entry point (RQ3 needs Docker and long-path support).
+the package proving it arrived intact. To verify the evidence files too:
 
-Two ground rules for re-runs:
+```bash
+python code/tools/build_key_checksums.py   # rewrites data/KEY_CHECKSUMS.csv; diff against the shipped copy
+```
 
-- Models and temperatures live in the run configs under `data/RQn/settings/`,
-  never in the environment — edit the config to change what runs.
-- The upstream datasets (ClassEval, CoRe) are not shipped;
-  [`data/PROVENANCE.md`](data/PROVENANCE.md) gives mirrors, expected paths and
-  checksums. Reading or recomputing the results needs none of them.
+### Re-run an experiment
+
+Every experiment is driven the same way — a JSON config through three stages:
+
+```bash
+python code/RQ1/prepare.py  --config data/RQ1/settings/configs/full100_deepseek-v4-pro.json
+python code/RQ1/run.py      --config data/RQ1/settings/configs/full100_deepseek-v4-pro.json
+python code/RQ1/evaluate.py --config data/RQ1/settings/configs/full100_deepseek-v4-pro.json
+```
+
+RQ2 is identical with its `full341_*.json` configs. RQ3 wraps the stages in
+scripts (`code/RQ3/scripts/run_random218.py`, `eval_random218.py`,
+`analyze_random218_results.py`) and additionally needs Docker (each patch is
+evaluated inside the instance's official image) and, on Windows, long-path
+support (`git config --system core.longpaths true`).
+
+The upstream datasets (ClassEval, CoRe) are not shipped;
+[`data/PROVENANCE.md`](data/PROVENANCE.md) gives the mirrors, expected paths
+and checksums — reading or recomputing the results needs none of them.
+Re-running costs real tokens (the smallest RQ3 arm is 41.3M);
+[`code/REPRODUCING.md`](code/REPRODUCING.md) maps every level entry point by
+entry point, including the supplementary arms.
 
 ## Support
 
