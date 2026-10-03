@@ -10,6 +10,12 @@ that problem with **SPL (Structured Prompt Language)**: semantics recovered
 from source code and stored as structured natural-language prompts — built
 once per repository, read on every task against it.
 
+The supplementary material accompanying the paper is available as
+[`Code2SPL_Appendix.pdf`](Code2SPL_Appendix.pdf) in the repository root.
+It provides the additional experimental details, supplementary analyses,
+statistical results, representation controls, resource accounting, and case
+evidence referenced throughout the paper and this replication package.
+
 <p align="center">
   <img src="docs/figures/fig1_motivation.png" width="680" alt="A repair task with and without SPL">
 </p>
